@@ -1,6 +1,18 @@
+import {
+  type AccountScope,
+  accountIsolationService,
+  detectAccountContextFromDocument,
+} from '@/core/services/AccountIsolationService';
 import { keyboardShortcutService } from '@/core/services/KeyboardShortcutService';
 import { storageService } from '@/core/services/StorageService';
 import { StorageKeys, type TurnId } from '@/core/types/common';
+import {
+  buildConversationIdFromUrl,
+  buildLegacyConversationIdFromUrl,
+  buildRouteConversationIdFromUrl,
+  extractConversationIdFromUrl,
+} from '@/core/utils/conversationIdentity';
+import { hashString } from '@/core/utils/hash';
 import { GV_RTL_CLASS, applyRTLClass } from '@/core/utils/rtl';
 
 import { getTranslationSync, initI18n } from '../../../utils/i18n';
@@ -8,17 +20,19 @@ import { TimestampService } from '../timestamp/TimestampService';
 import { eventBus } from './EventBus';
 import { StarredMessagesService } from './StarredMessagesService';
 import { TimelinePreviewPanel } from './TimelinePreviewPanel';
+import {
+  getTimelineHierarchyStorageKey,
+  getTimelineHierarchyStorageKeysToRead,
+  resolveTimelineHierarchyDataForStorageScope,
+} from './hierarchyStorage';
+import {
+  type TimelineHierarchyConversationData,
+  getLegacyTimelineCollapsedStorageKey,
+  getLegacyTimelineLevelsStorageKey,
+} from './hierarchyTypes';
+import { findMatchingStarredMessages } from './starredLookup';
 import type { StarredMessage, StarredMessagesData } from './starredTypes';
 import type { DotElement, MarkerLevel } from './types';
-
-function hashString(input: string): string {
-  let h = 2166136261 >>> 0;
-  for (let i = 0; i < input.length; i++) {
-    h ^= input.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return (h >>> 0).toString(36);
-}
 
 /** Accessibility prefixes injected by Gemini's DOM that should be stripped from previews effectively globally. */
 const TURN_LABEL_PREFIXES =
@@ -55,6 +69,10 @@ type ExtGlobal = typeof globalThis & {
     };
   };
 };
+
+interface TimelineManagerOptions {
+  previousUrl?: string | null;
+}
 
 export class TimelineManager {
   private scrollContainer: HTMLElement | null = null;
@@ -159,6 +177,8 @@ export class TimelineManager {
   private userTurnSelector: string = '';
   private markerLevels: Map<string, MarkerLevel> = new Map();
   private collapsedMarkers: Set<string> = new Set();
+  private timelineHierarchyAccountScope: AccountScope | null = null;
+  private timelineHierarchyStorageKey: string = StorageKeys.TIMELINE_HIERARCHY;
   private markerLevelEnabled = false;
   private contextMenu: HTMLElement | null = null;
   private onContextMenu: ((ev: MouseEvent) => void) | null = null;
@@ -194,7 +214,18 @@ export class TimelineManager {
   private rtl = false;
   private timestampService: TimestampService | null = null;
   private showMessageTimestampsEnabled = false;
-  private timestampInjectionGeneration = 0;
+  private readonly initialTimestampSnapshotDelay = 800;
+  private readonly draftTimestampAdoptionWindowMs = 5 * 60 * 1000;
+  private timestampTrackingReady = false;
+  private timestampStartupTimer: number | null = null;
+  private seenTurnIds: Set<string> = new Set();
+  private pendingDraftTimestampSourceConversationId: string | null;
+
+  constructor(private readonly options: TimelineManagerOptions = {}) {
+    this.pendingDraftTimestampSourceConversationId = this.computeDraftTimestampSourceConversationId(
+      options.previousUrl ?? null,
+    );
+  }
 
   async init(): Promise<void> {
     await initI18n();
@@ -206,8 +237,12 @@ export class TimelineManager {
     this.conversationId = this.computeConversationId();
     await this.loadStars();
     await this.syncStarredFromService();
-    this.loadMarkerLevels();
-    this.loadCollapsedMarkers();
+    await this.loadTimelineHierarchyStorageContext();
+    if (this.timelineHierarchyStorageKey === StorageKeys.TIMELINE_HIERARCHY) {
+      this.loadMarkerLevels();
+      this.loadCollapsedMarkers();
+    }
+    await this.loadTimelineHierarchyFromExtensionStorage();
     // Initialize timestamp service
     this.timestampService = new TimestampService();
     await this.timestampService.initialize();
@@ -227,6 +262,7 @@ export class TimelineManager {
         geminiTimelineDraggable: false,
         geminiTimelineMarkerLevel: false,
         geminiTimelinePosition: null,
+        [StorageKeys.TIMELINE_PREVIEW_PINNED]: false,
         [StorageKeys.LANGUAGE]: null,
       };
 
@@ -278,6 +314,7 @@ export class TimelineManager {
       this.applyContainerVisibility();
       this.toggleDraggable(!!res?.geminiTimelineDraggable);
       this.toggleMarkerLevel(!!res?.geminiTimelineMarkerLevel);
+      this.previewPanel?.setPinned(res?.[StorageKeys.TIMELINE_PREVIEW_PINNED] === true);
       this.rtl = applyRTLClass(res?.[StorageKeys.LANGUAGE] as string | null | undefined);
 
       // Load position with auto-migration from v1 to v2
@@ -348,6 +385,11 @@ export class TimelineManager {
             }
             if (changes?.geminiTimelineMarkerLevel) {
               this.toggleMarkerLevel(!!changes.geminiTimelineMarkerLevel.newValue);
+            }
+            if (changes?.[StorageKeys.TIMELINE_PREVIEW_PINNED]) {
+              this.previewPanel?.setPinned(
+                changes[StorageKeys.TIMELINE_PREVIEW_PINNED].newValue === true,
+              );
             }
             if (changes?.geminiTimelinePosition && !changes.geminiTimelinePosition.newValue) {
               if (this.ui.timelineBar) {
@@ -467,8 +509,15 @@ export class TimelineManager {
   }
 
   private computeConversationId(): string {
-    const raw = `${location.host}${location.pathname}${location.search}`;
-    return `gemini:${hashString(raw)}`;
+    return buildConversationIdFromUrl(window.location.href);
+  }
+
+  private computeLegacyConversationId(): string {
+    return buildLegacyConversationIdFromUrl(window.location.href);
+  }
+
+  private computeRouteConversationId(): string {
+    return buildRouteConversationIdFromUrl(window.location.href);
   }
 
   /**
@@ -476,6 +525,16 @@ export class TimelineManager {
    */
   private getStarsStorageKey(): string | null {
     return this.conversationId ? `geminiTimelineStars:${this.conversationId}` : null;
+  }
+
+  private getLegacyStarsStorageKey(): string | null {
+    const legacyConversationId = this.computeLegacyConversationId();
+    return legacyConversationId ? `geminiTimelineStars:${legacyConversationId}` : null;
+  }
+
+  private getRouteStarsStorageKey(): string | null {
+    const routeConversationId = this.computeRouteConversationId();
+    return routeConversationId ? `geminiTimelineStars:${routeConversationId}` : null;
   }
 
   /**
@@ -560,9 +619,25 @@ export class TimelineManager {
   private async syncStarredFromService(): Promise<void> {
     if (!this.conversationId) return;
     try {
-      const messages = await StarredMessagesService.getStarredMessagesForConversation(
-        this.conversationId,
+      const data = await StarredMessagesService.getAllStarredMessages();
+      const matched = findMatchingStarredMessages(data, this.conversationId, window.location.href);
+
+      let messages = matched.messages;
+      const needsReconcile = matched.sourceConversationIds.some(
+        (sourceConversationId) => sourceConversationId !== this.conversationId,
       );
+
+      if (needsReconcile) {
+        const reconciled = await StarredMessagesService.reconcileConversationIds(
+          this.conversationId,
+          matched.sourceConversationIds,
+          window.location.href,
+        );
+        if (reconciled.length > 0) {
+          messages = reconciled;
+        }
+      }
+
       const nextSet = new Set(messages.map((message) => String(message.turnId)));
 
       // Update starredAt map from service data
@@ -968,6 +1043,11 @@ export class TimelineManager {
       // Remove extension-injected UI elements (e.g. fork button)
       clone.querySelectorAll(INJECTED_UI_SELECTOR).forEach((el) => el.remove());
 
+      // Restore original text for LaTeX-rendered elements
+      clone.querySelectorAll<HTMLElement>('[data-user-latex-original]').forEach((el) => {
+        el.textContent = el.dataset.userLatexOriginal ?? '';
+      });
+
       return this.normalizeText(clone.textContent || '');
     } catch {
       return this.normalizeText(element.textContent || '');
@@ -1249,6 +1329,7 @@ export class TimelineManager {
     const userTurnNodeList = this.conversationContainer.querySelectorAll(this.userTurnSelector);
     this.visibleRange = { start: 0, end: -1 };
     if (userTurnNodeList.length === 0) {
+      this.updateTimestampTracking([]);
       if (!this.zeroTurnsTimer) {
         // Optimized retry interval: reduced from 350ms to 200ms
         this.zeroTurnsTimer = window.setTimeout(() => {
@@ -1263,10 +1344,11 @@ export class TimelineManager {
       this.zeroTurnsTimer = null;
     }
 
-    // Clear all existing dots before rebuilding
-    (this.ui.trackContent || this.ui.timelineBar)!
-      .querySelectorAll('.timeline-dot')
-      .forEach((n) => n.remove());
+    // Build map of existing dots by turn ID for reuse (prevents hover/click disruption)
+    const oldDots = new Map<string, DotElement>();
+    for (const m of this.markers) {
+      if (m.dotElement) oldDots.set(m.id, m.dotElement);
+    }
 
     // Filter to top-level matches first to avoid nested duplicates, then dedupe by text+offset
     let allEls = Array.from(userTurnNodeList) as HTMLElement[];
@@ -1295,22 +1377,23 @@ export class TimelineManager {
       let n = offsetFromStart / contentSpan;
       n = Math.max(0, Math.min(1, n));
       const id = this.ensureTurnId(element, idx);
-      // Record timestamp for new messages
-      if (this.timestampService && this.timestampService.getTimestamp(id as TurnId) === null) {
-        this.timestampService.recordTimestamp(id as TurnId).catch(() => {});
-      }
       const m = {
         id,
         element,
         summary: this.extractTurnText(element),
         n,
         baseN: n,
-        dotElement: null,
+        dotElement: oldDots.get(id) ?? null,
         starred: this.starred.has(id),
       };
+      oldDots.delete(id);
       this.markerMap.set(id, m);
       return m;
     });
+    this.maybeAdoptDraftRouteTimestamps(this.markers.map((marker) => marker.id));
+    this.updateTimestampTracking(this.markers.map((marker) => marker.id));
+    // Remove orphaned dots (old dots not reused by any new marker)
+    for (const dot of oldDots.values()) dot.remove();
     this.markersVersion++;
     this.updateTimelineGeometry();
     if (!this.activeTurnId && this.markers.length > 0)
@@ -1334,25 +1417,41 @@ export class TimelineManager {
   };
 
   private async injectMessageTimestamps(): Promise<void> {
-    if (!this.timestampService) return;
-    const injectionGeneration = ++this.timestampInjectionGeneration;
+    if (!this.timestampService || !this.conversationId) return;
+    const timestampService = this.timestampService;
+    const conversationId = this.conversationId;
     if (!this.showMessageTimestampsEnabled) {
       // Remove any existing timestamps if feature is disabled
       document.querySelectorAll('.gv-timestamp').forEach((el) => el.remove());
       return;
     }
 
-    document.querySelectorAll('.gv-timestamp').forEach((el) => el.remove());
+    const activeTurnIds = new Set<string>();
+    const existingTimestampEls = new Map<string, HTMLElement>();
+    document.querySelectorAll<HTMLElement>('.gv-timestamp[data-gv-turn-id]').forEach((el) => {
+      const turnId = el.getAttribute('data-gv-turn-id') || '';
+      if (!turnId) {
+        el.remove();
+        return;
+      }
+      existingTimestampEls.set(turnId, el);
+    });
 
     // Use markers instead of querying DOM - markers already have the correct elements
     this.markers.forEach((marker) => {
+      activeTurnIds.add(marker.id);
       const msgEl = marker.element;
       const parent = msgEl.parentElement;
-      if (!parent) return;
+      if (!parent) {
+        existingTimestampEls.get(marker.id)?.remove();
+        existingTimestampEls.delete(marker.id);
+        return;
+      }
 
       let insertionParent: HTMLElement | null = parent;
       let insertionAnchor: HTMLElement = msgEl;
       let alignClass = 'gv-timestamp-assistant';
+      const existingTimestampEl = existingTimestampEls.get(marker.id) ?? null;
       try {
         // Walk up to find the nearest horizontal row wrapper (avatar + bubble).
         // Then insert timestamp before that row so it is always above the whole message row.
@@ -1375,26 +1474,43 @@ export class TimelineManager {
           }
         }
       } catch {}
-      if (!insertionParent) return;
+      if (!insertionParent) {
+        return;
+      }
 
-      // Format and inject timestamp
-      this.timestampService!.formatTimestamp(marker.id as TurnId)
-        .then((formattedTime) => {
-          if (!formattedTime) return;
-          if (injectionGeneration !== this.timestampInjectionGeneration) return;
-          if (!this.showMessageTimestampsEnabled) return;
-          if (!insertionParent || !insertionAnchor) return;
-          if (!insertionParent.isConnected || !insertionAnchor.isConnected) return;
+      const timestamp = timestampService.getTimestamp(conversationId, marker.id as TurnId);
+      if (timestamp == null) {
+        existingTimestampEls.get(marker.id)?.remove();
+        existingTimestampEls.delete(marker.id);
+        return;
+      }
 
-          const timestampEl = document.createElement('div');
-          timestampEl.className = `gv-timestamp ${alignClass}`;
-          timestampEl.textContent = formattedTime;
-          timestampEl.setAttribute('data-gv-turn-id', marker.id);
+      const formattedTime = timestampService.formatAbsoluteTime(timestamp);
+      const desiredClassName = `gv-timestamp ${alignClass}`;
+      const timestampEl = existingTimestampEl ?? document.createElement('div');
+      timestampEl.setAttribute('data-gv-turn-id', marker.id);
+      if (timestampEl.className !== desiredClassName) {
+        timestampEl.className = desiredClassName;
+      }
+      if (timestampEl.textContent !== formattedTime) {
+        timestampEl.textContent = formattedTime;
+      }
 
-          // Render timestamp above the message container (outside the bubble)
-          insertionParent.insertBefore(timestampEl, insertionAnchor);
-        })
-        .catch(() => {});
+      if (
+        timestampEl.parentElement !== insertionParent ||
+        timestampEl.nextSibling !== insertionAnchor
+      ) {
+        // Render timestamp above the message container (outside the bubble)
+        insertionParent.insertBefore(timestampEl, insertionAnchor);
+      }
+
+      existingTimestampEls.delete(marker.id);
+    });
+
+    existingTimestampEls.forEach((el, turnId) => {
+      if (!activeTurnIds.has(turnId)) {
+        el.remove();
+      }
     });
   }
 
@@ -1404,7 +1520,8 @@ export class TimelineManager {
   }
 
   private setupObservers(): void {
-    this.mutationObserver = new MutationObserver(() => {
+    this.mutationObserver = new MutationObserver((records) => {
+      if (this.shouldIgnoreTimestampMutations(records)) return;
       this.debouncedRecalc();
     });
     if (this.conversationContainer)
@@ -1684,6 +1801,24 @@ export class TimelineManager {
           const starredChange = changes[StorageKeys.TIMELINE_STARRED_MESSAGES];
           if (starredChange) {
             this.applySharedStarredData(starredChange.newValue as StarredMessagesData | null);
+          }
+
+          const timelineHierarchyChange = changes[this.timelineHierarchyStorageKey];
+          if (timelineHierarchyChange && this.conversationId) {
+            const data = resolveTimelineHierarchyDataForStorageScope(
+              {
+                [this.timelineHierarchyStorageKey]: timelineHierarchyChange.newValue,
+              },
+              this.timelineHierarchyAccountScope?.accountKey,
+              this.timelineHierarchyAccountScope?.routeUserId ?? null,
+            );
+            const conversationData = data.conversations[this.conversationId] || null;
+            this.applyTimelineHierarchyConversationData(conversationData);
+            if (this.timelineHierarchyStorageKey === StorageKeys.TIMELINE_HIERARCHY) {
+              this.persistTimelineHierarchyToLegacyStorage();
+            }
+            this.updateTimelineGeometry();
+            this.updateVirtualRangeAndRender();
           }
         }
         if (areaName === 'sync' || areaName === 'local') {
@@ -2135,8 +2270,8 @@ export class TimelineManager {
     const id = dot.dataset.targetTurnId || '';
     if (id && this.starred.has(id)) fullText = `★ ${fullText}`;
 
-    if (this.showMessageTimestampsEnabled && id && this.timestampService) {
-      const ts = this.timestampService.getTimestamp(id as TurnId);
+    if (this.showMessageTimestampsEnabled && id && this.timestampService && this.conversationId) {
+      const ts = this.timestampService.getTimestamp(this.conversationId, id as TurnId);
       if (typeof ts === 'number') {
         fullText = `${this.timestampService.formatAbsoluteTime(ts)}\n${fullText}`;
       }
@@ -2274,12 +2409,18 @@ export class TimelineManager {
         }
       }
     } else {
-      // Clear all dots and reset references
+      // Range was reset — preserve dots owned by in-range markers, remove the rest
+      const keepDots = new Set<Element>();
+      for (let i = start; i <= end; i++) {
+        if (this.markers[i]?.dotElement) keepDots.add(this.markers[i].dotElement!);
+      }
       (this.ui.trackContent || this.ui.timelineBar)!
         .querySelectorAll('.timeline-dot')
-        .forEach((n) => n.remove());
+        .forEach((n) => {
+          if (!keepDots.has(n)) n.remove();
+        });
       this.markers.forEach((m) => {
-        m.dotElement = null;
+        if (m.dotElement && !keepDots.has(m.dotElement)) m.dotElement = null;
       });
     }
 
@@ -2320,6 +2461,7 @@ export class TimelineManager {
         frag.appendChild(dot);
       } else {
         marker.dotElement.dataset.markerIndex = String(i);
+        marker.dotElement.setAttribute('aria-label', marker.summary);
         marker.dotElement.style.setProperty('--n', String(marker.n || 0));
         if (this.usePixelTop) marker.dotElement.style.top = `${Math.round(this.yPositions[i])}px`;
         marker.dotElement.classList.toggle('starred', !!marker.starred);
@@ -2664,7 +2806,20 @@ export class TimelineManager {
     const key = this.getStarsStorageKey();
     if (!key) return;
 
-    const raw = this.safeLocalStorageGet(key);
+    const fallbackKeys = [this.getRouteStarsStorageKey(), this.getLegacyStarsStorageKey()].filter(
+      (candidate): candidate is string => Boolean(candidate && candidate !== key),
+    );
+
+    let raw = this.safeLocalStorageGet(key);
+    if (!raw) {
+      for (const fallbackKey of fallbackKeys) {
+        raw = this.safeLocalStorageGet(fallbackKey);
+        if (raw) {
+          this.safeLocalStorageSet(key, raw);
+          break;
+        }
+      }
+    }
     if (!raw) return;
 
     try {
@@ -2680,10 +2835,10 @@ export class TimelineManager {
   // ===== Marker Level Methods =====
 
   private getLevelsStorageKey(): string | null {
-    return this.conversationId ? `geminiTimelineLevels:${this.conversationId}` : null;
+    return this.conversationId ? getLegacyTimelineLevelsStorageKey(this.conversationId) : null;
   }
 
-  /* Load marker levels from localStorage */
+  /* Load marker levels from legacy localStorage */
   private loadMarkerLevels(): void {
     this.markerLevels.clear();
     const key = this.getLevelsStorageKey();
@@ -2693,36 +2848,29 @@ export class TimelineManager {
     if (!raw) return;
 
     try {
-      const obj = JSON.parse(raw);
-      if (obj && typeof obj === 'object') {
-        Object.entries(obj).forEach(([turnId, level]) => {
-          if (typeof level === 'number' && level >= 1 && level <= 4) {
-            this.markerLevels.set(turnId, level as MarkerLevel);
-          }
-        });
-      }
+      const obj = JSON.parse(raw) as Record<string, unknown>;
+      Object.entries(obj).forEach(([turnId, level]) => {
+        if (level === 1 || level === 2 || level === 3) {
+          this.markerLevels.set(turnId, level);
+        }
+      });
     } catch (error) {
       console.warn('[Timeline] Failed to parse marker levels:', error);
     }
   }
 
-  /* Save marker levels to localStorage */
+  /* Save marker levels to legacy localStorage and mirrored extension storage */
   private saveMarkerLevels(): void {
-    const key = this.getLevelsStorageKey();
-    if (!key) return;
-
-    const obj: Record<string, MarkerLevel> = {};
-    this.markerLevels.forEach((level, turnId) => {
-      obj[turnId] = level;
-    });
-
-    this.safeLocalStorageSet(key, JSON.stringify(obj));
+    if (this.timelineHierarchyStorageKey === StorageKeys.TIMELINE_HIERARCHY) {
+      this.persistTimelineHierarchyToLegacyStorage();
+    }
+    void this.persistTimelineHierarchyToExtensionStorage();
   }
 
   // ===== Collapsed Markers Methods =====
 
   private getCollapsedStorageKey(): string | null {
-    return this.conversationId ? `geminiTimelineCollapsed:${this.conversationId}` : null;
+    return this.conversationId ? getLegacyTimelineCollapsedStorageKey(this.conversationId) : null;
   }
 
   private loadCollapsedMarkers(): void {
@@ -2744,9 +2892,211 @@ export class TimelineManager {
   }
 
   private saveCollapsedMarkers(): void {
-    const key = this.getCollapsedStorageKey();
-    if (!key) return;
-    this.safeLocalStorageSet(key, JSON.stringify(Array.from(this.collapsedMarkers)));
+    if (this.timelineHierarchyStorageKey === StorageKeys.TIMELINE_HIERARCHY) {
+      this.persistTimelineHierarchyToLegacyStorage();
+    }
+    void this.persistTimelineHierarchyToExtensionStorage();
+  }
+
+  private hasTimelineHierarchyData(): boolean {
+    return this.markerLevels.size > 0 || this.collapsedMarkers.size > 0;
+  }
+
+  private buildTimelineHierarchyConversationData(): TimelineHierarchyConversationData | null {
+    if (!this.conversationId || !this.hasTimelineHierarchyData()) {
+      return null;
+    }
+
+    const levels: Record<string, MarkerLevel> = {};
+    this.markerLevels.forEach((level, turnId) => {
+      levels[turnId] = level;
+    });
+
+    return {
+      conversationUrl: window.location.href,
+      levels,
+      collapsed: Array.from(this.collapsedMarkers),
+      updatedAt: Date.now(),
+    };
+  }
+
+  private buildLegacyTimelineHierarchyConversationData(): TimelineHierarchyConversationData | null {
+    if (!this.conversationId) {
+      return null;
+    }
+
+    const levels: Record<string, MarkerLevel> = {};
+    const levelsKey = this.getLevelsStorageKey();
+    if (levelsKey) {
+      const rawLevels = this.safeLocalStorageGet(levelsKey);
+      if (rawLevels) {
+        try {
+          const parsedLevels = JSON.parse(rawLevels) as Record<string, unknown>;
+          Object.entries(parsedLevels).forEach(([turnId, level]) => {
+            if (level === 1 || level === 2 || level === 3) {
+              levels[turnId] = level;
+            }
+          });
+        } catch (error) {
+          console.warn('[Timeline] Failed to parse legacy marker levels:', error);
+        }
+      }
+    }
+
+    let collapsed: string[] = [];
+    const collapsedKey = this.getCollapsedStorageKey();
+    if (collapsedKey) {
+      const rawCollapsed = this.safeLocalStorageGet(collapsedKey);
+      if (rawCollapsed) {
+        try {
+          const parsedCollapsed = JSON.parse(rawCollapsed);
+          if (Array.isArray(parsedCollapsed)) {
+            collapsed = parsedCollapsed.map((turnId: unknown) => String(turnId));
+          }
+        } catch (error) {
+          console.warn('[Timeline] Failed to parse legacy collapsed markers:', error);
+        }
+      }
+    }
+
+    if (Object.keys(levels).length === 0 && collapsed.length === 0) {
+      return null;
+    }
+
+    return {
+      conversationUrl: window.location.href,
+      levels,
+      collapsed,
+      updatedAt: Date.now(),
+    };
+  }
+
+  private applyTimelineHierarchyConversationData(
+    conversationData: TimelineHierarchyConversationData | null,
+  ): void {
+    this.markerLevels.clear();
+    this.collapsedMarkers.clear();
+
+    if (!conversationData) {
+      return;
+    }
+
+    Object.entries(conversationData.levels).forEach(([turnId, level]) => {
+      this.markerLevels.set(turnId, level);
+    });
+    conversationData.collapsed.forEach((turnId) => this.collapsedMarkers.add(turnId));
+  }
+
+  private async loadTimelineHierarchyStorageContext(): Promise<void> {
+    this.timelineHierarchyAccountScope = null;
+    this.timelineHierarchyStorageKey = StorageKeys.TIMELINE_HIERARCHY;
+
+    try {
+      const context = detectAccountContextFromDocument(window.location.href, document);
+      if (!context.routeUserId && !context.email) {
+        return;
+      }
+      const scope = await accountIsolationService.resolveAccountScope({
+        pageUrl: window.location.href,
+        routeUserId: context.routeUserId,
+        email: context.email,
+      });
+
+      this.timelineHierarchyAccountScope = scope;
+      this.timelineHierarchyStorageKey = getTimelineHierarchyStorageKey(scope.accountKey);
+    } catch (error) {
+      console.warn('[Timeline] Failed to resolve timeline hierarchy storage scope:', error);
+      this.timelineHierarchyAccountScope = null;
+      this.timelineHierarchyStorageKey = StorageKeys.TIMELINE_HIERARCHY;
+    }
+  }
+
+  private persistTimelineHierarchyToLegacyStorage(): void {
+    const levelsKey = this.getLevelsStorageKey();
+    if (levelsKey) {
+      const levels: Record<string, MarkerLevel> = {};
+      this.markerLevels.forEach((level, turnId) => {
+        levels[turnId] = level;
+      });
+      this.safeLocalStorageSet(levelsKey, JSON.stringify(levels));
+    }
+
+    const collapsedKey = this.getCollapsedStorageKey();
+    if (collapsedKey) {
+      this.safeLocalStorageSet(collapsedKey, JSON.stringify(Array.from(this.collapsedMarkers)));
+    }
+  }
+
+  private async loadTimelineHierarchyFromExtensionStorage(): Promise<void> {
+    if (!this.conversationId || typeof chrome === 'undefined' || !chrome.storage?.local?.get) {
+      return;
+    }
+
+    try {
+      const storageValues = (await chrome.storage.local.get(
+        getTimelineHierarchyStorageKeysToRead(this.timelineHierarchyAccountScope?.accountKey),
+      )) as Record<string, unknown>;
+      const data = resolveTimelineHierarchyDataForStorageScope(
+        storageValues,
+        this.timelineHierarchyAccountScope?.accountKey,
+        this.timelineHierarchyAccountScope?.routeUserId ?? null,
+      );
+      const conversationData = data.conversations[this.conversationId] || null;
+
+      if (conversationData) {
+        this.applyTimelineHierarchyConversationData(conversationData);
+        if (this.timelineHierarchyStorageKey === StorageKeys.TIMELINE_HIERARCHY) {
+          this.persistTimelineHierarchyToLegacyStorage();
+        }
+        return;
+      }
+
+      if (this.timelineHierarchyStorageKey !== StorageKeys.TIMELINE_HIERARCHY) {
+        const legacyConversationData = this.buildLegacyTimelineHierarchyConversationData();
+        if (legacyConversationData) {
+          this.applyTimelineHierarchyConversationData(legacyConversationData);
+          await this.persistTimelineHierarchyToExtensionStorage();
+          return;
+        }
+      }
+
+      if (this.hasTimelineHierarchyData()) {
+        await this.persistTimelineHierarchyToExtensionStorage();
+      }
+    } catch (error) {
+      console.warn('[Timeline] Failed to load timeline hierarchy from extension storage:', error);
+    }
+  }
+
+  private async persistTimelineHierarchyToExtensionStorage(): Promise<void> {
+    if (!this.conversationId || typeof chrome === 'undefined' || !chrome.storage?.local?.get) {
+      return;
+    }
+
+    try {
+      const storageValues = (await chrome.storage.local.get(
+        getTimelineHierarchyStorageKeysToRead(this.timelineHierarchyAccountScope?.accountKey),
+      )) as Record<string, unknown>;
+      const existing = resolveTimelineHierarchyDataForStorageScope(
+        storageValues,
+        this.timelineHierarchyAccountScope?.accountKey,
+        this.timelineHierarchyAccountScope?.routeUserId ?? null,
+      );
+      const conversations = { ...existing.conversations };
+      const currentConversationData = this.buildTimelineHierarchyConversationData();
+
+      if (currentConversationData) {
+        conversations[this.conversationId] = currentConversationData;
+      } else {
+        delete conversations[this.conversationId];
+      }
+
+      await chrome.storage.local.set({
+        [this.timelineHierarchyStorageKey]: { conversations },
+      });
+    } catch (error) {
+      console.warn('[Timeline] Failed to persist timeline hierarchy to extension storage:', error);
+    }
   }
 
   private isMarkerCollapsed(turnId: string): boolean {
@@ -3065,6 +3415,10 @@ export class TimelineManager {
           this.enqueueNavigation('previous', event.repeat);
         } else if (action === 'timeline:next') {
           this.enqueueNavigation('next', event.repeat);
+        } else if (action === 'timeline:first') {
+          this.navigateToFirstNode();
+        } else if (action === 'timeline:last') {
+          this.navigateToLastNode();
         }
       });
     } catch (error) {
@@ -3249,6 +3603,32 @@ export class TimelineManager {
     const targetIndex = currentIndex < 0 ? 0 : Math.min(currentIndex + 1, this.markers.length - 1);
 
     await this.performNodeNavigation(targetIndex, currentIndex);
+  }
+
+  /**
+   * Navigate to first timeline node (gg)
+   */
+  private async navigateToFirstNode(): Promise<void> {
+    if (this.markers.length === 0) return;
+
+    this.maybeRefreshMarkersForNavigation('previous');
+    this.navigationQueue.length = 0;
+    const currentIndex = this.getActiveIndex();
+
+    await this.performNodeNavigation(0, currentIndex);
+  }
+
+  /**
+   * Navigate to last timeline node (GG)
+   */
+  private async navigateToLastNode(): Promise<void> {
+    if (this.markers.length === 0) return;
+
+    this.maybeRefreshMarkersForNavigation('next');
+    this.navigationQueue.length = 0;
+    const currentIndex = this.getActiveIndex();
+
+    await this.performNodeNavigation(this.markers.length - 1, currentIndex);
   }
 
   private maybeRefreshMarkersForNavigation(direction: 'previous' | 'next'): void {
@@ -3585,6 +3965,118 @@ export class TimelineManager {
       clearTimeout(this.sliderFadeTimer);
       this.sliderFadeTimer = null;
     }
+    if (this.timestampStartupTimer) {
+      clearTimeout(this.timestampStartupTimer);
+      this.timestampStartupTimer = null;
+    }
     this.pendingActiveId = null;
+  }
+
+  private updateTimestampTracking(markerIds: string[]): void {
+    if (!this.timestampTrackingReady) {
+      markerIds.forEach((markerId) => this.seenTurnIds.add(markerId));
+      const shouldResetDelay = markerIds.length > 0 || this.seenTurnIds.size > 0;
+      this.scheduleTimestampTrackingReady(shouldResetDelay);
+      return;
+    }
+
+    markerIds.forEach((markerId) => {
+      if (this.seenTurnIds.has(markerId)) return;
+      this.seenTurnIds.add(markerId);
+      this.recordTimestampForTurn(markerId);
+    });
+  }
+
+  private scheduleTimestampTrackingReady(resetDelay: boolean): void {
+    if (this.timestampTrackingReady) return;
+
+    if (resetDelay && this.timestampStartupTimer !== null) {
+      clearTimeout(this.timestampStartupTimer);
+      this.timestampStartupTimer = null;
+    }
+
+    if (this.timestampStartupTimer !== null) return;
+
+    this.timestampStartupTimer = window.setTimeout(() => {
+      this.timestampTrackingReady = true;
+      this.timestampStartupTimer = null;
+    }, this.initialTimestampSnapshotDelay);
+  }
+
+  private recordTimestampForTurn(turnId: string): void {
+    if (!this.timestampService || !this.conversationId) return;
+    if (this.timestampService.getTimestamp(this.conversationId, turnId as TurnId) !== null) return;
+
+    this.timestampService.recordTimestamp(this.conversationId, turnId as TurnId).catch(() => {});
+  }
+
+  private maybeAdoptDraftRouteTimestamps(markerIds: string[]): void {
+    if (
+      !this.timestampService ||
+      !this.conversationId ||
+      !this.pendingDraftTimestampSourceConversationId ||
+      markerIds.length === 0
+    ) {
+      return;
+    }
+
+    const sourceConversationId = this.pendingDraftTimestampSourceConversationId;
+    const latestDraftTimestamp =
+      this.timestampService.getLatestTimestampForConversation(sourceConversationId);
+
+    this.pendingDraftTimestampSourceConversationId = null;
+
+    if (
+      latestDraftTimestamp == null ||
+      Date.now() - latestDraftTimestamp > this.draftTimestampAdoptionWindowMs
+    ) {
+      return;
+    }
+
+    this.timestampService
+      .adoptTimestamps(
+        sourceConversationId,
+        this.conversationId,
+        markerIds.map((markerId) => markerId as TurnId),
+      )
+      .catch(() => {});
+  }
+
+  private computeDraftTimestampSourceConversationId(previousUrl: string | null): string | null {
+    if (!previousUrl) return null;
+
+    const previousNativeConversationId = extractConversationIdFromUrl(previousUrl);
+    const currentNativeConversationId = extractConversationIdFromUrl(window.location.href);
+
+    if (previousNativeConversationId || !currentNativeConversationId) {
+      return null;
+    }
+
+    return buildConversationIdFromUrl(previousUrl);
+  }
+
+  private shouldIgnoreTimestampMutations(records: MutationRecord[]): boolean {
+    if (records.length === 0) return false;
+
+    return records.every((record) => {
+      if (record.type !== 'childList') return false;
+
+      const changedNodes = [...Array.from(record.addedNodes), ...Array.from(record.removedNodes)];
+      if (changedNodes.length === 0) return false;
+
+      return changedNodes.every((node) => this.isTimestampMutationNode(node));
+    });
+  }
+
+  private isTimestampMutationNode(node: Node): boolean {
+    if (node instanceof HTMLElement) {
+      return node.classList.contains('gv-timestamp') || !!node.closest('.gv-timestamp');
+    }
+
+    if (node.nodeType === Node.TEXT_NODE) {
+      return !!node.parentElement?.closest('.gv-timestamp');
+    }
+
+    return false;
   }
 }

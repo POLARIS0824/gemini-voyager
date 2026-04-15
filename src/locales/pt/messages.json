@@ -27,6 +27,14 @@
     "message": "Linha do tempo arrastável",
     "description": "Draggable Timeline label"
   },
+  "pinTimelinePreview": {
+    "message": "Fixar painel de pré-visualização",
+    "description": "Pin timeline preview panel toggle label"
+  },
+  "pinTimelinePreviewHint": {
+    "message": "Mantém o painel de pré-visualização aberto ao lado da linha do tempo.",
+    "description": "Pin timeline preview panel feature hint"
+  },
   "enableMarkerLevel": {
     "message": "Habilitar níveis de nó",
     "description": "Enable timeline node level feature"
@@ -102,6 +110,10 @@
   "pm_copied": {
     "message": "Copiado",
     "description": "Copied notice"
+  },
+  "pm_inserted": {
+    "message": "Inserido",
+    "description": "Prompt inserted into the chat input"
   },
   "pm_delete": {
     "message": "Excluir",
@@ -358,6 +370,18 @@
   "chatWidthWide": {
     "message": "Larga",
     "description": "Wide chat width label"
+  },
+  "chatFontSize": {
+    "message": "Tamanho da fonte do chat",
+    "description": "Chat message font size adjustment label"
+  },
+  "chatFontSizeSmall": {
+    "message": "Pequeno",
+    "description": "Small font size label"
+  },
+  "chatFontSizeLarge": {
+    "message": "Grande",
+    "description": "Large font size label"
   },
   "sidebarWidth": {
     "message": "Largura da barra lateral",
@@ -679,6 +703,14 @@
     "message": "Ocultar o botão flutuante do Gerenciador de Prompts na página",
     "description": "Hint for hiding prompt manager feature"
   },
+  "promptInsertOnClick": {
+    "message": "Inserir prompt ao clicar",
+    "description": "Enable direct prompt insertion instead of copying"
+  },
+  "promptInsertOnClickHint": {
+    "message": "Quando ativado, clicar em um prompt o insere na entrada do Gemini. Desativado, o comportamento padrao continua sendo copiar.",
+    "description": "Hint for prompt click insertion behavior"
+  },
   "customWebsites": {
     "message": "Sites personalizados",
     "description": "Custom websites for prompt manager"
@@ -774,6 +806,14 @@
   "nextNode": {
     "message": "Próximo nó",
     "description": "Next timeline node shortcut label"
+  },
+  "firstNode": {
+    "message": "Primeiro turno",
+    "description": "First timeline node shortcut label"
+  },
+  "lastNode": {
+    "message": "Último turno",
+    "description": "Last timeline node shortcut label"
   },
   "shortcutKey": {
     "message": "Tecla",
@@ -1035,6 +1075,14 @@
     "message": "Pressione {modifier}+Enter para enviar mensagens, Enter para nova linha",
     "description": "Modifier+Enter to send feature hint. {modifier} is replaced with ⌘ on macOS and Ctrl on other platforms"
   },
+  "draftAutoSave": {
+    "message": "Salvamento automático de rascunho",
+    "description": "Toggle label for input draft auto-save feature"
+  },
+  "draftAutoSaveHint": {
+    "message": "Salvar e restaurar automaticamente o texto não enviado ao atualizar ou reabrir uma conversa",
+    "description": "Hint for draft auto-save feature"
+  },
   "batch_delete_confirm": {
     "message": "Tem certeza de que deseja excluir {count} conversa(s)? Esta ação não pode ser desfeita.",
     "description": "Batch delete confirmation message"
@@ -1167,6 +1215,14 @@
     "message": "Mostrar Gems",
     "description": "Dica para mostrar a seção da lista de Gems"
   },
+  "notebooksHide": {
+    "message": "Ocultar Notebooks",
+    "description": "Dica para ocultar a seção da lista de Notebooks"
+  },
+  "notebooksShow": {
+    "message": "Mostrar Notebooks",
+    "description": "Dica para mostrar a seção da lista de Notebooks"
+  },
   "setAsDefaultModel": {
     "message": "Set as default model",
     "description": "Tooltip for setting default model"
@@ -1266,6 +1322,22 @@
   "export_fontsize_preview": {
     "message": "A rápida raposa marrom salta sobre o cão preguiçoso.",
     "description": "Preview text for font size slider in export dialog"
+  },
+  "export_image_width_label": {
+    "message": "Largura da imagem",
+    "description": "Label for image width selection in export dialog"
+  },
+  "export_image_width_narrow": {
+    "message": "Estreita (Móvel)",
+    "description": "Narrow width option (e.g. mobile)"
+  },
+  "export_image_width_medium": {
+    "message": "Média (Tablet)",
+    "description": "Medium width option (e.g. tablet)"
+  },
+  "export_image_width_wide": {
+    "message": "Larga (PC)",
+    "description": "Wide width option (e.g. desktop)"
   },
   "export_error_generic": {
     "message": "Falha na exportação: {error}",
@@ -1498,5 +1570,37 @@
   "moveSectionDown": {
     "message": "Mover para baixo",
     "description": "Tooltip for moving a settings section down in popup"
+  },
+  "folderAsProject_enable": {
+    "message": "Habilitar Pasta como Projeto",
+    "description": "Toggle label for the Folder-as-Project feature"
+  },
+  "folderAsProject_description": {
+    "message": "Exibe um seletor de pastas em novos chats e atribui automaticamente a conversa à pasta selecionada no primeiro envio",
+    "description": "Hint for the Folder-as-Project feature toggle"
+  },
+  "folderAsProject_selectFolder": {
+    "message": "Selecionar pasta…",
+    "description": "Placeholder text for the folder picker chip when no folder is selected"
+  },
+  "folderAsProject_noFolder": {
+    "message": "Sem pasta",
+    "description": "Option in the folder picker dropdown to clear the selection"
+  },
+  "folderAsProject_setInstructions": {
+    "message": "Definir instruções",
+    "description": "Folder context menu item to open the instructions editor"
+  },
+  "folderAsProject_editInstructions": {
+    "message": "Editar instruções",
+    "description": "Folder context menu item to edit existing instructions"
+  },
+  "folderAsProject_expand": {
+    "message": "Expandir",
+    "description": "Aria-label for the expand button (screen readers)"
+  },
+  "folderAsProject_collapse": {
+    "message": "Recolher",
+    "description": "Aria-label for the collapse button (screen readers)"
   }
 }

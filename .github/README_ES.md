@@ -19,8 +19,8 @@
     <img src="https://img.shields.io/github/forks/Nagi-ovo/gemini-voyager?style=flat-square&logo=github" alt="GitHub forks">
     <img src="https://img.shields.io/github/v/release/Nagi-ovo/gemini-voyager?style=flat-square&logo=github" alt="Latest version">
     <img src="https://img.shields.io/github/downloads/Nagi-ovo/gemini-voyager/total?style=flat-square&logo=github" alt="GitHub downloads">
-    <img src="https://img.shields.io/chrome-web-store/users/kjdpnimcnfinmilocccippmododhceol?style=flat-square&logo=google-chrome" alt="Chrome Web Store users">
-    <img src="https://img.shields.io/chrome-web-store/rating/kjdpnimcnfinmilocccippmododhceol?style=flat-square&logo=google-chrome" alt="Chrome Web Store rating">
+    <img src="https://img.shields.io/chrome-web-store/users/iifacdnjakkhjjiengaffnegbndgingi?style=flat-square&logo=google-chrome" alt="Chrome Web Store users">
+    <img src="https://img.shields.io/chrome-web-store/rating/iifacdnjakkhjjiengaffnegbndgingi?style=flat-square&logo=google-chrome" alt="Chrome Web Store rating">
     <img src="https://img.shields.io/amo/users/gemini-voyager?style=flat-square&logo=firefox" alt="Firefox Add-ons users">
     <img src="https://img.shields.io/amo/rating/gemini-voyager?style=flat-square&logo=firefox" alt="Firefox Add-ons rating">
   </p>
@@ -58,11 +58,11 @@
   <b>🎉 ¡Altamente recomendado por los principales influencers tecnológicos!</b>
 </p>
 
-> [!IMPORTANT]
-> **Aviso de cambio de nombre**: Debido a problemas de marcas y derechos de autor, esta extensión ha sido renombrada oficialmente a **Voyager**. Sin embargo, debido a la lentitud del proceso de revisión de Chrome Web Store, el cambio de nombre no fue aprobado en 7 días — está temporalmente no disponible en Chrome Web Store.
-
 > [!NOTE]
 > Si Voyager te resulta útil, compártelo en X, Reddit, YouTube, etc. Cada difusión ayuda a que más personas descubran el proyecto y mejoren la experiencia con Gemini. Gracias.
+
+> [!IMPORTANT]
+> Voyager fue retirado anteriormente de la Chrome Web Store debido a una disputa de marca comercial, lo que provocó la pérdida de todos los usuarios y reseñas acumulados. Ahora estamos de vuelta y reconstruyendo desde cero — si encuentras útil Voyager, dejar una valoración o reseña en la página de la tienda significaría mucho para nosotros.
 
 ---
 
@@ -123,7 +123,7 @@ Por eso creamos **Voyager**. No es solo una herramienta; es un compañero que te
 > ⚠️ Nota: El Administrador de Prompts es la única función que admite Gemini para Empresas.
 
 <div align="center">
-  <a href="https://chromewebstore.google.com/detail/kjdpnimcnfinmilocccippmododhceol?utm_source=github&utm_medium=readme&utm_campaign=organic_growth&utm_content=es" target="_blank">
+  <a href="https://chromewebstore.google.com/detail/iifacdnjakkhjjiengaffnegbndgingi?utm_source=github&utm_medium=readme&utm_campaign=organic_growth&utm_content=es" target="_blank">
     <img src="https://img.shields.io/badge/Chrome%20Web%20Store-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Chrome Web Store" height="36">
   </a>
   &nbsp;&nbsp;
@@ -224,6 +224,8 @@ Un agradecimiento especial a todos los colaboradores por sus contribuciones a Vo
 
 ## 🌟 Créditos
 
+- **[gemini-watermark-remover](https://github.com/journey-ad/gemini-watermark-remover) / [GeminiWatermarkTool](https://github.com/allenk/GeminiWatermarkTool)** - NanoBanana está adaptado de estos proyectos. Los avisos MIT de terceros conservados están en [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
+
 - **[DeepSeek Voyager](https://github.com/Azurboy/deepseek-voyager)** - Un fork de Voyager adaptado para DeepSeek.
 
 - **[claude-nexus](https://github.com/Qiuner/claude-nexus)** - Una extensión de mejora para Claude.ai inspirada en Voyager, con navegación de línea de tiempo, gestión de carpetas, biblioteca de prompts y más, con compatibilidad total de importación/exportación de prompts con Voyager.
@@ -231,6 +233,15 @@ Un agradecimiento especial a todos los colaboradores por sus contribuciones a Vo
 - **[ChatGPT Conversation Timeline](https://github.com/Reborn14/chatgpt-conversation-timeline)** - La fuente original de inspiración para la navegación por línea de tiempo.
 
 - **[Ophel Atlas](https://github.com/urzeye/ophel)** - Una extensión de navegador que transforma las conversaciones de IA en documentos organizados y buscables, con esquemas autogenerados, gestión de conversaciones y biblioteca de prompts, compatible con múltiples plataformas de IA.
+
+- **[Better_Doubao](https://github.com/Rex16200513/Better_Doubao)** - Una extensión de navegador avanzada que potencia Doubao con navegación mejorada, organización y funciones de productividad.
+
+---
+
+## 📄 Licencia
+
+Voyager se distribuye bajo **GPL-3.0**.
+Los avisos MIT de terceros conservados para el código y los recursos relacionados con NanoBanana están en [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 
 ---
 

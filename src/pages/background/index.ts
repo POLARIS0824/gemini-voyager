@@ -9,10 +9,17 @@ import {
   extractRouteUserIdFromUrl,
 } from '@/core/services/AccountIsolationService';
 import { googleDriveSyncService } from '@/core/services/GoogleDriveSyncService';
+import { exportBackupableSyncSettings } from '@/core/services/SettingsBackupService';
 import { StorageKeys } from '@/core/types/common';
 import type { FolderData } from '@/core/types/folder';
 import type { PromptItem, SyncAccountScope, SyncMode } from '@/core/types/sync';
+import { isFirefox } from '@/core/utils/browser';
 import type { ForkNode, ForkNodesData } from '@/pages/content/fork/forkTypes';
+import {
+  filterTimelineHierarchyByRouteScope,
+  getTimelineHierarchyStorageKeysToRead,
+  resolveTimelineHierarchyDataForStorageScope,
+} from '@/pages/content/timeline/hierarchyStorage';
 import type { StarredMessage, StarredMessagesData } from '@/pages/content/timeline/starredTypes';
 
 const CUSTOM_CONTENT_SCRIPT_ID = 'gv-custom-content-script';
@@ -25,6 +32,25 @@ const GEMINI_MATCHES = [
   'https://aistudio.google.com/*',
   'https://aistudio.google.cn/*',
 ];
+
+function isStarredMessagesData(value: unknown): value is StarredMessagesData {
+  if (typeof value !== 'object' || value === null) return false;
+  const data = value as { messages?: unknown };
+  if (typeof data.messages !== 'object' || data.messages === null) return false;
+  const messages = data.messages as Record<string, unknown>;
+  return Object.values(messages).every((v) => Array.isArray(v));
+}
+
+function isForkNodesData(value: unknown): value is ForkNodesData {
+  if (typeof value !== 'object' || value === null) return false;
+  const data = value as { nodes?: unknown; groups?: unknown };
+  return (
+    typeof data.nodes === 'object' &&
+    data.nodes !== null &&
+    typeof data.groups === 'object' &&
+    data.groups !== null
+  );
+}
 
 function isSyncAccountScope(value: unknown): value is SyncAccountScope {
   if (typeof value !== 'object' || value === null) return false;
@@ -195,6 +221,19 @@ function toMatchPatterns(domain: string): string[] {
   return [`https://*.${normalized}/*`, `http://*.${normalized}/*`];
 }
 
+function toRelativeExtensionPath(resource: string): string {
+  try {
+    const url = new URL(resource);
+    if (url.protocol === 'moz-extension:') {
+      return url.pathname.replace(/^\/+/, '');
+    }
+  } catch {
+    // Not an absolute extension URL; fall through.
+  }
+
+  return resource.replace(/^\/+/, '');
+}
+
 function extractDomainsFromOrigins(origins?: string[]): string[] {
   if (!Array.isArray(origins)) return [];
   const domains = origins
@@ -256,12 +295,19 @@ async function syncCustomContentScripts(domains?: string[]): Promise<void> {
         ? 'document_end'
         : 'document_idle';
 
+  const jsResources = isFirefox()
+    ? (manifestContentScript.js || []).map(toRelativeExtensionPath)
+    : manifestContentScript.js || [];
+  const cssResources = isFirefox()
+    ? manifestContentScript.css?.map(toRelativeExtensionPath)
+    : manifestContentScript.css;
+
   try {
     await chrome.scripting.registerContentScripts([
       {
         id: CUSTOM_CONTENT_SCRIPT_ID,
-        js: manifestContentScript.js || [],
-        css: manifestContentScript.css,
+        js: jsResources,
+        css: cssResources,
         matches: grantedMatches,
         allFrames: manifestContentScript.all_frames,
         runAt,
@@ -340,7 +386,8 @@ class StarredMessagesManager {
   private async getFromStorage(): Promise<StarredMessagesData> {
     try {
       const result = await chrome.storage.local.get([StorageKeys.TIMELINE_STARRED_MESSAGES]);
-      return result[StorageKeys.TIMELINE_STARRED_MESSAGES] || { messages: {} };
+      const starred = result[StorageKeys.TIMELINE_STARRED_MESSAGES];
+      return isStarredMessagesData(starred) ? starred : { messages: {} };
     } catch (error) {
       console.error('[Background] Failed to get starred messages:', error);
       return { messages: {} };
@@ -418,6 +465,51 @@ class StarredMessagesManager {
     const messages = await this.getStarredMessagesForConversation(conversationId);
     return messages.some((m) => m.turnId === turnId);
   }
+
+  async reconcileConversationIds(
+    targetConversationId: string,
+    sourceConversationIds: string[],
+    conversationUrl?: string,
+  ): Promise<StarredMessage[]> {
+    return this.serialize(async () => {
+      const data = await this.getFromStorage();
+      const uniqueConversationIds = Array.from(
+        new Set([targetConversationId, ...sourceConversationIds]),
+      ).filter(Boolean);
+
+      const mergedMessages = new Map<string, StarredMessage>();
+
+      for (const conversationId of uniqueConversationIds) {
+        const messages = data.messages[conversationId] || [];
+        for (const message of messages) {
+          const normalizedMessage: StarredMessage = {
+            ...message,
+            conversationId: targetConversationId,
+            conversationUrl: conversationUrl || message.conversationUrl,
+          };
+          const existing = mergedMessages.get(message.turnId);
+          if (!existing || normalizedMessage.starredAt >= existing.starredAt) {
+            mergedMessages.set(message.turnId, normalizedMessage);
+          }
+        }
+      }
+
+      if (mergedMessages.size > 0) {
+        data.messages[targetConversationId] = Array.from(mergedMessages.values());
+      } else {
+        delete data.messages[targetConversationId];
+      }
+
+      for (const conversationId of uniqueConversationIds) {
+        if (conversationId !== targetConversationId) {
+          delete data.messages[conversationId];
+        }
+      }
+
+      await this.saveToStorage(data);
+      return data.messages[targetConversationId] || [];
+    });
+  }
 }
 
 const starredMessagesManager = new StarredMessagesManager();
@@ -438,7 +530,8 @@ class ForkNodesManager {
   private async getFromStorage(): Promise<ForkNodesData> {
     try {
       const result = await chrome.storage.local.get([StorageKeys.FORK_NODES]);
-      return result[StorageKeys.FORK_NODES] || { nodes: {}, groups: {} };
+      const forkNodes = result[StorageKeys.FORK_NODES];
+      return isForkNodesData(forkNodes) ? forkNodes : { nodes: {}, groups: {} };
     } catch (error) {
       console.error('[Background] Failed to get fork nodes:', error);
       return { nodes: {}, groups: {} };
@@ -608,6 +701,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sendResponse({ ok: true, isStarred });
             return;
           }
+          case 'gv.starred.reconcileConversationIds': {
+            const messages = await starredMessagesManager.reconcileConversationIds(
+              message.payload.targetConversationId,
+              Array.isArray(message.payload.sourceConversationIds)
+                ? message.payload.sourceConversationIds
+                : [],
+              typeof message.payload.conversationUrl === 'string'
+                ? message.payload.conversationUrl
+                : undefined,
+            );
+            sendResponse({ ok: true, messages });
+            return;
+          }
         }
       }
 
@@ -667,12 +773,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               interactive,
               platform: rawPlatform,
               accountScope: rawScope,
+              timelineHierarchyAccountScope: rawTimelineHierarchyScope,
             } = message.payload as {
               folders: FolderData;
               prompts: PromptItem[];
               interactive?: boolean;
               platform?: 'gemini' | 'aistudio';
               accountScope?: unknown;
+              timelineHierarchyAccountScope?: unknown;
             };
             const platform = rawPlatform || 'gemini';
             const accountScope = await resolveAccountScopeForMessage(
@@ -680,11 +788,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               platform,
               isSyncAccountScope(rawScope) ? rawScope : undefined,
             );
-            // Also get starred messages and fork nodes from local storage (only for Gemini platform)
+            const timelineHierarchyAccountScope =
+              platform === 'gemini' && isSyncAccountScope(rawTimelineHierarchyScope)
+                ? rawTimelineHierarchyScope
+                : null;
+            // Also get Gemini-only timeline data from local storage
             const starredDataRaw =
               platform !== 'aistudio' ? await starredMessagesManager.getAllStarredMessages() : null;
             const forksDataRaw =
               platform !== 'aistudio' ? await forkNodesManager.getAllForkNodes() : null;
+            const timelineHierarchyRaw =
+              platform !== 'aistudio'
+                ? await chrome.storage.local.get(
+                    getTimelineHierarchyStorageKeysToRead(
+                      timelineHierarchyAccountScope?.accountKey,
+                    ),
+                  )
+                : null;
             const starredData =
               starredDataRaw && accountScope
                 ? filterStarredByRouteScope(starredDataRaw, accountScope.routeUserId)
@@ -693,6 +813,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               forksDataRaw && accountScope
                 ? filterForkNodesByRouteScope(forksDataRaw, accountScope.routeUserId)
                 : forksDataRaw;
+            const timelineHierarchyDataRaw =
+              platform !== 'aistudio' && timelineHierarchyRaw
+                ? resolveTimelineHierarchyDataForStorageScope(
+                    timelineHierarchyRaw as Record<string, unknown>,
+                    timelineHierarchyAccountScope?.accountKey,
+                    timelineHierarchyAccountScope?.routeUserId ?? null,
+                  )
+                : null;
+            const timelineHierarchyData =
+              timelineHierarchyDataRaw && timelineHierarchyAccountScope
+                ? filterTimelineHierarchyByRouteScope(
+                    timelineHierarchyDataRaw,
+                    timelineHierarchyAccountScope.routeUserId,
+                  )
+                : timelineHierarchyDataRaw;
+            const settingsPayload = await exportBackupableSyncSettings();
             const success = await googleDriveSyncService.upload(
               folders,
               prompts,
@@ -700,7 +836,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               interactive !== false,
               platform,
               forksData,
+              timelineHierarchyData,
               accountScope,
+              timelineHierarchyAccountScope,
+              settingsPayload.data,
             );
             sendResponse({ ok: success, state: await googleDriveSyncService.getState() });
             return;
@@ -709,12 +848,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             const interactive = message.payload?.interactive !== false;
             const platform = (message.payload?.platform as 'gemini' | 'aistudio') || 'gemini';
             const rawScope = message.payload?.accountScope;
+            const rawTimelineHierarchyScope = message.payload?.timelineHierarchyAccountScope;
             const accountScope = await resolveAccountScopeForMessage(
               sender,
               platform,
               isSyncAccountScope(rawScope) ? rawScope : undefined,
             );
-            const data = await googleDriveSyncService.download(interactive, platform, accountScope);
+            const timelineHierarchyAccountScope =
+              platform === 'gemini' && isSyncAccountScope(rawTimelineHierarchyScope)
+                ? rawTimelineHierarchyScope
+                : null;
+            const data = await googleDriveSyncService.download(
+              interactive,
+              platform,
+              accountScope,
+              timelineHierarchyAccountScope,
+            );
             // NOTE: We intentionally do NOT save to storage here.
             // The caller (Popup) is responsible for merging with local data and saving.
             // This prevents data loss from overwriting local changes.

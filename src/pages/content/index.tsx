@@ -9,14 +9,17 @@ import { startFormulaCopy } from '@/features/formulaCopy';
 import { initI18n } from '@/utils/i18n';
 
 import { startChangelog } from './changelog/index';
+import { startChatFontSizeAdjuster } from './chatFontSize/index';
 import { startChatWidthAdjuster } from './chatWidth/index';
 import { startContextSync } from './contextSync';
 import { startDeepResearchExport } from './deepResearch/index';
 import DefaultModelManager from './defaultModel/modelLocker';
+import { startDraftSave } from './draftSave/index';
 import { startEditInputWidthAdjuster } from './editInputWidth/index';
 import { startExportButton } from './export/index';
 import { startAIStudioFolderManager } from './folder/aistudio';
 import { startFolderManager } from './folder/index';
+import { startFolderProject } from './folderProject/index';
 import { startFolderSpacingAdjuster } from './folderSpacing/index';
 import { isForkFeatureEnabledValue } from './fork/featureFlag';
 import { startFork } from './fork/index';
@@ -34,6 +37,7 @@ import { startSidebarAutoHide } from './sidebarAutoHide';
 import { startSidebarWidthAdjuster } from './sidebarWidth';
 import { startTimeline } from './timeline/index';
 import { startTitleUpdater } from './titleUpdater';
+import { startUserLatex } from './userLatex/index';
 import { startRainEffect, startSakuraEffect, startSnowEffect } from './visualEffects';
 import { startWatermarkRemover } from './watermarkRemover/index';
 
@@ -71,6 +75,7 @@ let folderManagerInstance: Awaited<ReturnType<typeof startFolderManager>> | null
 let promptManagerInstance: Awaited<ReturnType<typeof startPromptManager>> | null = null;
 let quoteReplyCleanup: (() => void) | null = null;
 let sendBehaviorCleanup: (() => void) | null = null;
+let draftSaveCleanup: (() => void) | null = null;
 let forkCleanup: (() => void) | null = null;
 
 async function isForkFeatureEnabled(): Promise<boolean> {
@@ -170,12 +175,16 @@ async function initializeFeatures(): Promise<void> {
       await delay(HEAVY_FEATURE_INIT_DELAY);
 
       folderManagerInstance = await startFolderManager();
+      if (folderManagerInstance) startFolderProject(folderManagerInstance);
       await delay(HEAVY_FEATURE_INIT_DELAY);
 
       startFolderSpacingAdjuster('gemini');
       await delay(LIGHT_FEATURE_INIT_DELAY);
 
       startChatWidthAdjuster();
+      await delay(LIGHT_FEATURE_INIT_DELAY);
+
+      startChatFontSizeAdjuster();
       await delay(LIGHT_FEATURE_INIT_DELAY);
 
       startEditInputWidthAdjuster();
@@ -236,6 +245,10 @@ async function initializeFeatures(): Promise<void> {
       sendBehaviorCleanup = await startSendBehavior();
       await delay(LIGHT_FEATURE_INIT_DELAY);
 
+      // Draft auto-save
+      draftSaveCleanup = await startDraftSave();
+      await delay(LIGHT_FEATURE_INIT_DELAY);
+
       // Recents hider - hide/show toggle for recent items section
       startRecentsHider();
       await delay(LIGHT_FEATURE_INIT_DELAY);
@@ -276,6 +289,10 @@ async function initializeFeatures(): Promise<void> {
     if (location.hostname === 'gemini.google.com') {
       // Initialize Mermaid rendering (lightweight)
       startMermaid();
+      await delay(LIGHT_FEATURE_INIT_DELAY);
+
+      // Initialize user message LaTeX rendering
+      startUserLatex();
       await delay(LIGHT_FEATURE_INIT_DELAY);
     }
 
@@ -472,6 +489,10 @@ function handleVisibilityChange(): void {
         if (sendBehaviorCleanup) {
           sendBehaviorCleanup();
           sendBehaviorCleanup = null;
+        }
+        if (draftSaveCleanup) {
+          draftSaveCleanup();
+          draftSaveCleanup = null;
         }
         if (forkCleanup) {
           forkCleanup();

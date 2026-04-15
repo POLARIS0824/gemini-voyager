@@ -27,6 +27,14 @@
     "message": "Línea de tiempo arrastrable",
     "description": "Draggable Timeline label"
   },
+  "pinTimelinePreview": {
+    "message": "Fijar panel de vista previa",
+    "description": "Pin timeline preview panel toggle label"
+  },
+  "pinTimelinePreviewHint": {
+    "message": "Mantén abierto el panel de vista previa junto a la línea de tiempo.",
+    "description": "Pin timeline preview panel feature hint"
+  },
   "enableMarkerLevel": {
     "message": "Habilitar niveles de nodo",
     "description": "Enable timeline node level feature"
@@ -102,6 +110,10 @@
   "pm_copied": {
     "message": "Copiado",
     "description": "Copied notice"
+  },
+  "pm_inserted": {
+    "message": "Insertado",
+    "description": "Prompt inserted into the chat input"
   },
   "pm_delete": {
     "message": "Eliminar",
@@ -358,6 +370,18 @@
   "chatWidthWide": {
     "message": "Ancho",
     "description": "Wide chat width label"
+  },
+  "chatFontSize": {
+    "message": "Tamaño de fuente del chat",
+    "description": "Chat message font size adjustment label"
+  },
+  "chatFontSizeSmall": {
+    "message": "Pequeño",
+    "description": "Small font size label"
+  },
+  "chatFontSizeLarge": {
+    "message": "Grande",
+    "description": "Large font size label"
   },
   "sidebarWidth": {
     "message": "Ancho de la barra lateral",
@@ -679,6 +703,14 @@
     "message": "Ocultar el botón flotante del Gestor de Prompts en la página",
     "description": "Hint for hiding prompt manager feature"
   },
+  "promptInsertOnClick": {
+    "message": "Insertar prompt al hacer clic",
+    "description": "Enable direct prompt insertion instead of copying"
+  },
+  "promptInsertOnClickHint": {
+    "message": "Si se activa, al hacer clic en un prompt se insertará en la entrada de Gemini. Si está desactivado, se mantiene el comportamiento predeterminado de copiar.",
+    "description": "Hint for prompt click insertion behavior"
+  },
   "customWebsites": {
     "message": "Sitios web personalizados",
     "description": "Custom websites for prompt manager"
@@ -774,6 +806,14 @@
   "nextNode": {
     "message": "Nodo siguiente",
     "description": "Next timeline node shortcut label"
+  },
+  "firstNode": {
+    "message": "Primer turno",
+    "description": "First timeline node shortcut label"
+  },
+  "lastNode": {
+    "message": "Último turno",
+    "description": "Last timeline node shortcut label"
   },
   "shortcutKey": {
     "message": "Tecla",
@@ -1035,6 +1075,14 @@
     "message": "Presiona {modifier}+Enter para enviar mensajes, Enter para agregar una nueva línea",
     "description": "Modifier+Enter to send feature hint. {modifier} is replaced with ⌘ on macOS and Ctrl on other platforms"
   },
+  "draftAutoSave": {
+    "message": "Guardado automático de borrador",
+    "description": "Toggle label for input draft auto-save feature"
+  },
+  "draftAutoSaveHint": {
+    "message": "Guardar y restaurar automáticamente el texto no enviado al actualizar o reabrir una conversación",
+    "description": "Hint for draft auto-save feature"
+  },
   "batch_delete_confirm": {
     "message": "¿Estás seguro de que quieres eliminar {count} conversación(es)? Esta acción no se puede deshacer.",
     "description": "Batch delete confirmation message"
@@ -1167,6 +1215,14 @@
     "message": "Mostrar Gems",
     "description": "Tooltip para mostrar la sección de la lista de Gems"
   },
+  "notebooksHide": {
+    "message": "Ocultar Notebooks",
+    "description": "Tooltip para ocultar la sección de la lista de Notebooks"
+  },
+  "notebooksShow": {
+    "message": "Mostrar Notebooks",
+    "description": "Tooltip para mostrar la sección de la lista de Notebooks"
+  },
   "setAsDefaultModel": {
     "message": "Set as default model",
     "description": "Tooltip for setting default model"
@@ -1266,6 +1322,22 @@
   "export_fontsize_preview": {
     "message": "El veloz murciélago hindú comía feliz cardillo y kiwi.",
     "description": "Preview text for font size slider in export dialog"
+  },
+  "export_image_width_label": {
+    "message": "Ancho de imagen",
+    "description": "Label for image width selection in export dialog"
+  },
+  "export_image_width_narrow": {
+    "message": "Estrecho (Móvil)",
+    "description": "Narrow width option (e.g. mobile)"
+  },
+  "export_image_width_medium": {
+    "message": "Medio (Tableta)",
+    "description": "Medium width option (e.g. tablet)"
+  },
+  "export_image_width_wide": {
+    "message": "Ancho (PC)",
+    "description": "Wide width option (e.g. desktop)"
   },
   "export_error_generic": {
     "message": "Error al exportar: {error}",
@@ -1498,5 +1570,37 @@
   "moveSectionDown": {
     "message": "Bajar",
     "description": "Tooltip for moving a settings section down in popup"
+  },
+  "folderAsProject_enable": {
+    "message": "Habilitar Carpeta como Proyecto",
+    "description": "Toggle label for the Folder-as-Project feature"
+  },
+  "folderAsProject_description": {
+    "message": "Muestra un selector de carpetas en nuevos chats y asigna automáticamente la conversación a la carpeta seleccionada al primer envío",
+    "description": "Hint for the Folder-as-Project feature toggle"
+  },
+  "folderAsProject_selectFolder": {
+    "message": "Seleccionar carpeta…",
+    "description": "Placeholder text for the folder picker chip when no folder is selected"
+  },
+  "folderAsProject_noFolder": {
+    "message": "Sin carpeta",
+    "description": "Option in the folder picker dropdown to clear the selection"
+  },
+  "folderAsProject_setInstructions": {
+    "message": "Establecer instrucciones",
+    "description": "Folder context menu item to open the instructions editor"
+  },
+  "folderAsProject_editInstructions": {
+    "message": "Editar instrucciones",
+    "description": "Folder context menu item to edit existing instructions"
+  },
+  "folderAsProject_expand": {
+    "message": "Expandir",
+    "description": "Aria-label for the expand button (screen readers)"
+  },
+  "folderAsProject_collapse": {
+    "message": "Contraer",
+    "description": "Aria-label for the collapse button (screen readers)"
   }
 }

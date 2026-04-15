@@ -27,6 +27,14 @@
     "message": "Перетаскиваемый таймлайн",
     "description": "Draggable Timeline label"
   },
+  "pinTimelinePreview": {
+    "message": "Закрепить панель предпросмотра",
+    "description": "Pin timeline preview panel toggle label"
+  },
+  "pinTimelinePreviewHint": {
+    "message": "Держать панель предпросмотра открытой рядом с таймлайном.",
+    "description": "Pin timeline preview panel feature hint"
+  },
   "enableMarkerLevel": {
     "message": "Включить уровни узлов",
     "description": "Enable timeline node level feature"
@@ -102,6 +110,10 @@
   "pm_copied": {
     "message": "Скопировано",
     "description": "Copied notice"
+  },
+  "pm_inserted": {
+    "message": "Вставлено",
+    "description": "Prompt inserted into the chat input"
   },
   "pm_delete": {
     "message": "Удалить",
@@ -358,6 +370,18 @@
   "chatWidthWide": {
     "message": "Широкая",
     "description": "Wide chat width label"
+  },
+  "chatFontSize": {
+    "message": "Размер шрифта чата",
+    "description": "Chat message font size adjustment label"
+  },
+  "chatFontSizeSmall": {
+    "message": "Мелкий",
+    "description": "Small font size label"
+  },
+  "chatFontSizeLarge": {
+    "message": "Крупный",
+    "description": "Large font size label"
   },
   "sidebarWidth": {
     "message": "Ширина боковой панели",
@@ -679,6 +703,14 @@
     "message": "Скрыть плавающую кнопку Менеджера промптов на странице",
     "description": "Hint for hiding prompt manager feature"
   },
+  "promptInsertOnClick": {
+    "message": "Вставлять промпт по клику",
+    "description": "Enable direct prompt insertion instead of copying"
+  },
+  "promptInsertOnClickHint": {
+    "message": "Если включено, клик по промпту вставляет его в поле Gemini. Если выключено, сохраняется стандартное поведение копирования.",
+    "description": "Hint for prompt click insertion behavior"
+  },
   "customWebsites": {
     "message": "Пользовательские сайты",
     "description": "Custom websites for prompt manager"
@@ -774,6 +806,14 @@
   "nextNode": {
     "message": "Следующий узел",
     "description": "Next timeline node shortcut label"
+  },
+  "firstNode": {
+    "message": "Первый ход",
+    "description": "First timeline node shortcut label"
+  },
+  "lastNode": {
+    "message": "Последний ход",
+    "description": "Last timeline node shortcut label"
   },
   "shortcutKey": {
     "message": "Клавиша",
@@ -1035,6 +1075,14 @@
     "message": "Нажмите {modifier}+Enter для отправки сообщений, Enter для новой строки",
     "description": "Modifier+Enter to send feature hint. {modifier} is replaced with ⌘ on macOS and Ctrl on other platforms"
   },
+  "draftAutoSave": {
+    "message": "Автосохранение черновика",
+    "description": "Toggle label for input draft auto-save feature"
+  },
+  "draftAutoSaveHint": {
+    "message": "Автоматически сохранять и восстанавливать неотправленный текст при обновлении страницы или повторном открытии беседы",
+    "description": "Hint for draft auto-save feature"
+  },
   "batch_delete_confirm": {
     "message": "Вы уверены, что хотите удалить {count} разговор(ов)? Это действие нельзя отменить.",
     "description": "Batch delete confirmation message"
@@ -1167,6 +1215,14 @@
     "message": "Показать Gems",
     "description": "Подсказка для отображения раздела списка Gems"
   },
+  "notebooksHide": {
+    "message": "Скрыть Notebooks",
+    "description": "Подсказка для скрытия раздела списка Notebooks"
+  },
+  "notebooksShow": {
+    "message": "Показать Notebooks",
+    "description": "Подсказка для отображения раздела списка Notebooks"
+  },
   "setAsDefaultModel": {
     "message": "Set as default model",
     "description": "Tooltip for setting default model"
@@ -1266,6 +1322,22 @@
   "export_fontsize_preview": {
     "message": "Съешь ещё этих мягких французских булок, да выпей чаю.",
     "description": "Preview text for font size slider in export dialog"
+  },
+  "export_image_width_label": {
+    "message": "Ширина изображения",
+    "description": "Label for image width selection in export dialog"
+  },
+  "export_image_width_narrow": {
+    "message": "Узкая (Телефоны)",
+    "description": "Narrow width option (e.g. mobile)"
+  },
+  "export_image_width_medium": {
+    "message": "Средняя (Планшеты)",
+    "description": "Medium width option (e.g. tablet)"
+  },
+  "export_image_width_wide": {
+    "message": "Широкая (ПК)",
+    "description": "Wide width option (e.g. desktop)"
   },
   "export_error_generic": {
     "message": "Не удалось экспортировать: {error}",
@@ -1498,5 +1570,37 @@
   "moveSectionDown": {
     "message": "Переместить вниз",
     "description": "Tooltip for moving a settings section down in popup"
+  },
+  "folderAsProject_enable": {
+    "message": "Включить Папку как Проект",
+    "description": "Toggle label for the Folder-as-Project feature"
+  },
+  "folderAsProject_description": {
+    "message": "Показывает выбор папки в новых чатах и автоматически добавляет разговор в выбранную папку при первой отправке",
+    "description": "Hint for the Folder-as-Project feature toggle"
+  },
+  "folderAsProject_selectFolder": {
+    "message": "Выбрать папку…",
+    "description": "Placeholder text for the folder picker chip when no folder is selected"
+  },
+  "folderAsProject_noFolder": {
+    "message": "Без папки",
+    "description": "Option in the folder picker dropdown to clear the selection"
+  },
+  "folderAsProject_setInstructions": {
+    "message": "Задать инструкции",
+    "description": "Folder context menu item to open the instructions editor"
+  },
+  "folderAsProject_editInstructions": {
+    "message": "Изменить инструкции",
+    "description": "Folder context menu item to edit existing instructions"
+  },
+  "folderAsProject_expand": {
+    "message": "Развернуть",
+    "description": "Aria-label for the expand button (screen readers)"
+  },
+  "folderAsProject_collapse": {
+    "message": "Свернуть",
+    "description": "Aria-label for the collapse button (screen readers)"
   }
 }

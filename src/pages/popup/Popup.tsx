@@ -9,7 +9,12 @@ import {
 } from '@/core/services/AccountIsolationService';
 import { StorageKeys } from '@/core/types/common';
 import type { ConversationReference, Folder } from '@/core/types/folder';
-import { getModifierKey, isSafari, shouldShowSafariUpdateReminder } from '@/core/utils/browser';
+import {
+  getModifierKey,
+  isFirefox,
+  isSafari,
+  shouldShowSafariUpdateReminder,
+} from '@/core/utils/browser';
 import { shouldShowUpdateReminderForCurrentVersion } from '@/core/utils/updateReminder';
 import { compareVersions } from '@/core/utils/version';
 import {
@@ -56,6 +61,7 @@ const POPUP_SECTION_IDS = [
   'folderSpacing',
   'folderTreeIndent',
   'chatWidth',
+  'chatFontSize',
   'editInputWidth',
   'sidebarWidth',
   'sidebarBehavior',
@@ -258,6 +264,7 @@ const normalizePercent = (
 const FOLDER_SPACING = { min: 0, max: 16, defaultValue: 2 };
 const FOLDER_TREE_INDENT = { min: -8, max: 32, defaultValue: -8 };
 const CHAT_PERCENT = { min: 30, max: 100, defaultValue: 70, legacyBaselinePx: LEGACY_BASELINE_PX };
+const CHAT_FONT_SIZE = { min: 80, max: 150, defaultValue: 100 };
 const EDIT_PERCENT = { min: 30, max: 100, defaultValue: 60, legacyBaselinePx: LEGACY_BASELINE_PX };
 const SIDEBAR_PERCENT = {
   min: 15,
@@ -308,6 +315,7 @@ interface SettingsUpdate {
   mode?: ScrollMode | null;
   hideContainer?: boolean;
   draggableTimeline?: boolean;
+  timelinePreviewPinned?: boolean;
   markerLevelEnabled?: boolean;
   resetPosition?: boolean;
   folderEnabled?: boolean;
@@ -315,12 +323,14 @@ interface SettingsUpdate {
   customWebsites?: string[];
   watermarkRemoverEnabled?: boolean;
   hidePromptManager?: boolean;
+  promptInsertOnClickEnabled?: boolean;
   inputCollapseEnabled?: boolean;
   inputCollapseWhenNotEmpty?: boolean;
   tabTitleUpdateEnabled?: boolean;
   mermaidEnabled?: boolean;
   quoteReplyEnabled?: boolean;
   ctrlEnterSendEnabled?: boolean;
+  draftAutoSaveEnabled?: boolean;
   sidebarAutoHideEnabled?: boolean;
   sidebarFullHideEnabled?: boolean;
   visualEffect?: 'off' | 'snow' | 'sakura' | 'rain';
@@ -330,6 +340,7 @@ interface SettingsUpdate {
   accountIsolationPlatform?: AccountPlatform;
   aiStudioEnabled?: boolean;
   showMessageTimestamps?: boolean;
+  folderProjectEnabled?: boolean;
 }
 
 function SectionReorderControls({
@@ -406,6 +417,7 @@ export default function Popup() {
   const [mode, setMode] = useState<ScrollMode>('flow');
   const [hideContainer, setHideContainer] = useState<boolean>(false);
   const [draggableTimeline, setDraggableTimeline] = useState<boolean>(false);
+  const [timelinePreviewPinned, setTimelinePreviewPinned] = useState<boolean>(false);
   const [markerLevelEnabled, setMarkerLevelEnabled] = useState<boolean>(false);
   const [folderEnabled, setFolderEnabled] = useState<boolean>(true);
   const [hideArchivedConversations, setHideArchivedConversations] = useState<boolean>(false);
@@ -421,19 +433,23 @@ export default function Popup() {
   const [safariDmgUrl, setSafariDmgUrl] = useState<string | null>(null);
   const [watermarkRemoverEnabled, setWatermarkRemoverEnabled] = useState<boolean>(true);
   const [hidePromptManager, setHidePromptManager] = useState<boolean>(false);
+  const [promptInsertOnClickEnabled, setPromptInsertOnClickEnabled] = useState<boolean>(false);
   const [inputCollapseEnabled, setInputCollapseEnabled] = useState<boolean>(false);
   const [inputCollapseWhenNotEmpty, setInputCollapseWhenNotEmpty] = useState<boolean>(false);
   const [tabTitleUpdateEnabled, setTabTitleUpdateEnabled] = useState<boolean>(true);
   const [mermaidEnabled, setMermaidEnabled] = useState<boolean>(true);
   const [showMessageTimestamps, setShowMessageTimestamps] = useState<boolean>(false);
   const [quoteReplyEnabled, setQuoteReplyEnabled] = useState<boolean>(true);
+  const [folderProjectEnabled, setFolderProjectEnabled] = useState<boolean>(false);
   const [ctrlEnterSendEnabled, setCtrlEnterSendEnabled] = useState<boolean>(false);
+  const [draftAutoSaveEnabled, setDraftAutoSaveEnabled] = useState<boolean>(false);
   const [sidebarAutoHideEnabled, setSidebarAutoHideEnabled] = useState<boolean>(false);
   const [sidebarFullHideEnabled, setSidebarFullHideEnabled] = useState<boolean>(false);
   const [visualEffect, setVisualEffect] = useState<'off' | 'snow' | 'sakura' | 'rain'>('off');
   const [preventAutoScrollEnabled, setPreventAutoScrollEnabled] = useState<boolean>(false);
   const [forkEnabled, setForkEnabled] = useState<boolean>(false);
   const [chatWidthEnabled, setChatWidthEnabled] = useState<boolean>(false);
+  const [chatFontSizeEnabled, setChatFontSizeEnabled] = useState<boolean>(false);
   const [editInputWidthEnabled, setEditInputWidthEnabled] = useState<boolean>(false);
   const [sidebarWidthEnabled, setSidebarWidthEnabled] = useState<boolean>(false);
   const [accountIsolationEnabledGemini, setAccountIsolationEnabledGemini] =
@@ -496,6 +512,8 @@ export default function Popup() {
         payload.geminiTimelineHideContainer = settings.hideContainer;
       if (typeof settings.draggableTimeline === 'boolean')
         payload.geminiTimelineDraggable = settings.draggableTimeline;
+      if (typeof settings.timelinePreviewPinned === 'boolean')
+        payload[StorageKeys.TIMELINE_PREVIEW_PINNED] = settings.timelinePreviewPinned;
       if (typeof settings.markerLevelEnabled === 'boolean')
         payload.geminiTimelineMarkerLevel = settings.markerLevelEnabled;
       if (typeof settings.folderEnabled === 'boolean')
@@ -508,6 +526,8 @@ export default function Popup() {
         payload.geminiWatermarkRemoverEnabled = settings.watermarkRemoverEnabled;
       if (typeof settings.hidePromptManager === 'boolean')
         payload.gvHidePromptManager = settings.hidePromptManager;
+      if (typeof settings.promptInsertOnClickEnabled === 'boolean')
+        payload[StorageKeys.PROMPT_INSERT_ON_CLICK] = settings.promptInsertOnClickEnabled;
       if (typeof settings.inputCollapseEnabled === 'boolean')
         payload.gvInputCollapseEnabled = settings.inputCollapseEnabled;
       if (typeof settings.inputCollapseWhenNotEmpty === 'boolean')
@@ -518,8 +538,12 @@ export default function Popup() {
         payload.gvMermaidEnabled = settings.mermaidEnabled;
       if (typeof settings.quoteReplyEnabled === 'boolean')
         payload.gvQuoteReplyEnabled = settings.quoteReplyEnabled;
+      if (typeof settings.folderProjectEnabled === 'boolean')
+        payload[StorageKeys.FOLDER_PROJECT_ENABLED] = settings.folderProjectEnabled;
       if (typeof settings.ctrlEnterSendEnabled === 'boolean')
         payload.gvCtrlEnterSend = settings.ctrlEnterSendEnabled;
+      if (typeof settings.draftAutoSaveEnabled === 'boolean')
+        payload[StorageKeys.DRAFT_AUTO_SAVE] = settings.draftAutoSaveEnabled;
       if (typeof settings.sidebarAutoHideEnabled === 'boolean')
         payload.gvSidebarAutoHide = settings.sidebarAutoHideEnabled;
       if (typeof settings.sidebarFullHideEnabled === 'boolean')
@@ -604,6 +628,19 @@ export default function Popup() {
       );
       try {
         chrome.storage?.sync?.set({ geminiChatWidth: normalized });
+      } catch {}
+    }, []),
+  });
+
+  // Font size adjuster for chat messages
+  const chatFontSizeAdjuster = useWidthAdjuster({
+    storageKey: StorageKeys.CHAT_FONT_SIZE,
+    defaultValue: CHAT_FONT_SIZE.defaultValue,
+    normalize: (v) => clampNumber(v, CHAT_FONT_SIZE.min, CHAT_FONT_SIZE.max),
+    onApply: useCallback((value: number) => {
+      const clamped = clampNumber(value, CHAT_FONT_SIZE.min, CHAT_FONT_SIZE.max);
+      try {
+        chrome.storage?.sync?.set({ [StorageKeys.CHAT_FONT_SIZE]: clamped });
       } catch {}
     }, []),
   });
@@ -825,6 +862,7 @@ export default function Popup() {
           geminiTimelineScrollMode: 'flow',
           geminiTimelineHideContainer: false,
           geminiTimelineDraggable: false,
+          [StorageKeys.TIMELINE_PREVIEW_PINNED]: false,
           geminiTimelineMarkerLevel: false,
           geminiFolderEnabled: true,
           geminiFolderHideArchivedConversations: false,
@@ -832,14 +870,18 @@ export default function Popup() {
           gvFormulaCopyFormat: 'latex',
           geminiWatermarkRemoverEnabled: true,
           gvHidePromptManager: false,
+          [StorageKeys.PROMPT_INSERT_ON_CLICK]: false,
           gvInputCollapseEnabled: false,
           gvInputCollapseWhenNotEmpty: false,
           gvTabTitleUpdateEnabled: true,
           gvMermaidEnabled: true,
           gvQuoteReplyEnabled: true,
+          [StorageKeys.FOLDER_PROJECT_ENABLED]: false,
           gvCtrlEnterSend: false,
+          [StorageKeys.DRAFT_AUTO_SAVE]: false,
           gvSidebarAutoHide: false,
           gvSidebarFullHide: false,
+          gvVisualEffect: 'off',
           gvSnowEffect: false,
           gvPreventAutoScrollEnabled: false,
           [StorageKeys.FORK_ENABLED]: false,
@@ -848,6 +890,8 @@ export default function Popup() {
           [StorageKeys.GV_ACCOUNT_ISOLATION_ENABLED_AISTUDIO]: null,
           [StorageKeys.GV_AISTUDIO_ENABLED]: true,
           gvChatWidthEnabled: false,
+          gvChatFontSizeEnabled: false,
+          [StorageKeys.CHAT_FONT_SIZE]: CHAT_FONT_SIZE.defaultValue,
           gvEditInputWidthEnabled: false,
           gvSidebarWidthEnabled: false,
           geminiChatWidth: CHAT_PERCENT.defaultValue,
@@ -872,6 +916,7 @@ export default function Popup() {
             setFormulaCopyFormat(format);
           setHideContainer(!!res?.geminiTimelineHideContainer);
           setDraggableTimeline(!!res?.geminiTimelineDraggable);
+          setTimelinePreviewPinned(res?.[StorageKeys.TIMELINE_PREVIEW_PINNED] === true);
           setMarkerLevelEnabled(!!res?.geminiTimelineMarkerLevel);
           setFolderEnabled(res?.geminiFolderEnabled !== false);
           setHideArchivedConversations(!!res?.geminiFolderHideArchivedConversations);
@@ -881,12 +926,15 @@ export default function Popup() {
           setCustomWebsites(loadedCustomWebsites);
           setWatermarkRemoverEnabled(res?.geminiWatermarkRemoverEnabled !== false);
           setHidePromptManager(!!res?.gvHidePromptManager);
+          setPromptInsertOnClickEnabled(res?.[StorageKeys.PROMPT_INSERT_ON_CLICK] === true);
           setInputCollapseEnabled(res?.gvInputCollapseEnabled !== false);
           setInputCollapseWhenNotEmpty(res?.gvInputCollapseWhenNotEmpty === true);
           setTabTitleUpdateEnabled(res?.gvTabTitleUpdateEnabled !== false);
           setMermaidEnabled(res?.gvMermaidEnabled !== false);
           setQuoteReplyEnabled(res?.gvQuoteReplyEnabled !== false);
+          setFolderProjectEnabled(res?.[StorageKeys.FOLDER_PROJECT_ENABLED] === true);
           setCtrlEnterSendEnabled(res?.gvCtrlEnterSend === true);
+          setDraftAutoSaveEnabled(res?.[StorageKeys.DRAFT_AUTO_SAVE] === true);
           setSidebarAutoHideEnabled(res?.gvSidebarAutoHide === true);
           setSidebarFullHideEnabled(res?.gvSidebarFullHide === true);
           // Resolve visual effect: new key takes precedence over legacy boolean
@@ -913,6 +961,7 @@ export default function Popup() {
                 typeof res?.geminiChatWidth === 'number' &&
                 res.geminiChatWidth !== CHAT_PERCENT.defaultValue),
           );
+          setChatFontSizeEnabled(res?.gvChatFontSizeEnabled === true);
           setEditInputWidthEnabled(
             res?.gvEditInputWidthEnabled === true ||
               (res?.gvEditInputWidthEnabled === false &&
@@ -1051,8 +1100,12 @@ export default function Popup() {
       }
 
       try {
-        const alreadyGranted = await browser.permissions.contains({ origins: originPatterns });
-        if (alreadyGranted) return true;
+        // Firefox requires permissions.request to run directly from a user gesture.
+        // Avoid awaiting other extension APIs before this call in Firefox.
+        if (!isFirefox()) {
+          const alreadyGranted = await browser.permissions.contains({ origins: originPatterns });
+          if (alreadyGranted) return true;
+        }
 
         const granted = await browser.permissions.request({ origins: originPatterns });
         if (!granted) {
@@ -1103,7 +1156,19 @@ export default function Popup() {
       return;
     }
 
-    // Persist the user's selection first. Popup may close during the permission prompt.
+    if (isFirefox()) {
+      const granted = await requestCustomWebsitePermission(normalized);
+      if (!granted) return;
+
+      const updatedWebsites = [...customWebsites, normalized];
+      setCustomWebsites(updatedWebsites);
+      await setSyncStorage({ gvPromptCustomWebsites: updatedWebsites });
+      setNewWebsiteInput('');
+      return;
+    }
+
+    // Persist the user's selection first on non-Firefox browsers.
+    // Popup may close during the permission prompt.
     const updatedWebsites = [...customWebsites, normalized];
     setCustomWebsites(updatedWebsites);
     await setSyncStorage({ gvPromptCustomWebsites: updatedWebsites });
@@ -1144,7 +1209,18 @@ export default function Popup() {
         return;
       }
 
-      // Persist the user's selection first. Popup may close during the permission prompt.
+      if (isFirefox()) {
+        const granted = await requestCustomWebsitePermission(domain);
+        if (!granted) return;
+
+        const updated = [...customWebsites, domain];
+        setCustomWebsites(updated);
+        await setSyncStorage({ gvPromptCustomWebsites: updated });
+        return;
+      }
+
+      // Persist the user's selection first on non-Firefox browsers.
+      // Popup may close during the permission prompt.
       const updated = [...customWebsites, domain];
       setCustomWebsites(updated);
       await setSyncStorage({ gvPromptCustomWebsites: updated });
@@ -1413,6 +1489,27 @@ export default function Popup() {
               <div className="group flex items-center justify-between">
                 <div className="flex-1">
                   <Label
+                    htmlFor="timeline-preview-pinned"
+                    className="group-hover:text-primary cursor-pointer text-sm font-medium transition-colors"
+                  >
+                    {t('pinTimelinePreview')}
+                  </Label>
+                  <p className="text-muted-foreground mt-1 text-xs">
+                    {t('pinTimelinePreviewHint')}
+                  </p>
+                </div>
+                <Switch
+                  id="timeline-preview-pinned"
+                  checked={timelinePreviewPinned}
+                  onChange={(e) => {
+                    setTimelinePreviewPinned(e.target.checked);
+                    apply({ timelinePreviewPinned: e.target.checked });
+                  }}
+                />
+              </div>
+              <div className="group flex items-center justify-between">
+                <div className="flex-1">
+                  <Label
                     htmlFor="prevent-auto-scroll"
                     className="group-hover:text-primary cursor-pointer text-sm font-medium transition-colors"
                   >
@@ -1633,6 +1730,34 @@ export default function Popup() {
                   }}
                 />
               </div>
+              <div className="group flex items-center justify-between">
+                <div className="flex-1">
+                  <Label
+                    htmlFor="folder-project-enabled"
+                    className="group-hover:text-primary flex cursor-pointer items-center gap-1 text-sm font-medium transition-colors"
+                  >
+                    {t('folderAsProject_enable')}
+                    <span
+                      className="material-symbols-outlined cursor-help text-[16px] leading-none opacity-50 transition-opacity hover:opacity-100"
+                      title={t('experimentalLabel')}
+                      style={{ fontVariationSettings: "'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20" }}
+                    >
+                      experiment
+                    </span>
+                  </Label>
+                  <p className="text-muted-foreground mt-1 text-xs">
+                    {t('folderAsProject_description')}
+                  </p>
+                </div>
+                <Switch
+                  id="folder-project-enabled"
+                  checked={folderProjectEnabled}
+                  onChange={(e) => {
+                    setFolderProjectEnabled(e.target.checked);
+                    apply({ folderProjectEnabled: e.target.checked });
+                  }}
+                />
+              </div>
               {/* Copy folder structure for AI organization */}
               <div className="border-border/50 border-t pt-3">
                 <Button
@@ -1714,6 +1839,28 @@ export default function Popup() {
               setChatWidthEnabled(v);
               try {
                 chrome.storage?.sync?.set({ gvChatWidthEnabled: v });
+              } catch {}
+            }}
+          />,
+        )}
+        {/* Chat Font Size */}
+        {wrapSection(
+          'chatFontSize',
+          <WidthSlider
+            label={t('chatFontSize')}
+            value={chatFontSizeAdjuster.width}
+            min={CHAT_FONT_SIZE.min}
+            max={CHAT_FONT_SIZE.max}
+            step={5}
+            narrowLabel={t('chatFontSizeSmall')}
+            wideLabel={t('chatFontSizeLarge')}
+            onChange={chatFontSizeAdjuster.handleChange}
+            onChangeComplete={chatFontSizeAdjuster.handleChangeComplete}
+            enabled={chatFontSizeEnabled}
+            onToggle={(v) => {
+              setChatFontSizeEnabled(v);
+              try {
+                chrome.storage?.sync?.set({ gvChatFontSizeEnabled: v });
               } catch {}
             }}
           />,
@@ -2077,6 +2224,26 @@ export default function Popup() {
                   }}
                 />
               </div>
+              {/* Draft Auto-Save */}
+              <div className="group flex items-center justify-between">
+                <div className="flex-1">
+                  <Label
+                    htmlFor="draft-auto-save"
+                    className="group-hover:text-primary cursor-pointer text-sm font-medium transition-colors"
+                  >
+                    {t('draftAutoSave')}
+                  </Label>
+                  <p className="text-muted-foreground mt-1 text-xs">{t('draftAutoSaveHint')}</p>
+                </div>
+                <Switch
+                  id="draft-auto-save"
+                  checked={draftAutoSaveEnabled}
+                  onChange={(e) => {
+                    setDraftAutoSaveEnabled(e.target.checked);
+                    apply({ draftAutoSaveEnabled: e.target.checked });
+                  }}
+                />
+              </div>
             </CardContent>
           </Card>,
         )}
@@ -2104,6 +2271,27 @@ export default function Popup() {
                   onChange={(e) => {
                     setHidePromptManager(e.target.checked);
                     apply({ hidePromptManager: e.target.checked });
+                  }}
+                />
+              </div>
+              <div className="group flex items-center justify-between">
+                <div className="flex-1">
+                  <Label
+                    htmlFor="prompt-insert-on-click"
+                    className="group-hover:text-primary cursor-pointer text-sm font-medium transition-colors"
+                  >
+                    {t('promptInsertOnClick')}
+                  </Label>
+                  <p className="text-muted-foreground mt-1 text-xs">
+                    {t('promptInsertOnClickHint')}
+                  </p>
+                </div>
+                <Switch
+                  id="prompt-insert-on-click"
+                  checked={promptInsertOnClickEnabled}
+                  onChange={(e) => {
+                    setPromptInsertOnClickEnabled(e.target.checked);
+                    apply({ promptInsertOnClickEnabled: e.target.checked });
                   }}
                 />
               </div>

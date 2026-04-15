@@ -27,6 +27,14 @@
     "message": "Chronologie déplaçable",
     "description": "Draggable Timeline label"
   },
+  "pinTimelinePreview": {
+    "message": "Épingler le panneau d’aperçu",
+    "description": "Pin timeline preview panel toggle label"
+  },
+  "pinTimelinePreviewHint": {
+    "message": "Garder le panneau d’aperçu ouvert à côté de la chronologie.",
+    "description": "Pin timeline preview panel feature hint"
+  },
   "enableMarkerLevel": {
     "message": "Activer les niveaux de nœuds",
     "description": "Enable timeline node level feature"
@@ -102,6 +110,10 @@
   "pm_copied": {
     "message": "Copié",
     "description": "Copied notice"
+  },
+  "pm_inserted": {
+    "message": "Inséré",
+    "description": "Prompt inserted into the chat input"
   },
   "pm_delete": {
     "message": "Supprimer",
@@ -358,6 +370,18 @@
   "chatWidthWide": {
     "message": "Large",
     "description": "Wide chat width label"
+  },
+  "chatFontSize": {
+    "message": "Taille de police du chat",
+    "description": "Chat message font size adjustment label"
+  },
+  "chatFontSizeSmall": {
+    "message": "Petit",
+    "description": "Small font size label"
+  },
+  "chatFontSizeLarge": {
+    "message": "Grand",
+    "description": "Large font size label"
   },
   "sidebarWidth": {
     "message": "Largeur barre latérale",
@@ -679,6 +703,14 @@
     "message": "Masquer le bouton flottant du gestionnaire",
     "description": "Hint for hiding prompt manager feature"
   },
+  "promptInsertOnClick": {
+    "message": "Inserer le prompt au clic",
+    "description": "Enable direct prompt insertion instead of copying"
+  },
+  "promptInsertOnClickHint": {
+    "message": "Lorsque cette option est activee, cliquer sur un prompt l'insere dans le champ Gemini. Sinon, le comportement par defaut reste la copie.",
+    "description": "Hint for prompt click insertion behavior"
+  },
   "customWebsites": {
     "message": "Sites personnalisés",
     "description": "Custom websites for prompt manager"
@@ -774,6 +806,14 @@
   "nextNode": {
     "message": "Suivant",
     "description": "Next timeline node shortcut label"
+  },
+  "firstNode": {
+    "message": "Premier tour",
+    "description": "First timeline node shortcut label"
+  },
+  "lastNode": {
+    "message": "Dernier tour",
+    "description": "Last timeline node shortcut label"
   },
   "shortcutKey": {
     "message": "Touche",
@@ -1035,6 +1075,14 @@
     "message": "Appuyez sur {modifier}+Entrée pour envoyer, Entrée pour un saut de ligne",
     "description": "Modifier+Enter to send feature hint. {modifier} is replaced with ⌘ on macOS and Ctrl on other platforms"
   },
+  "draftAutoSave": {
+    "message": "Sauvegarde automatique du brouillon",
+    "description": "Toggle label for input draft auto-save feature"
+  },
+  "draftAutoSaveHint": {
+    "message": "Sauvegarder et restaurer automatiquement le texte non envoyé lors de l'actualisation ou la réouverture d'une conversation",
+    "description": "Hint for draft auto-save feature"
+  },
   "batch_delete_confirm": {
     "message": "Voulez-vous vraiment supprimer {count} discussion(s) ? Cette action est irréversible.",
     "description": "Batch delete confirmation message"
@@ -1167,6 +1215,14 @@
     "message": "Afficher les Gems",
     "description": "Info-bulle pour afficher la section de la liste des Gems"
   },
+  "notebooksHide": {
+    "message": "Masquer Notebooks",
+    "description": "Infobulle pour masquer la section de liste Notebooks"
+  },
+  "notebooksShow": {
+    "message": "Afficher Notebooks",
+    "description": "Infobulle pour afficher la section de liste Notebooks"
+  },
   "setAsDefaultModel": {
     "message": "Set as default model",
     "description": "Tooltip for setting default model"
@@ -1266,6 +1322,22 @@
   "export_fontsize_preview": {
     "message": "Le vif renard brun saute par-dessus le chien paresseux.",
     "description": "Preview text for font size slider in export dialog"
+  },
+  "export_image_width_label": {
+    "message": "Largeur de l'image",
+    "description": "Label for image width selection in export dialog"
+  },
+  "export_image_width_narrow": {
+    "message": "Étroite (Mobile)",
+    "description": "Narrow width option (e.g. mobile)"
+  },
+  "export_image_width_medium": {
+    "message": "Moyenne (Tablette)",
+    "description": "Medium width option (e.g. tablet)"
+  },
+  "export_image_width_wide": {
+    "message": "Large (Ordinateur)",
+    "description": "Wide width option (e.g. desktop)"
   },
   "export_error_generic": {
     "message": "Échec de l'exportation : {error}",
@@ -1498,5 +1570,37 @@
   "moveSectionDown": {
     "message": "Déplacer vers le bas",
     "description": "Tooltip for moving a settings section down in popup"
+  },
+  "folderAsProject_enable": {
+    "message": "Activer Dossier comme Projet",
+    "description": "Toggle label for the Folder-as-Project feature"
+  },
+  "folderAsProject_description": {
+    "message": "Affiche un sélecteur de dossier dans les nouveaux chats et attribue automatiquement la conversation au dossier sélectionné lors du premier envoi",
+    "description": "Hint for the Folder-as-Project feature toggle"
+  },
+  "folderAsProject_selectFolder": {
+    "message": "Sélectionner un dossier…",
+    "description": "Placeholder text for the folder picker chip when no folder is selected"
+  },
+  "folderAsProject_noFolder": {
+    "message": "Aucun dossier",
+    "description": "Option in the folder picker dropdown to clear the selection"
+  },
+  "folderAsProject_setInstructions": {
+    "message": "Définir les instructions",
+    "description": "Folder context menu item to open the instructions editor"
+  },
+  "folderAsProject_editInstructions": {
+    "message": "Modifier les instructions",
+    "description": "Folder context menu item to edit existing instructions"
+  },
+  "folderAsProject_expand": {
+    "message": "Développer",
+    "description": "Aria-label for the expand button (screen readers)"
+  },
+  "folderAsProject_collapse": {
+    "message": "Réduire",
+    "description": "Aria-label for the collapse button (screen readers)"
   }
 }

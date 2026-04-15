@@ -24,6 +24,11 @@ import type {
 import { isMac } from '@/core/utils/browser';
 
 /**
+ * Timeout for key sequence detection (e.g., gg, GG)
+ */
+const SEQUENCE_TIMEOUT_MS = 500;
+
+/**
  * Default keyboard shortcuts configuration
  * Using vim-style j/k (convenient, no modifiers needed)
  */
@@ -37,6 +42,18 @@ const DEFAULT_SHORTCUTS: KeyboardShortcutConfig = {
     action: 'timeline:next',
     modifiers: [],
     key: 'j',
+  },
+  first: {
+    action: 'timeline:first',
+    modifiers: [],
+    key: 'g',
+    sequenceLength: 2,
+  },
+  last: {
+    action: 'timeline:last',
+    modifiers: ['Shift'],
+    key: 'G',
+    sequenceLength: 2,
   },
 };
 
@@ -59,6 +76,10 @@ export class KeyboardShortcutService {
   private storageChangeHandler:
     | ((changes: Record<string, chrome.storage.StorageChange>, areaName: string) => void)
     | null = null;
+
+  // Key sequence tracking (for gg → first, GG → last)
+  private lastSequenceSignature: string | null = null;
+  private lastSequenceTime: number = 0;
 
   private constructor() {
     this.config = DEFAULT_SHORTCUTS;
@@ -89,15 +110,14 @@ export class KeyboardShortcutService {
   private async loadConfig(): Promise<void> {
     try {
       if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
-        const result = await chrome.storage.sync.get(StorageKeys.TIMELINE_SHORTCUTS);
+        const result = (await chrome.storage.sync.get(StorageKeys.TIMELINE_SHORTCUTS)) ?? {};
         const stored = result[StorageKeys.TIMELINE_SHORTCUTS] as
           | KeyboardShortcutStorage
           | undefined;
 
         if (stored?.shortcuts) {
-          this.config = this.validateConfig(stored.shortcuts)
-            ? stored.shortcuts
-            : DEFAULT_SHORTCUTS;
+          const normalized = this.normalizeConfig(stored.shortcuts);
+          this.config = this.validateConfig(normalized) ? normalized : DEFAULT_SHORTCUTS;
           this.enabled = stored.enabled ?? true;
         }
       } else {
@@ -105,9 +125,8 @@ export class KeyboardShortcutService {
         const stored = localStorage.getItem(StorageKeys.TIMELINE_SHORTCUTS);
         if (stored) {
           const parsed = JSON.parse(stored) as KeyboardShortcutStorage;
-          this.config = this.validateConfig(parsed.shortcuts)
-            ? parsed.shortcuts
-            : DEFAULT_SHORTCUTS;
+          const normalized = this.normalizeConfig(parsed.shortcuts);
+          this.config = this.validateConfig(normalized) ? normalized : DEFAULT_SHORTCUTS;
           this.enabled = parsed.enabled ?? true;
         }
       }
@@ -122,15 +141,17 @@ export class KeyboardShortcutService {
    * Save configuration to chrome storage
    */
   async saveConfig(config: KeyboardShortcutConfig, enabled: boolean = this.enabled): Promise<void> {
-    if (!this.validateConfig(config)) {
+    const normalized = this.normalizeConfig(config);
+
+    if (!this.validateConfig(normalized)) {
       throw new Error('Invalid shortcut configuration');
     }
 
-    this.config = config;
+    this.config = normalized;
     this.enabled = enabled;
 
     const storage: KeyboardShortcutStorage = {
-      shortcuts: config,
+      shortcuts: normalized,
       enabled,
     };
 
@@ -147,6 +168,39 @@ export class KeyboardShortcutService {
   }
 
   /**
+   * Merge partial or legacy shortcut config with defaults
+   */
+  private normalizeConfig(
+    config: Partial<KeyboardShortcutConfig> | null | undefined,
+  ): KeyboardShortcutConfig {
+    return {
+      previous: this.normalizeShortcut(config?.previous, DEFAULT_SHORTCUTS.previous),
+      next: this.normalizeShortcut(config?.next, DEFAULT_SHORTCUTS.next),
+      first: this.normalizeShortcut(config?.first, DEFAULT_SHORTCUTS.first),
+      last: this.normalizeShortcut(config?.last, DEFAULT_SHORTCUTS.last),
+    };
+  }
+
+  /**
+   * Normalize individual shortcut with safe defaults
+   */
+  private normalizeShortcut(
+    shortcut: Partial<KeyboardShortcut> | undefined,
+    fallback: KeyboardShortcut,
+  ): KeyboardShortcut {
+    return {
+      action: fallback.action,
+      modifiers: Array.isArray(shortcut?.modifiers) ? shortcut.modifiers : fallback.modifiers,
+      key:
+        typeof shortcut?.key === 'string' && shortcut.key.length > 0 ? shortcut.key : fallback.key,
+      sequenceLength:
+        typeof shortcut?.sequenceLength === 'number' && Number.isInteger(shortcut.sequenceLength)
+          ? shortcut.sequenceLength
+          : (fallback.sequenceLength ?? 1),
+    };
+  }
+
+  /**
    * Validate shortcut configuration
    */
   private validateConfig(config: KeyboardShortcutConfig): boolean {
@@ -154,8 +208,12 @@ export class KeyboardShortcutService {
       return !!(
         config.previous &&
         config.next &&
+        config.first &&
+        config.last &&
         this.isValidShortcut(config.previous) &&
-        this.isValidShortcut(config.next)
+        this.isValidShortcut(config.next) &&
+        this.isValidShortcut(config.first) &&
+        this.isValidShortcut(config.last)
       );
     } catch {
       return false;
@@ -172,7 +230,9 @@ export class KeyboardShortcutService {
       Array.isArray(shortcut.modifiers) &&
       shortcut.modifiers.every((m) => validModifiers.includes(m)) &&
       typeof shortcut.key === 'string' &&
-      shortcut.key.length > 0
+      shortcut.key.length > 0 &&
+      Number.isInteger(shortcut.sequenceLength ?? 1) &&
+      (shortcut.sequenceLength ?? 1) > 0
     );
   }
 
@@ -188,10 +248,20 @@ export class KeyboardShortcutService {
       // Ignore shortcuts when user is typing in input fields
       if (this.isTypingInInputField(event)) return;
 
+      // Check for key sequences first (gg → first, GG → last)
+      const sequenceMatch = this.matchSequence(event);
+      if (sequenceMatch) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.notifyListeners(sequenceMatch.action, event);
+        return;
+      }
+
       const match = this.matchShortcut(event);
       if (match) {
         event.preventDefault();
         event.stopPropagation();
+        this.resetSequence();
         this.notifyListeners(match.action, event);
       }
     };
@@ -206,6 +276,7 @@ export class KeyboardShortcutService {
   private isTypingInInputField(event: KeyboardEvent): boolean {
     const target = event.target as HTMLElement;
     if (!target) return false;
+    if (typeof target.tagName !== 'string') return false;
 
     const tagName = target.tagName.toLowerCase();
     const isEditable = target.isContentEditable;
@@ -226,9 +297,8 @@ export class KeyboardShortcutService {
             | KeyboardShortcutStorage
             | undefined;
           if (newValue?.shortcuts) {
-            this.config = this.validateConfig(newValue.shortcuts)
-              ? newValue.shortcuts
-              : DEFAULT_SHORTCUTS;
+            const normalized = this.normalizeConfig(newValue.shortcuts);
+            this.config = this.validateConfig(normalized) ? normalized : DEFAULT_SHORTCUTS;
             this.enabled = newValue.enabled ?? true;
           }
         }
@@ -245,11 +315,13 @@ export class KeyboardShortcutService {
     const shortcuts = [
       { action: 'timeline:previous' as const, config: this.config.previous },
       { action: 'timeline:next' as const, config: this.config.next },
+      { action: 'timeline:first' as const, config: this.config.first },
+      { action: 'timeline:last' as const, config: this.config.last },
     ];
 
     // Check if any shortcut matches
     for (const { action, config } of shortcuts) {
-      if (this.isShortcutPressed(event, config)) {
+      if ((config.sequenceLength ?? 1) === 1 && this.isShortcutPressed(event, config)) {
         return { action, event };
       }
     }
@@ -276,6 +348,53 @@ export class KeyboardShortcutService {
       event.shiftKey === hasShift &&
       event.metaKey === hasMeta
     );
+  }
+
+  /**
+   * Match key sequence (gg → timeline:first, GG → timeline:last)
+   */
+  private matchSequence(event: KeyboardEvent): ShortcutMatch | null {
+    // Don't process sequences on key repeat (held down)
+    if (event.repeat) return null;
+
+    const sequenceShortcuts = [
+      { action: 'timeline:first' as const, config: this.config.first },
+      { action: 'timeline:last' as const, config: this.config.last },
+    ];
+    const now = Date.now();
+
+    for (const { action, config } of sequenceShortcuts) {
+      if ((config.sequenceLength ?? 1) <= 1 || !this.isShortcutPressed(event, config)) {
+        continue;
+      }
+
+      const signature = this.getShortcutSignature(config);
+      if (
+        this.lastSequenceSignature === signature &&
+        now - this.lastSequenceTime < SEQUENCE_TIMEOUT_MS
+      ) {
+        this.resetSequence();
+        return { action, event };
+      }
+
+      this.lastSequenceSignature = signature;
+      this.lastSequenceTime = now;
+      return null;
+    }
+
+    // Any other key resets the sequence
+    this.resetSequence();
+    return null;
+  }
+
+  private resetSequence(): void {
+    this.lastSequenceSignature = null;
+    this.lastSequenceTime = 0;
+  }
+
+  private getShortcutSignature(shortcut: KeyboardShortcut): string {
+    const modifiers = [...shortcut.modifiers].sort().join('+');
+    return `${modifiers}|${shortcut.key}|${shortcut.sequenceLength ?? 1}`;
   }
 
   /**
@@ -312,7 +431,12 @@ export class KeyboardShortcutService {
    */
   getConfig(): { config: KeyboardShortcutConfig; enabled: boolean } {
     return {
-      config: { ...this.config },
+      config: {
+        previous: { ...this.config.previous },
+        next: { ...this.config.next },
+        first: { ...this.config.first },
+        last: { ...this.config.last },
+      },
       enabled: this.enabled,
     };
   }
@@ -350,21 +474,37 @@ export class KeyboardShortcutService {
       Escape: 'Esc',
     };
 
-    const key = keySymbols[shortcut.key] || shortcut.key;
+    const formatSingleShortcut = (singleShortcut: KeyboardShortcut): string => {
+      const key = keySymbols[singleShortcut.key] || singleShortcut.key;
 
-    if (shortcut.modifiers.length === 0) {
-      return key;
+      if (singleShortcut.modifiers.length === 0) {
+        return key;
+      }
+
+      const mac = isMac();
+      const modifierSymbols: Record<string, string> = mac
+        ? { Meta: '⌘', Alt: '⌥', Ctrl: '⌃', Shift: '⇧' }
+        : { Meta: 'Win', Alt: 'Alt', Ctrl: 'Ctrl', Shift: 'Shift' };
+
+      const modifiers = singleShortcut.modifiers.map((m) => modifierSymbols[m] || m);
+      const parts = [...modifiers, key];
+      return parts.join(mac ? '' : ' + ');
+    };
+
+    const sequenceLength = shortcut.sequenceLength ?? 1;
+    if (sequenceLength <= 1) {
+      return formatSingleShortcut(shortcut);
     }
 
-    // Map modifier keys based on platform
-    const mac = isMac();
-    const modifierSymbols: Record<string, string> = mac
-      ? { Meta: '⌘', Alt: '⌥', Ctrl: '⌃', Shift: '⇧' }
-      : { Meta: 'Win', Alt: 'Alt', Ctrl: 'Ctrl', Shift: 'Shift' };
+    if (
+      shortcut.key.length === 1 &&
+      (shortcut.modifiers.length === 0 ||
+        (shortcut.modifiers.length === 1 && shortcut.modifiers[0] === 'Shift'))
+    ) {
+      return shortcut.key.repeat(sequenceLength);
+    }
 
-    const modifiers = shortcut.modifiers.map((m) => modifierSymbols[m] || m);
-    const parts = [...modifiers, key];
-    return parts.join(mac ? '' : ' + ');
+    return Array.from({ length: sequenceLength }, () => formatSingleShortcut(shortcut)).join(' ');
   }
 
   /**

@@ -27,6 +27,14 @@
     "message": "جدول زمني قابل للسحب",
     "description": "Draggable Timeline label"
   },
+  "pinTimelinePreview": {
+    "message": "تثبيت لوحة المعاينة",
+    "description": "Pin timeline preview panel toggle label"
+  },
+  "pinTimelinePreviewHint": {
+    "message": "أبقِ لوحة المعاينة مفتوحة بجانب الجدول الزمني.",
+    "description": "Pin timeline preview panel feature hint"
+  },
   "enableMarkerLevel": {
     "message": "تمكين مستويات العقدة",
     "description": "Enable timeline node level feature"
@@ -102,6 +110,10 @@
   "pm_copied": {
     "message": "تم النسخ",
     "description": "Copied notice"
+  },
+  "pm_inserted": {
+    "message": "تم الإدراج",
+    "description": "Prompt inserted into the chat input"
   },
   "pm_delete": {
     "message": "حذف",
@@ -358,6 +370,18 @@
   "chatWidthWide": {
     "message": "عريض",
     "description": "Wide chat width label"
+  },
+  "chatFontSize": {
+    "message": "حجم خط الدردشة",
+    "description": "Chat message font size adjustment label"
+  },
+  "chatFontSizeSmall": {
+    "message": "صغير",
+    "description": "Small font size label"
+  },
+  "chatFontSizeLarge": {
+    "message": "كبير",
+    "description": "Large font size label"
   },
   "sidebarWidth": {
     "message": "عرض الشريط الجانبي",
@@ -679,6 +703,14 @@
     "message": "إخفاء الزر العائم لمدير المطالبات على الصفحة",
     "description": "Hint for hiding prompt manager feature"
   },
+  "promptInsertOnClick": {
+    "message": "إدراج المطالبة عند النقر",
+    "description": "Enable direct prompt insertion instead of copying"
+  },
+  "promptInsertOnClickHint": {
+    "message": "عند التفعيل، يؤدي النقر على المطالبة إلى إدراجها في حقل إدخال Gemini. عند الإيقاف يبقى السلوك الافتراضي هو النسخ.",
+    "description": "Hint for prompt click insertion behavior"
+  },
   "customWebsites": {
     "message": "مواقع مخصصة",
     "description": "Custom websites for prompt manager"
@@ -774,6 +806,14 @@
   "nextNode": {
     "message": "العقدة التالية",
     "description": "Next timeline node shortcut label"
+  },
+  "firstNode": {
+    "message": "الدور الأول",
+    "description": "First timeline node shortcut label"
+  },
+  "lastNode": {
+    "message": "الدور الأخير",
+    "description": "Last timeline node shortcut label"
   },
   "shortcutKey": {
     "message": "مفتاح",
@@ -1035,6 +1075,14 @@
     "message": "اضغط {modifier}+Enter لإرسال الرسائل، Enter لإضافة سطر جديد",
     "description": "Modifier+Enter to send feature hint. {modifier} is replaced with ⌘ on macOS and Ctrl on other platforms"
   },
+  "draftAutoSave": {
+    "message": "حفظ المسودة تلقائيًا",
+    "description": "Toggle label for input draft auto-save feature"
+  },
+  "draftAutoSaveHint": {
+    "message": "حفظ واستعادة النص غير المرسل تلقائيًا عند تحديث الصفحة أو إعادة فتح المحادثة",
+    "description": "Hint for draft auto-save feature"
+  },
   "batch_delete_confirm": {
     "message": "هل أنت متأكد من أنك تريد حذف {count} محادثة؟ لا يمكن التراجع عن هذا الإجراء.",
     "description": "Batch delete confirmation message"
@@ -1167,6 +1215,14 @@
     "message": "إظهار Gems",
     "description": "تلميح لإظهار قسم قائمة Gems"
   },
+  "notebooksHide": {
+    "message": "إخفاء دفاتر الملاحظات",
+    "description": "تلميح لإخفاء قسم قائمة دفاتر الملاحظات"
+  },
+  "notebooksShow": {
+    "message": "إظهار دفاتر الملاحظات",
+    "description": "تلميح لإظهار قسم قائمة دفاتر الملاحظات"
+  },
   "setAsDefaultModel": {
     "message": "Set as default model",
     "description": "Tooltip for setting default model"
@@ -1266,6 +1322,22 @@
   "export_fontsize_preview": {
     "message": "نص عربي لمعاينة حجم الخط في التصدير.",
     "description": "Preview text for font size slider in export dialog"
+  },
+  "export_image_width_label": {
+    "message": "عرض الصورة",
+    "description": "Label for image width selection in export dialog"
+  },
+  "export_image_width_narrow": {
+    "message": "ضيق (هاتف)",
+    "description": "Narrow width option (e.g. mobile)"
+  },
+  "export_image_width_medium": {
+    "message": "متوسط (تابلت)",
+    "description": "Medium width option (e.g. tablet)"
+  },
+  "export_image_width_wide": {
+    "message": "عريض (كمبيوتر)",
+    "description": "Wide width option (e.g. desktop)"
   },
   "export_error_generic": {
     "message": "فشل التصدير: {error}",
@@ -1451,7 +1523,10 @@
     "message": "تنظيم AI",
     "description": "زر لنسخ هيكل المجلدات والمحادثات لتنظيم AI"
   },
-  "aiOrgCopied": { "message": "تم النسخ!", "description": "تأكيد بعد نسخ موجه تنظيم AI" },
+  "aiOrgCopied": {
+    "message": "تم النسخ!",
+    "description": "تأكيد بعد نسخ موجه تنظيم AI"
+  },
   "aiOrgError": {
     "message": "فشل — افتح Gemini أولاً",
     "description": "خطأ عند فشل نسخ موجه تنظيم AI"
@@ -1468,8 +1543,14 @@
     "message": "محادثات غير مصنفة",
     "description": "عنوان للمحادثات غير الموجودة في أي مجلد"
   },
-  "aiOrgEmpty": { "message": "فارغ", "description": "تسمية للمجلدات الفارغة في موجه تنظيم AI" },
-  "aiOrgInstructions": { "message": "التعليمات", "description": "عنوان قسم تعليمات AI" },
+  "aiOrgEmpty": {
+    "message": "فارغ",
+    "description": "تسمية للمجلدات الفارغة في موجه تنظيم AI"
+  },
+  "aiOrgInstructions": {
+    "message": "التعليمات",
+    "description": "عنوان قسم تعليمات AI"
+  },
   "aiOrgInstructionsBody": {
     "message": "بناءً على المحادثات وهيكل المجلدات أعلاه، يرجى إعادة تنظيمها في تسلسل هرمي منطقي للمجلدات. أخرج ملف JSON باستخدام التنسيق أدناه يمكن استيراده مباشرة إلى إضافة Gemini Voyager (استخدم استراتيجية الاستيراد \"دمج\"). احتفظ بالمجلدات المنظمة جيداً الحالية، وأنشئ مجلدات جديدة حسب الحاجة، وانقل المحادثات غير المصنفة إلى مجلدات مناسبة. يحتاج كل مجلد إلى معرف فريد (استخدم سلسلة عشوائية قصيرة)، ويجب أن تحتفظ كل محادثة بـ conversationId و url الأصليين.",
     "description": "نص التعليمات لـ AI لإنشاء هيكل مجلدات قابل للاستيراد"
@@ -1489,5 +1570,37 @@
   "moveSectionDown": {
     "message": "تحريك لأسفل",
     "description": "Tooltip for moving a settings section down in popup"
+  },
+  "folderAsProject_enable": {
+    "message": "تمكين المجلد كمشروع",
+    "description": "Toggle label for the Folder-as-Project feature"
+  },
+  "folderAsProject_description": {
+    "message": "إظهار منتقي المجلدات في المحادثات الجديدة وتعيين المحادثة تلقائياً للمجلد المحدد عند الإرسال الأول",
+    "description": "Hint for the Folder-as-Project feature toggle"
+  },
+  "folderAsProject_selectFolder": {
+    "message": "اختر مجلداً…",
+    "description": "Placeholder text for the folder picker chip when no folder is selected"
+  },
+  "folderAsProject_noFolder": {
+    "message": "بدون مجلد",
+    "description": "Option in the folder picker dropdown to clear the selection"
+  },
+  "folderAsProject_setInstructions": {
+    "message": "تعيين التعليمات",
+    "description": "Folder context menu item to open the instructions editor"
+  },
+  "folderAsProject_editInstructions": {
+    "message": "تحرير التعليمات",
+    "description": "Folder context menu item to edit existing instructions"
+  },
+  "folderAsProject_expand": {
+    "message": "توسيع",
+    "description": "Aria-label for the expand button (screen readers)"
+  },
+  "folderAsProject_collapse": {
+    "message": "طي",
+    "description": "Aria-label for the collapse button (screen readers)"
   }
 }

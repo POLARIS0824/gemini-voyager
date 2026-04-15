@@ -27,6 +27,14 @@
     "message": "ドラッグ可能なタイムライン",
     "description": "Draggable Timeline label"
   },
+  "pinTimelinePreview": {
+    "message": "プレビューを固定表示",
+    "description": "Pin timeline preview panel toggle label"
+  },
+  "pinTimelinePreviewHint": {
+    "message": "タイムライン横のプレビューパネルを開いたままにします。",
+    "description": "Pin timeline preview panel feature hint"
+  },
   "enableMarkerLevel": {
     "message": "ノード階層を有効化",
     "description": "Enable timeline node level feature"
@@ -102,6 +110,10 @@
   "pm_copied": {
     "message": "コピーしました",
     "description": "Copied notice"
+  },
+  "pm_inserted": {
+    "message": "入力欄に挿入しました",
+    "description": "Prompt inserted into the chat input"
   },
   "pm_delete": {
     "message": "削除",
@@ -358,6 +370,18 @@
   "chatWidthWide": {
     "message": "広い",
     "description": "Wide chat width label"
+  },
+  "chatFontSize": {
+    "message": "チャットのフォントサイズ",
+    "description": "Chat message font size adjustment label"
+  },
+  "chatFontSizeSmall": {
+    "message": "小",
+    "description": "Small font size label"
+  },
+  "chatFontSizeLarge": {
+    "message": "大",
+    "description": "Large font size label"
   },
   "sidebarWidth": {
     "message": "サイドバーの幅",
@@ -679,6 +703,14 @@
     "message": "ページ上のプロンプトマネージャーのフローティングアイコンを非表示にします",
     "description": "Hint for hiding prompt manager feature"
   },
+  "promptInsertOnClick": {
+    "message": "クリック時にプロンプトを直接挿入",
+    "description": "Enable direct prompt insertion instead of copying"
+  },
+  "promptInsertOnClickHint": {
+    "message": "オンにすると、プロンプトをクリックしたときに Gemini の入力欄へ直接挿入します。オフでは既定のコピー動作のままです。",
+    "description": "Hint for prompt click insertion behavior"
+  },
   "customWebsites": {
     "message": "カスタムウェブサイト",
     "description": "Custom websites for prompt manager"
@@ -774,6 +806,14 @@
   "nextNode": {
     "message": "次のノードへ",
     "description": "Next timeline node shortcut label"
+  },
+  "firstNode": {
+    "message": "最初のターンへ",
+    "description": "First timeline node shortcut label"
+  },
+  "lastNode": {
+    "message": "最後のターンへ",
+    "description": "Last timeline node shortcut label"
   },
   "shortcutKey": {
     "message": "キー",
@@ -1035,6 +1075,14 @@
     "message": "{modifier}+Enter でメッセージを送信、Enter で改行",
     "description": "Modifier+Enter to send feature hint. {modifier} is replaced with ⌘ on macOS and Ctrl on other platforms"
   },
+  "draftAutoSave": {
+    "message": "下書きの自動保存",
+    "description": "Toggle label for input draft auto-save feature"
+  },
+  "draftAutoSaveHint": {
+    "message": "ページの更新や会話の再表示時に、未送信の入力内容を自動的に保存・復元します",
+    "description": "Hint for draft auto-save feature"
+  },
   "batch_delete_confirm": {
     "message": "{count} 件の会話を削除してもよろしいですか？この操作は取り消せません。",
     "description": "Batch delete confirmation message"
@@ -1167,6 +1215,14 @@
     "message": "Gems を表示",
     "description": "Gems リストセクションを表示するツールチップ"
   },
+  "notebooksHide": {
+    "message": "ノートブックを非表示",
+    "description": "ノートブック一覧セクションを隠すツールチップ"
+  },
+  "notebooksShow": {
+    "message": "ノートブックを表示",
+    "description": "ノートブック一覧セクションを表示するツールチップ"
+  },
   "setAsDefaultModel": {
     "message": "Set as default model",
     "description": "Tooltip for setting default model"
@@ -1266,6 +1322,22 @@
   "export_fontsize_preview": {
     "message": "吾輩は猫である。名前はまだない。",
     "description": "Preview text for font size slider in export dialog"
+  },
+  "export_image_width_label": {
+    "message": "画像の幅",
+    "description": "Label for image width selection in export dialog"
+  },
+  "export_image_width_narrow": {
+    "message": "狭い (スマホ)",
+    "description": "Narrow width option (e.g. mobile)"
+  },
+  "export_image_width_medium": {
+    "message": "標準 (タブレット)",
+    "description": "Medium width option (e.g. tablet)"
+  },
+  "export_image_width_wide": {
+    "message": "広い (デスクトップ)",
+    "description": "Wide width option (e.g. desktop)"
   },
   "export_error_generic": {
     "message": "エクスポートに失敗しました：{error}",
@@ -1471,8 +1543,14 @@
     "message": "未分類の会話",
     "description": "フォルダに入っていない会話の見出し"
   },
-  "aiOrgEmpty": { "message": "空", "description": "AI整理プロンプトの空フォルダのラベル" },
-  "aiOrgInstructions": { "message": "指示", "description": "AI指示セクションの見出し" },
+  "aiOrgEmpty": {
+    "message": "空",
+    "description": "AI整理プロンプトの空フォルダのラベル"
+  },
+  "aiOrgInstructions": {
+    "message": "指示",
+    "description": "AI指示セクションの見出し"
+  },
   "aiOrgInstructionsBody": {
     "message": "上記の会話とフォルダ構造に基づいて、論理的なフォルダ階層に再整理してください。以下の形式の JSON ファイルを出力し、Gemini Voyager 拡張機能に直接インポートできるようにしてください（「マージ」インポート戦略を使用）。既存の整理済みフォルダはそのまま維持し、必要に応じて新しいフォルダを作成し、未分類の会話を適切なフォルダに移動してください。各フォルダには一意の ID（短いランダム文字列）が必要で、各会話は元の conversationId と url を保持する必要があります。",
     "description": "AI がインポート可能なフォルダ構造を生成するための指示本文"
@@ -1492,5 +1570,37 @@
   "moveSectionDown": {
     "message": "下に移動",
     "description": "Tooltip for moving a settings section down in popup"
+  },
+  "folderAsProject_enable": {
+    "message": "フォルダをプロジェクトとして有効化",
+    "description": "Toggle label for the Folder-as-Project feature"
+  },
+  "folderAsProject_description": {
+    "message": "新しいチャット画面でフォルダ選択ツールを表示し、最初のメッセージ送信時に会話を選択したフォルダに自動追加します",
+    "description": "Hint for the Folder-as-Project feature toggle"
+  },
+  "folderAsProject_selectFolder": {
+    "message": "フォルダを選択…",
+    "description": "Placeholder text for the folder picker chip when no folder is selected"
+  },
+  "folderAsProject_noFolder": {
+    "message": "フォルダなし",
+    "description": "Option in the folder picker dropdown to clear the selection"
+  },
+  "folderAsProject_setInstructions": {
+    "message": "指示を設定",
+    "description": "Folder context menu item to open the instructions editor"
+  },
+  "folderAsProject_editInstructions": {
+    "message": "指示を編集",
+    "description": "Folder context menu item to edit existing instructions"
+  },
+  "folderAsProject_expand": {
+    "message": "展開",
+    "description": "Aria-label for the expand button (screen readers)"
+  },
+  "folderAsProject_collapse": {
+    "message": "折りたたむ",
+    "description": "Aria-label for the collapse button (screen readers)"
   }
 }

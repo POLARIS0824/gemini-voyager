@@ -27,6 +27,14 @@
     "message": "可拖拽时间线",
     "description": "可拖拽时间线标签"
   },
+  "pinTimelinePreview": {
+    "message": "固定预览面板",
+    "description": "固定时间线预览面板开关标签"
+  },
+  "pinTimelinePreviewHint": {
+    "message": "让时间线旁边的预览面板保持常驻展开。",
+    "description": "固定时间线预览面板功能提示"
+  },
   "enableMarkerLevel": {
     "message": "启用节点层级",
     "description": "启用时间线节点层级功能"
@@ -102,6 +110,10 @@
   "pm_copied": {
     "message": "已复制",
     "description": "复制成功"
+  },
+  "pm_inserted": {
+    "message": "已插入",
+    "description": "提示词已插入输入框"
   },
   "pm_delete": {
     "message": "删除",
@@ -358,6 +370,18 @@
   "chatWidthWide": {
     "message": "宽",
     "description": "宽对话区域宽度标签"
+  },
+  "chatFontSize": {
+    "message": "对话字体大小",
+    "description": "对话消息字体大小调整标签"
+  },
+  "chatFontSizeSmall": {
+    "message": "小",
+    "description": "小字体大小标签"
+  },
+  "chatFontSizeLarge": {
+    "message": "大",
+    "description": "大字体大小标签"
   },
   "sidebarWidth": {
     "message": "侧边栏宽度",
@@ -679,6 +703,14 @@
     "message": "隐藏页面上的提示词管理器悬浮球",
     "description": "隐藏提示词管理器功能提示"
   },
+  "promptInsertOnClick": {
+    "message": "点击时直接插入提示词",
+    "description": "启用后点击提示词时直接插入而不是复制"
+  },
+  "promptInsertOnClickHint": {
+    "message": "开启后，点击提示词会直接插入 Gemini 输入框。关闭时保持默认复制行为。",
+    "description": "提示词点击插入行为说明"
+  },
   "customWebsites": {
     "message": "自定义网站",
     "description": "提示词管理器的自定义网站"
@@ -774,6 +806,14 @@
   "nextNode": {
     "message": "下一个节点",
     "description": "下一个时间线节点快捷键标签"
+  },
+  "firstNode": {
+    "message": "第一轮",
+    "description": "第一个时间线节点快捷键标签"
+  },
+  "lastNode": {
+    "message": "最后一轮",
+    "description": "最后一个时间线节点快捷键标签"
   },
   "shortcutKey": {
     "message": "按键",
@@ -1035,6 +1075,14 @@
     "message": "按 {modifier}+Enter 发送消息，Enter 键仅换行",
     "description": "Modifier+Enter 发送功能提示。{modifier} 在 macOS 上替换为 ⌘，其他平台替换为 Ctrl"
   },
+  "draftAutoSave": {
+    "message": "草稿自动保存",
+    "description": "Toggle label for input draft auto-save feature"
+  },
+  "draftAutoSaveHint": {
+    "message": "刷新页面或重新打开对话时，自动保存和恢复未发送的输入内容",
+    "description": "Hint for draft auto-save feature"
+  },
   "batch_delete_confirm": {
     "message": "确定要删除 {count} 个会话吗？此操作无法撤销。",
     "description": "批量删除确认消息"
@@ -1167,6 +1215,14 @@
     "message": "显示 Gems",
     "description": "显示 Gems 列表区域的提示"
   },
+  "notebooksHide": {
+    "message": "隐藏笔记本",
+    "description": "隐藏笔记本列表区域的提示"
+  },
+  "notebooksShow": {
+    "message": "显示笔记本",
+    "description": "显示笔记本列表区域的提示"
+  },
   "setAsDefaultModel": {
     "message": "设为新对话的默认模型",
     "description": "Tooltip for setting default model"
@@ -1266,6 +1322,22 @@
   "export_fontsize_preview": {
     "message": "天地玄黄，宇宙洪荒。日月盈昃，辰宿列张。",
     "description": "Preview text for font size slider in export dialog"
+  },
+  "export_image_width_label": {
+    "message": "导出图片宽度",
+    "description": "Label for image width selection in export dialog"
+  },
+  "export_image_width_narrow": {
+    "message": "窄（手机）",
+    "description": "Narrow width option (e.g. mobile)"
+  },
+  "export_image_width_medium": {
+    "message": "中（平板）",
+    "description": "Medium width option (e.g. tablet)"
+  },
+  "export_image_width_wide": {
+    "message": "宽（电脑）",
+    "description": "Wide width option (e.g. desktop)"
   },
   "export_error_generic": {
     "message": "导出失败：{error}",
@@ -1451,7 +1523,10 @@
     "message": "AI 整理",
     "description": "复制文件夹结构和对话以供 AI 整理的按钮"
   },
-  "aiOrgCopied": { "message": "已复制！", "description": "复制 AI 整理提示后的确认" },
+  "aiOrgCopied": {
+    "message": "已复制！",
+    "description": "复制 AI 整理提示后的确认"
+  },
   "aiOrgError": {
     "message": "失败 — 请先打开 Gemini",
     "description": "复制 AI 整理提示失败时的错误"
@@ -1460,13 +1535,22 @@
     "message": "复制所有对话和文件夹结构作为提示词。粘贴到 Gemini 中即可获得可导入的文件夹方案。",
     "description": "AI 整理复制按钮下方的提示文字"
   },
-  "aiOrgCurrentFolders": { "message": "当前文件夹结构", "description": "AI 整理提示中的标题" },
+  "aiOrgCurrentFolders": {
+    "message": "当前文件夹结构",
+    "description": "AI 整理提示中的标题"
+  },
   "aiOrgUnfiledConversations": {
     "message": "未归类的对话",
     "description": "不在任何文件夹中的对话标题"
   },
-  "aiOrgEmpty": { "message": "空", "description": "AI 整理提示中空文件夹的标签" },
-  "aiOrgInstructions": { "message": "指示", "description": "AI 指示部分的标题" },
+  "aiOrgEmpty": {
+    "message": "空",
+    "description": "AI 整理提示中空文件夹的标签"
+  },
+  "aiOrgInstructions": {
+    "message": "指示",
+    "description": "AI 指示部分的标题"
+  },
   "aiOrgInstructionsBody": {
     "message": "根据以上对话和文件夹结构，请将它们重新整理为合理的文件夹层级。输出一个使用以下格式的 JSON 文件，可以直接导入到 Gemini Voyager 扩展中（使用「合并」导入策略）。保留已有的合理文件夹，根据需要创建新文件夹，将未归类的对话移入合适的文件夹。每个文件夹需要一个唯一 ID（使用短随机字符串），每个对话必须保留其原始的 conversationId 和 url。",
     "description": "AI 生成可导入文件夹结构的指示正文"
@@ -1486,5 +1570,37 @@
   "moveSectionDown": {
     "message": "下移",
     "description": "Tooltip for moving a settings section down in popup"
+  },
+  "folderAsProject_enable": {
+    "message": "启用文件夹作为项目",
+    "description": "Toggle label for the Folder-as-Project feature"
+  },
+  "folderAsProject_description": {
+    "message": "在新对话页面显示文件夹选择器，首次发送时自动将对话分配到所选文件夹",
+    "description": "Hint for the Folder-as-Project feature toggle"
+  },
+  "folderAsProject_selectFolder": {
+    "message": "选择文件夹…",
+    "description": "Placeholder text for the folder picker chip when no folder is selected"
+  },
+  "folderAsProject_noFolder": {
+    "message": "不选择文件夹",
+    "description": "Option in the folder picker dropdown to clear the selection"
+  },
+  "folderAsProject_setInstructions": {
+    "message": "设置指令",
+    "description": "Folder context menu item to open the instructions editor"
+  },
+  "folderAsProject_editInstructions": {
+    "message": "编辑指令",
+    "description": "Folder context menu item to edit existing instructions"
+  },
+  "folderAsProject_expand": {
+    "message": "展开",
+    "description": "Aria-label for the expand button (screen readers)"
+  },
+  "folderAsProject_collapse": {
+    "message": "折叠",
+    "description": "Aria-label for the collapse button (screen readers)"
   }
 }

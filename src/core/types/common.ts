@@ -36,6 +36,8 @@ export const StorageKeys = {
   // Folder system
   FOLDER_DATA: 'gvFolderData',
   FOLDER_DATA_AISTUDIO: 'gvFolderDataAIStudio',
+  FOLDER_ENABLED: 'geminiFolderEnabled',
+  FOLDER_HIDE_ARCHIVED_CONVERSATIONS: 'geminiFolderHideArchivedConversations',
 
   // Timeline
   TIMELINE_SCROLL_MODE: 'geminiTimelineScrollMode',
@@ -43,11 +45,22 @@ export const StorageKeys = {
   TIMELINE_BAR_WIDTH: 'geminiTimelineBarWidth',
   TIMELINE_DRAGGABLE: 'geminiTimelineDraggable',
   TIMELINE_POSITION: 'geminiTimelinePosition',
+  TIMELINE_PREVIEW_PINNED: 'geminiTimelinePreviewPinned',
+  TIMELINE_MARKER_LEVEL: 'geminiTimelineMarkerLevel',
   TIMELINE_STARRED_MESSAGES: 'geminiTimelineStarredMessages',
+  TIMELINE_HIERARCHY: 'geminiTimelineHierarchy',
   TIMELINE_SHORTCUTS: 'geminiTimelineShortcuts',
 
   // UI customization
   CHAT_WIDTH: 'geminiChatWidth',
+  CHAT_WIDTH_ENABLED: 'gvChatWidthEnabled',
+  CHAT_FONT_SIZE: 'gvChatFontSize',
+  CHAT_FONT_SIZE_ENABLED: 'gvChatFontSizeEnabled',
+  EDIT_INPUT_WIDTH: 'geminiEditInputWidth',
+  EDIT_INPUT_WIDTH_ENABLED: 'gvEditInputWidthEnabled',
+  SIDEBAR_WIDTH: 'geminiSidebarWidth',
+  SIDEBAR_WIDTH_ENABLED: 'gvSidebarWidthEnabled',
+  AISTUDIO_SIDEBAR_WIDTH: 'gvAIStudioSidebarWidth',
 
   // Prompt Manager
   PROMPT_ITEMS: 'gvPromptItems',
@@ -56,15 +69,23 @@ export const StorageKeys = {
   PROMPT_TRIGGER_POSITION: 'gvPromptTriggerPosition',
   PROMPT_CUSTOM_WEBSITES: 'gvPromptCustomWebsites',
   PROMPT_THEME: 'gvPromptTheme',
+  PROMPT_INSERT_ON_CLICK: 'gvPromptInsertOnClick',
 
   // Global settings
   LANGUAGE: 'language',
   FORMULA_COPY_FORMAT: 'gvFormulaCopyFormat',
+  WATERMARK_REMOVER_ENABLED: 'geminiWatermarkRemoverEnabled',
+  HIDE_PROMPT_MANAGER: 'gvHidePromptManager',
+  TAB_TITLE_UPDATE_ENABLED: 'gvTabTitleUpdateEnabled',
+  MERMAID_ENABLED: 'gvMermaidEnabled',
+  QUOTE_REPLY_ENABLED: 'gvQuoteReplyEnabled',
 
   // Input behavior
   CTRL_ENTER_SEND: 'gvCtrlEnterSend',
   INPUT_COLLAPSE_ENABLED: 'gvInputCollapseEnabled',
   INPUT_COLLAPSE_WHEN_NOT_EMPTY: 'gvInputCollapseWhenNotEmpty',
+  DRAFT_AUTO_SAVE: 'gvDraftAutoSave',
+  PREVENT_AUTO_SCROLL_ENABLED: 'gvPreventAutoScrollEnabled',
 
   // Default Model
   DEFAULT_MODEL: 'gvDefaultModel',
@@ -79,6 +100,8 @@ export const StorageKeys = {
   // Sidebar behavior
   GV_SIDEBAR_AUTO_HIDE: 'gvSidebarAutoHide',
   GV_SIDEBAR_FULL_HIDE: 'gvSidebarFullHide',
+  GEMS_HIDDEN: 'gvGemsHidden',
+  NOTEBOOKS_HIDDEN: 'gvNotebooksHidden',
 
   // Folder spacing
   GV_FOLDER_SPACING: 'gvFolderSpacing',
@@ -99,6 +122,9 @@ export const StorageKeys = {
   FORK_NODES: 'gvForkNodes',
   FORK_ENABLED: 'gvForkEnabled',
 
+  // Export
+  EXPORT_IMAGE_WIDTH: 'gvExportImageWidth',
+
   // AI Studio master toggle
   GV_AISTUDIO_ENABLED: 'gvAIStudioEnabled',
 
@@ -108,6 +134,13 @@ export const StorageKeys = {
 
   // Popup section order
   GV_POPUP_SECTION_ORDER: 'gvPopupSectionOrder',
+
+  // Context sync
+  CONTEXT_SYNC_ENABLED: 'contextSyncEnabled',
+  CONTEXT_SYNC_PORT: 'contextSyncPort',
+
+  // Folder as Project
+  FOLDER_PROJECT_ENABLED: 'gvFolderProjectEnabled',
 } as const;
 
 export type StorageKey = (typeof StorageKeys)[keyof typeof StorageKeys];

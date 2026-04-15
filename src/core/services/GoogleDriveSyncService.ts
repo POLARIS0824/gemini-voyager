@@ -4,7 +4,7 @@
  * Enterprise-grade service for syncing extension data to Google Drive
  * Uses Chrome Identity API for OAuth2 and Drive REST API v3 for storage
  *
- * Stores folders, prompts, and starred messages as separate files:
+ * Stores folders, prompts, and other sync data as separate files:
  * - gemini-voyager-folders.json
  * - gemini-voyager-prompts.json
  * - gemini-voyager-starred.json
@@ -16,22 +16,28 @@ import type {
   ForkNodesDataSync,
   PromptExportPayload,
   PromptItem,
+  SettingsExportPayload,
   StarredExportPayload,
   StarredMessagesDataSync,
   SyncAccountScope,
   SyncMode,
   SyncPlatform,
   SyncState,
+  TimelineHierarchyDataSync,
+  TimelineHierarchyExportPayload,
 } from '@/core/types/sync';
 import { DEFAULT_SYNC_STATE } from '@/core/types/sync';
+import { isBrave } from '@/core/utils/browser';
 import { hashString } from '@/core/utils/hash';
 import { EXTENSION_VERSION } from '@/core/utils/version';
 
 const FOLDERS_FILE_NAME = 'gemini-voyager-folders.json';
 const AISTUDIO_FOLDERS_FILE_NAME = 'gemini-voyager-aistudio-folders.json';
 const PROMPTS_FILE_NAME = 'gemini-voyager-prompts.json';
+const SETTINGS_FILE_NAME = 'gemini-voyager-settings.json';
 const STARRED_FILE_NAME = 'gemini-voyager-starred.json';
 const FORKS_FILE_NAME = 'gemini-voyager-forks.json';
+const TIMELINE_HIERARCHY_FILE_NAME = 'gemini-voyager-timeline-hierarchy.json';
 const BACKUP_FOLDER_NAME = 'Gemini Voyager Data';
 const DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3';
 const DRIVE_UPLOAD_BASE = 'https://www.googleapis.com/upload/drive/v3';
@@ -40,6 +46,14 @@ const DRIVE_UPLOAD_BASE = 'https://www.googleapis.com/upload/drive/v3';
 const MAX_RETRIES = 3;
 const INITIAL_RETRY_DELAY_MS = 1000;
 const IDENTITY_TOKEN_TTL_SECONDS = 55 * 60;
+
+function getStringValue(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
+function getNumberValue(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
 
 /**
  * Google Drive Sync Service
@@ -50,8 +64,10 @@ export class GoogleDriveSyncService {
   private foldersFileId: string | null = null;
   private aistudioFoldersFileId: string | null = null;
   private promptsFileId: string | null = null;
+  private settingsFileId: string | null = null;
   private starredFileId: string | null = null;
   private forksFileId: string | null = null;
+  private timelineHierarchyFileId: string | null = null;
   private backupFolderId: string | null = null;
   private fileIdByName: Record<string, string> = {};
   private stateChangeCallback: ((state: SyncState) => void) | null = null;
@@ -116,9 +132,12 @@ export class GoogleDriveSyncService {
     }
     await this.clearToken();
     this.foldersFileId = null;
+    this.aistudioFoldersFileId = null;
     this.promptsFileId = null;
+    this.settingsFileId = null;
     this.starredFileId = null;
     this.forksFileId = null;
+    this.timelineHierarchyFileId = null;
     this.backupFolderId = null;
     this.fileIdByName = {};
     this.updateState({ isAuthenticated: false, lastSyncTime: null, error: null });
@@ -126,7 +145,7 @@ export class GoogleDriveSyncService {
   }
 
   /**
-   * Upload folders, prompts, and starred messages as separate files to Google Drive
+   * Upload folders, prompts, and timeline data as separate files to Google Drive
    * @param folders Folder data to upload
    * @param prompts Prompt items (only for Gemini platform)
    * @param starred Starred messages (only for Gemini platform)
@@ -140,7 +159,10 @@ export class GoogleDriveSyncService {
     interactive: boolean = true,
     platform: SyncPlatform = 'gemini',
     forks: ForkNodesDataSync | null = null,
+    timelineHierarchy: TimelineHierarchyDataSync | null = null,
     accountScope: SyncAccountScope | null = null,
+    timelineHierarchyAccountScope: SyncAccountScope | null = null,
+    settings: Record<string, unknown> | null = null,
   ): Promise<boolean> {
     try {
       this.updateState({ isSyncing: true, error: null });
@@ -175,6 +197,15 @@ export class GoogleDriveSyncService {
         items: prompts,
       };
 
+      const settingsPayload: SettingsExportPayload | null = settings
+        ? {
+            format: 'gemini-voyager.settings.v1',
+            exportedAt: now.toISOString(),
+            version: EXTENSION_VERSION,
+            data: settings,
+          }
+        : null;
+
       // Upload folders file (platform-specific)
       const foldersBaseFileName =
         platform === 'aistudio' ? AISTUDIO_FOLDERS_FILE_NAME : FOLDERS_FILE_NAME;
@@ -190,6 +221,12 @@ export class GoogleDriveSyncService {
         const promptsFileId = await this.ensureFileId(token, promptsFileName, 'prompts');
         await this.uploadFileWithRetry(token, promptsFileId, promptPayload);
         console.log('[GoogleDriveSyncService] Prompts uploaded successfully');
+      }
+
+      if (settingsPayload) {
+        const settingsFileId = await this.ensureFileId(token, SETTINGS_FILE_NAME, 'settings');
+        await this.uploadFileWithRetry(token, settingsFileId, settingsPayload);
+        console.log('[GoogleDriveSyncService] Settings uploaded successfully');
       }
 
       // Upload starred messages file (only for Gemini platform)
@@ -237,6 +274,28 @@ export class GoogleDriveSyncService {
         console.log('[GoogleDriveSyncService] Fork nodes uploaded successfully');
       }
 
+      // Upload timeline hierarchy file (only for Gemini platform)
+      if (platform === 'gemini' && timelineHierarchy) {
+        const timelineHierarchyScope = timelineHierarchyAccountScope ?? accountScope;
+        const timelineHierarchyPayload: TimelineHierarchyExportPayload = {
+          format: 'gemini-voyager.timeline-hierarchy.v1',
+          exportedAt: now.toISOString(),
+          version: EXTENSION_VERSION,
+          data: timelineHierarchy,
+        };
+        const timelineHierarchyFileName = this.getFileNameForScope(
+          TIMELINE_HIERARCHY_FILE_NAME,
+          timelineHierarchyScope,
+        );
+        const timelineHierarchyFileId = await this.ensureFileId(
+          token,
+          timelineHierarchyFileName,
+          'timeline-hierarchy',
+        );
+        await this.uploadFileWithRetry(token, timelineHierarchyFileId, timelineHierarchyPayload);
+        console.log('[GoogleDriveSyncService] Timeline hierarchy uploaded successfully');
+      }
+
       const uploadTime = Date.now();
       // Update platform-specific upload time
       if (platform === 'aistudio') {
@@ -246,7 +305,13 @@ export class GoogleDriveSyncService {
       }
       await this.saveState();
 
-      const fileCount = platform === 'gemini' ? (starred ? (forks ? 4 : 3) : 2) : 1;
+      const fileCount =
+        1 +
+        (prompts.length > 0 ? 1 : 0) +
+        (settingsPayload ? 1 : 0) +
+        (platform === 'gemini' && starred ? 1 : 0) +
+        (platform === 'gemini' && forks ? 1 : 0) +
+        (platform === 'gemini' && timelineHierarchy ? 1 : 0);
       console.log(
         `[GoogleDriveSyncService] Upload successful - ${fileCount} file(s) for ${platform}`,
       );
@@ -260,8 +325,8 @@ export class GoogleDriveSyncService {
   }
 
   /**
-   * Download folders, prompts, and starred messages from separate files in Google Drive
-   * Returns { folders, prompts, starred } or null if no files exist
+   * Download folders, prompts, and timeline data from separate files in Google Drive
+   * Returns all available payloads or null if no files exist
    * @param interactive Whether to show auth prompt if needed
    * @param platform Platform to download for ('gemini' | 'aistudio')
    */
@@ -269,11 +334,14 @@ export class GoogleDriveSyncService {
     interactive: boolean = true,
     platform: SyncPlatform = 'gemini',
     accountScope: SyncAccountScope | null = null,
+    timelineHierarchyAccountScope: SyncAccountScope | null = null,
   ): Promise<{
     folders: FolderExportPayload | null;
     prompts: PromptExportPayload | null;
+    settings: SettingsExportPayload | null;
     starred: StarredExportPayload | null;
     forks: ForkExportPayload | null;
+    timelineHierarchy: TimelineHierarchyExportPayload | null;
   } | null> {
     try {
       this.updateState({ isSyncing: true, error: null });
@@ -308,6 +376,13 @@ export class GoogleDriveSyncService {
         console.log('[GoogleDriveSyncService] Prompts downloaded');
       }
 
+      let settings: SettingsExportPayload | null = null;
+      const settingsFileId = await this.findFile(token, SETTINGS_FILE_NAME);
+      if (settingsFileId) {
+        settings = await this.downloadFileWithRetry(token, settingsFileId);
+        console.log('[GoogleDriveSyncService] Settings downloaded');
+      }
+
       // Download starred messages file (only for Gemini platform)
       let starred: StarredExportPayload | null = null;
       if (platform === 'gemini') {
@@ -328,7 +403,22 @@ export class GoogleDriveSyncService {
         }
       }
 
-      if (!folders && !prompts && !starred && !forks) {
+      // Download timeline hierarchy file (only for Gemini platform)
+      let timelineHierarchy: TimelineHierarchyExportPayload | null = null;
+      if (platform === 'gemini') {
+        const timelineHierarchyScope = timelineHierarchyAccountScope ?? accountScope;
+        const timelineHierarchyFileId = await this.findFileForScope(
+          token,
+          TIMELINE_HIERARCHY_FILE_NAME,
+          timelineHierarchyScope,
+        );
+        if (timelineHierarchyFileId) {
+          timelineHierarchy = await this.downloadFileWithRetry(token, timelineHierarchyFileId);
+          console.log('[GoogleDriveSyncService] Timeline hierarchy downloaded');
+        }
+      }
+
+      if (!folders && !prompts && !settings && !starred && !forks && !timelineHierarchy) {
         console.log(`[GoogleDriveSyncService] No sync files found for ${platform}`);
         this.updateState({ isSyncing: false });
         return null;
@@ -343,7 +433,7 @@ export class GoogleDriveSyncService {
       }
       await this.saveState();
 
-      return { folders, prompts, starred, forks };
+      return { folders, prompts, settings, starred, forks, timelineHierarchy };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Download failed';
       console.error('[GoogleDriveSyncService] Download failed:', error);
@@ -357,9 +447,11 @@ export class GoogleDriveSyncService {
   private async loadCachedToken(): Promise<void> {
     try {
       const result = await chrome.storage.local.get(['gvAccessToken', 'gvTokenExpiry']);
-      if (result.gvAccessToken && result.gvTokenExpiry && result.gvTokenExpiry > Date.now()) {
-        this.accessToken = result.gvAccessToken;
-        this.tokenExpiry = result.gvTokenExpiry;
+      const cachedAccessToken = getStringValue(result.gvAccessToken);
+      const cachedTokenExpiry = getNumberValue(result.gvTokenExpiry);
+      if (cachedAccessToken && cachedTokenExpiry && cachedTokenExpiry > Date.now()) {
+        this.accessToken = cachedAccessToken;
+        this.tokenExpiry = cachedTokenExpiry;
         console.log('[GoogleDriveSyncService] Loaded cached token');
       }
     } catch (error) {
@@ -543,7 +635,10 @@ export class GoogleDriveSyncService {
       return this.accessToken;
     }
 
-    const supportsIdentityApi = !!chrome.identity?.getAuthToken;
+    // Brave supports the identity API but chrome.identity.getAuthToken shows
+    // an "Access blocked" error popup before failing, causing user confusion.
+    // Skip it entirely on Brave and go directly to launchWebAuthFlow.
+    const supportsIdentityApi = !!chrome.identity?.getAuthToken && !isBrave();
     if (supportsIdentityApi) {
       const identityResult = await this.getTokenFromIdentity(interactive);
       if (identityResult.token) {
@@ -610,7 +705,14 @@ export class GoogleDriveSyncService {
   private async ensureFileId(
     token: string,
     fileName: string,
-    type: 'folders' | 'aistudio-folders' | 'prompts' | 'starred' | 'forks',
+    type:
+      | 'folders'
+      | 'aistudio-folders'
+      | 'prompts'
+      | 'settings'
+      | 'starred'
+      | 'forks'
+      | 'timeline-hierarchy',
   ): Promise<string> {
     // 1. Ensure backup folder exists
     const folderId = await this.ensureBackupFolder(token);
@@ -657,7 +759,14 @@ export class GoogleDriveSyncService {
   }
 
   private setFileIdForType(
-    type: 'folders' | 'aistudio-folders' | 'prompts' | 'starred' | 'forks',
+    type:
+      | 'folders'
+      | 'aistudio-folders'
+      | 'prompts'
+      | 'settings'
+      | 'starred'
+      | 'forks'
+      | 'timeline-hierarchy',
     fileId: string,
   ): void {
     switch (type) {
@@ -670,11 +779,17 @@ export class GoogleDriveSyncService {
       case 'prompts':
         this.promptsFileId = fileId;
         break;
+      case 'settings':
+        this.settingsFileId = fileId;
+        break;
       case 'starred':
         this.starredFileId = fileId;
         break;
       case 'forks':
         this.forksFileId = fileId;
+        break;
+      case 'timeline-hierarchy':
+        this.timelineHierarchyFileId = fileId;
         break;
     }
   }
@@ -847,16 +962,18 @@ export class GoogleDriveSyncService {
       ]);
       this.state = {
         mode: (result.gvSyncMode as SyncMode) || 'disabled',
-        lastSyncTime: result.gvLastSyncTime || null,
-        lastUploadTime: result.gvLastUploadTime || null,
-        lastSyncTimeAIStudio: result.gvLastSyncTimeAIStudio || null,
-        lastUploadTimeAIStudio: result.gvLastUploadTimeAIStudio || null,
-        error: result.gvSyncError || null,
+        lastSyncTime: getNumberValue(result.gvLastSyncTime),
+        lastUploadTime: getNumberValue(result.gvLastUploadTime),
+        lastSyncTimeAIStudio: getNumberValue(result.gvLastSyncTimeAIStudio),
+        lastUploadTimeAIStudio: getNumberValue(result.gvLastUploadTimeAIStudio),
+        error: getStringValue(result.gvSyncError),
         isSyncing: false,
         isAuthenticated: false,
       };
-      const token = await this.getAuthToken(false);
-      this.state.isAuthenticated = !!token;
+      if (this.state.mode !== 'disabled') {
+        const token = await this.getAuthToken(false);
+        this.state.isAuthenticated = !!token;
+      }
     } catch (error) {
       console.error('[GoogleDriveSyncService] Failed to load state:', error);
     }

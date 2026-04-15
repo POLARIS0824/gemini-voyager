@@ -27,6 +27,14 @@
     "message": "Draggable Timeline",
     "description": "Draggable Timeline label"
   },
+  "pinTimelinePreview": {
+    "message": "Pin preview panel",
+    "description": "Pin timeline preview panel toggle label"
+  },
+  "pinTimelinePreviewHint": {
+    "message": "Keep the preview panel open beside the timeline.",
+    "description": "Pin timeline preview panel feature hint"
+  },
   "enableMarkerLevel": {
     "message": "Enable Node Levels",
     "description": "Enable timeline node level feature"
@@ -102,6 +110,10 @@
   "pm_copied": {
     "message": "Copied",
     "description": "Copied notice"
+  },
+  "pm_inserted": {
+    "message": "Inserted",
+    "description": "Prompt inserted into the chat input"
   },
   "pm_delete": {
     "message": "Delete",
@@ -358,6 +370,18 @@
   "chatWidthWide": {
     "message": "Wide",
     "description": "Wide chat width label"
+  },
+  "chatFontSize": {
+    "message": "Chat font size",
+    "description": "Chat message font size adjustment label"
+  },
+  "chatFontSizeSmall": {
+    "message": "Small",
+    "description": "Small font size label"
+  },
+  "chatFontSizeLarge": {
+    "message": "Large",
+    "description": "Large font size label"
   },
   "sidebarWidth": {
     "message": "Sidebar width",
@@ -679,6 +703,14 @@
     "message": "Hide the Prompt Manager floating ball on the page",
     "description": "Hint for hiding prompt manager feature"
   },
+  "promptInsertOnClick": {
+    "message": "Insert prompt on click",
+    "description": "Enable direct prompt insertion instead of copying"
+  },
+  "promptInsertOnClickHint": {
+    "message": "When enabled, clicking a prompt inserts it into Gemini's input. Off keeps the default copy behavior.",
+    "description": "Hint for prompt click insertion behavior"
+  },
   "customWebsites": {
     "message": "Custom websites",
     "description": "Custom websites for prompt manager"
@@ -774,6 +806,14 @@
   "nextNode": {
     "message": "Next node",
     "description": "Next timeline node shortcut label"
+  },
+  "firstNode": {
+    "message": "First turn",
+    "description": "First timeline node shortcut label"
+  },
+  "lastNode": {
+    "message": "Last turn",
+    "description": "Last timeline node shortcut label"
   },
   "shortcutKey": {
     "message": "Key",
@@ -1035,6 +1075,14 @@
     "message": "Press {modifier}+Enter to send messages, Enter to add a new line",
     "description": "Modifier+Enter to send feature hint. {modifier} is replaced with ⌘ on macOS and Ctrl on other platforms"
   },
+  "draftAutoSave": {
+    "message": "Draft auto-save",
+    "description": "Toggle label for input draft auto-save feature"
+  },
+  "draftAutoSaveHint": {
+    "message": "Automatically save and restore unsent input when you refresh or reopen a conversation",
+    "description": "Hint for draft auto-save feature"
+  },
   "batch_delete_confirm": {
     "message": "Are you sure you want to delete {count} conversation(s)? This action cannot be undone.",
     "description": "Batch delete confirmation message"
@@ -1167,6 +1215,14 @@
     "message": "Show Gems",
     "description": "Tooltip for showing Gems list section"
   },
+  "notebooksHide": {
+    "message": "Hide Notebooks",
+    "description": "Tooltip for hiding Notebooks list section"
+  },
+  "notebooksShow": {
+    "message": "Show Notebooks",
+    "description": "Tooltip for showing Notebooks list section"
+  },
   "setAsDefaultModel": {
     "message": "Set as default model",
     "description": "Tooltip for setting default model"
@@ -1266,6 +1322,22 @@
   "export_fontsize_preview": {
     "message": "The quick brown fox jumps over the lazy dog.",
     "description": "Preview text for font size slider in export dialog"
+  },
+  "export_image_width_label": {
+    "message": "Image Width",
+    "description": "Label for image width selection in export dialog"
+  },
+  "export_image_width_narrow": {
+    "message": "Narrow",
+    "description": "Narrow width option (e.g. mobile)"
+  },
+  "export_image_width_medium": {
+    "message": "Medium",
+    "description": "Medium width option (e.g. tablet)"
+  },
+  "export_image_width_wide": {
+    "message": "Wide",
+    "description": "Wide width option (e.g. desktop)"
   },
   "export_error_generic": {
     "message": "Export failed: {error}",
@@ -1498,5 +1570,37 @@
   "moveSectionDown": {
     "message": "Move down",
     "description": "Tooltip for moving a settings section down in popup"
+  },
+  "folderAsProject_enable": {
+    "message": "Enable Folder as Project",
+    "description": "Toggle label for the Folder-as-Project feature"
+  },
+  "folderAsProject_description": {
+    "message": "Show a folder picker on new chats and auto-assign the conversation to the selected folder on first send",
+    "description": "Hint for the Folder-as-Project feature toggle"
+  },
+  "folderAsProject_selectFolder": {
+    "message": "Select folder…",
+    "description": "Placeholder text for the folder picker chip when no folder is selected"
+  },
+  "folderAsProject_noFolder": {
+    "message": "No folder",
+    "description": "Option in the folder picker dropdown to clear the selection"
+  },
+  "folderAsProject_setInstructions": {
+    "message": "Set Instructions",
+    "description": "Folder context menu item to open the instructions editor"
+  },
+  "folderAsProject_editInstructions": {
+    "message": "Edit Instructions",
+    "description": "Folder context menu item to edit existing instructions"
+  },
+  "folderAsProject_expand": {
+    "message": "Expand",
+    "description": "Aria-label for the expand button (screen readers)"
+  },
+  "folderAsProject_collapse": {
+    "message": "Collapse",
+    "description": "Aria-label for the collapse button (screen readers)"
   }
 }

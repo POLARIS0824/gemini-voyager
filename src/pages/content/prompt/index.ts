@@ -10,14 +10,24 @@ import 'katex/dist/katex.min.css';
 import type { marked as MarkedFn } from 'marked';
 import browser from 'webextension-polyfill';
 
+import {
+  accountIsolationService,
+  detectAccountContextFromDocument,
+} from '@/core/services/AccountIsolationService';
 import { logger } from '@/core/services/LoggerService';
+import { exportBackupableSyncSettings } from '@/core/services/SettingsBackupService';
 import { promptStorageService } from '@/core/services/StorageService';
 import { type StorageKey, StorageKeys } from '@/core/types/common';
 import { isSafari, shouldShowSafariUpdateReminder } from '@/core/utils/browser';
 import { isExtensionContextInvalidatedError } from '@/core/utils/extensionContext';
 import { migrateFromLocalStorage } from '@/core/utils/storageMigration';
 import { shouldShowUpdateReminderForCurrentVersion } from '@/core/utils/updateReminder';
-import { compareVersions } from '@/core/utils/version';
+import { EXTENSION_VERSION, compareVersions } from '@/core/utils/version';
+import {
+  getTimelineHierarchyStorageKeysToRead,
+  resolveTimelineHierarchyDataForStorageScope,
+} from '@/pages/content/timeline/hierarchyStorage';
+import { normalizeTimelineHierarchyData } from '@/pages/content/timeline/hierarchyTypes';
 import { getCurrentLanguage, getTranslationSync, initI18n, setCachedLanguage } from '@/utils/i18n';
 import {
   APP_LANGUAGES,
@@ -29,7 +39,10 @@ import {
 import type { TranslationKey } from '@/utils/translations';
 
 import { hasUnreadChangelog, openChangelog, showChangelogModalDirect } from '../changelog/index';
+import { insertTextIntoChatInput } from '../chatInput/index';
 import { createFolderStorageAdapter } from '../folder/storage/FolderStorageAdapter';
+import { expandInputCollapseIfNeeded } from '../inputCollapse/index';
+import { activatePromptText } from './promptClickAction';
 import { getScrollHintState } from './scrollHint';
 
 type PromptItem = {
@@ -308,6 +321,7 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
     // Check if the prompt manager should be hidden & changelog badge state
     let pmHiddenByUser = false;
     let changelogBadgeActive = false;
+    let promptInsertOnClick = false;
 
     try {
       const result = await browser.storage.sync.get({ gvHidePromptManager: false });
@@ -317,6 +331,17 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
         'Failed to check hide prompt manager setting, continuing with default behavior',
         { error },
       );
+    }
+
+    try {
+      const result = await browser.storage.sync.get({
+        [StorageKeys.PROMPT_INSERT_ON_CLICK]: false,
+      });
+      promptInsertOnClick = result?.[StorageKeys.PROMPT_INSERT_ON_CLICK] === true;
+    } catch (error) {
+      pmLogger.warn('Failed to check prompt click mode setting, falling back to copy behavior', {
+        error,
+      });
     }
 
     // Check changelog badge mode
@@ -896,12 +921,39 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
           }
         });
 
-        textBtn.title = i18n.t('pm_copy') || 'Copy';
-        textBtn.addEventListener('click', async (e) => {
-          // Don't copy when clicking expand button
-          if ((e.target as HTMLElement).closest('.gv-pm-expand-btn')) return;
-          await copyText(it.text);
-          setNotice(i18n.t('pm_copied') || 'Copied', 'ok');
+        textBtn.addEventListener('mousedown', (e) => {
+          if (e.button !== 0) return;
+          e.preventDefault();
+          e.stopPropagation();
+          void activatePromptText(it.text, promptInsertOnClick, {
+            copyText,
+            expandInputCollapseIfNeeded,
+            insertTextIntoChatInput,
+          }).then((result) => {
+            setNotice(
+              result === 'inserted'
+                ? i18n.t('pm_inserted') || 'Inserted'
+                : i18n.t('pm_copied') || 'Copied',
+              'ok',
+            );
+          });
+        });
+        textBtn.addEventListener('keydown', (e) => {
+          if (e.key !== 'Enter' && e.key !== ' ') return;
+          e.preventDefault();
+          e.stopPropagation();
+          void activatePromptText(it.text, promptInsertOnClick, {
+            copyText,
+            expandInputCollapseIfNeeded,
+            insertTextIntoChatInput,
+          }).then((result) => {
+            setNotice(
+              result === 'inserted'
+                ? i18n.t('pm_inserted') || 'Inserted'
+                : i18n.t('pm_copied') || 'Copied',
+              'ok',
+            );
+          });
         });
 
         // Add expand/collapse button
@@ -1151,6 +1203,7 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
       if (changelogBadgeActive) {
         changelogBadgeActive = false;
         trigger.classList.remove('gv-pm-trigger-new');
+        versionBadge.classList.remove('gv-pm-version-outdated');
         try {
           await showChangelogModalDirect();
         } catch {
@@ -1294,6 +1347,9 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
           // Show trigger
           trigger.style.display = '';
         }
+      }
+      if (area === 'sync' && changes[StorageKeys.PROMPT_INSERT_ON_CLICK]) {
+        promptInsertOnClick = changes[StorageKeys.PROMPT_INSERT_ON_CLICK].newValue === true;
       }
       // Handle changelog notify mode changes (dynamic badge update)
       if (
@@ -1478,6 +1534,7 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
         const promptPayload = {
           format: 'gemini-voyager.prompts.v1',
           exportedAt: new Date().toISOString(),
+          version: EXTENSION_VERSION,
           items: prompts,
         };
 
@@ -1492,12 +1549,15 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
         const folderPayload = {
           format: 'gemini-voyager.folders.v1',
           exportedAt: new Date().toISOString(),
-          version: '0.9.3',
+          version: EXTENSION_VERSION,
           data: {
             folders: folderData.folders || [],
             folderContents: folderData.folderContents || {},
           },
         };
+
+        const settingsPayload = await exportBackupableSyncSettings();
+        const settingsCount = Object.keys(settingsPayload.data).length;
 
         // Count conversations
         const conversationCount = Object.values(folderData.folderContents || {}).reduce(
@@ -1505,15 +1565,51 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
           0,
         );
 
+        let timelineHierarchyData = normalizeTimelineHierarchyData(null);
+        try {
+          const context = detectAccountContextFromDocument(window.location.href, document);
+          const scope =
+            context.routeUserId || context.email
+              ? await accountIsolationService.resolveAccountScope({
+                  pageUrl: window.location.href,
+                  routeUserId: context.routeUserId,
+                  email: context.email,
+                })
+              : null;
+          const timelineHierarchyStorage = (await chrome.storage.local.get(
+            getTimelineHierarchyStorageKeysToRead(scope?.accountKey),
+          )) as Record<string, unknown>;
+          timelineHierarchyData = resolveTimelineHierarchyDataForStorageScope(
+            timelineHierarchyStorage,
+            scope?.accountKey,
+            scope?.routeUserId ?? null,
+          );
+        } catch (error) {
+          console.warn(
+            '[PromptManager] Failed to load scoped timeline hierarchy backup data:',
+            error,
+          );
+        }
+        const timelineHierarchyPayload = {
+          format: 'gemini-voyager.timeline-hierarchy.v1' as const,
+          exportedAt: new Date().toISOString(),
+          version: EXTENSION_VERSION,
+          data: timelineHierarchyData,
+        };
+
         // Create metadata
         const metadata = {
-          version: '0.9.3',
+          version: EXTENSION_VERSION,
           timestamp: new Date().toISOString(),
+          includesSettings: true,
           includesPrompts: true,
           includesFolders: true,
+          settingsCount,
           promptCount: prompts.length,
           folderCount: folderData.folders?.length || 0,
           conversationCount,
+          timelineHierarchyConversationCount: Object.keys(timelineHierarchyData.conversations || {})
+            .length,
         };
 
         // Generate timestamp for folder/file name
@@ -1548,10 +1644,22 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
           await foldersWritable.write(JSON.stringify(folderPayload, null, 2));
           await foldersWritable.close();
 
+          const settingsFile = await backupDir.getFileHandle('settings.json', { create: true });
+          const settingsWritable = await settingsFile.createWritable();
+          await settingsWritable.write(JSON.stringify(settingsPayload, null, 2));
+          await settingsWritable.close();
+
           const metaFile = await backupDir.getFileHandle('metadata.json', { create: true });
           const metaWritable = await metaFile.createWritable();
           await metaWritable.write(JSON.stringify(metadata, null, 2));
           await metaWritable.close();
+
+          const timelineHierarchyFile = await backupDir.getFileHandle('timeline-hierarchy.json', {
+            create: true,
+          });
+          const timelineHierarchyWritable = await timelineHierarchyFile.createWritable();
+          await timelineHierarchyWritable.write(JSON.stringify(timelineHierarchyPayload, null, 2));
+          await timelineHierarchyWritable.close();
 
           setNotice(
             `✓ Backed up ${prompts.length} prompts, ${folderData.folders?.length || 0} folders`,
@@ -1564,7 +1672,9 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
           // Add files to ZIP
           zip.file('prompts.json', JSON.stringify(promptPayload, null, 2));
           zip.file('folders.json', JSON.stringify(folderPayload, null, 2));
+          zip.file('settings.json', JSON.stringify(settingsPayload, null, 2));
           zip.file('metadata.json', JSON.stringify(metadata, null, 2));
+          zip.file('timeline-hierarchy.json', JSON.stringify(timelineHierarchyPayload, null, 2));
 
           // Generate ZIP file
           const zipBlob = await zip.generateAsync({ type: 'blob' });

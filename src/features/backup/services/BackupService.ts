@@ -4,10 +4,17 @@
  * Follows enterprise best practices with comprehensive error handling
  */
 import { AppError, ErrorCode } from '@/core/errors/AppError';
-import type { Result } from '@/core/types/common';
+import { exportBackupableSyncSettings } from '@/core/services/SettingsBackupService';
+import { type Result, StorageKeys } from '@/core/types/common';
 import type { FolderData } from '@/core/types/folder';
 import { EXTENSION_VERSION } from '@/core/utils/version';
 import { FolderImportExportService } from '@/features/folder/services/FolderImportExportService';
+import {
+  EMPTY_TIMELINE_HIERARCHY_DATA,
+  type TimelineHierarchyData,
+  normalizeTimelineHierarchyData,
+} from '@/pages/content/timeline/hierarchyTypes';
+import { mergeTimelineHierarchy } from '@/utils/merge';
 
 import type {
   BackupConfig,
@@ -121,9 +128,18 @@ export class BackupService implements IBackupService {
   async generateBackupFiles(config: BackupConfig): Promise<Result<BackupFile[]>> {
     try {
       const files: BackupFile[] = [];
+      let settingsCount = 0;
       let promptCount = 0;
       let folderCount = 0;
       let conversationCount = 0;
+      let timelineHierarchyConversationCount = 0;
+
+      const settingsPayload = await exportBackupableSyncSettings();
+      settingsCount = Object.keys(settingsPayload.data).length;
+      files.push({
+        name: 'settings.json',
+        content: JSON.stringify(settingsPayload, null, 2),
+      });
 
       // Generate prompt backup if enabled
       if (config.includePrompts) {
@@ -169,15 +185,43 @@ export class BackupService implements IBackupService {
         });
       }
 
+      const timelineHierarchyResult = await this.loadTimelineHierarchyData();
+      if (!timelineHierarchyResult.success) {
+        return {
+          success: false,
+          error: timelineHierarchyResult.error,
+        };
+      }
+
+      const timelineHierarchy = timelineHierarchyResult.data;
+      timelineHierarchyConversationCount = Object.keys(timelineHierarchy.conversations).length;
+
+      files.push({
+        name: 'timeline-hierarchy.json',
+        content: JSON.stringify(
+          {
+            format: 'gemini-voyager.timeline-hierarchy.v1',
+            exportedAt: new Date().toISOString(),
+            version: EXTENSION_VERSION,
+            data: timelineHierarchy,
+          },
+          null,
+          2,
+        ),
+      });
+
       // Generate metadata file
       const metadata: BackupMetadata = {
         version: EXTENSION_VERSION,
         timestamp: new Date().toISOString(),
+        includesSettings: true,
         includesPrompts: config.includePrompts,
         includesFolders: config.includeFolders,
+        settingsCount,
         promptCount,
         folderCount,
         conversationCount,
+        timelineHierarchyConversationCount,
       };
 
       files.push({
@@ -242,9 +286,11 @@ export class BackupService implements IBackupService {
 
       const result: BackupResult = {
         timestamp: new Date().toISOString(),
+        settingsCount: metadata.settingsCount || 0,
         promptCount: metadata.promptCount || 0,
         folderCount: metadata.folderCount || 0,
         conversationCount: metadata.conversationCount || 0,
+        timelineHierarchyConversationCount: metadata.timelineHierarchyConversationCount || 0,
       };
 
       return {
@@ -326,6 +372,43 @@ export class BackupService implements IBackupService {
         error: new AppError(
           ErrorCode.STORAGE_READ_FAILED,
           'Failed to load folder data',
+          {},
+          error instanceof Error ? error : undefined,
+        ),
+      };
+    }
+  }
+
+  private async loadTimelineHierarchyData(): Promise<Result<TimelineHierarchyData>> {
+    try {
+      if (typeof chrome === 'undefined' || !chrome.storage?.local?.get) {
+        return {
+          success: true,
+          data: EMPTY_TIMELINE_HIERARCHY_DATA,
+        };
+      }
+
+      const storageItems = (await chrome.storage.local.get(null)) as Record<string, unknown>;
+      const hierarchyKeys = Object.keys(storageItems).filter(
+        (key) =>
+          key === StorageKeys.TIMELINE_HIERARCHY ||
+          key.startsWith(`${StorageKeys.TIMELINE_HIERARCHY}:acct:`),
+      );
+      const timelineHierarchy = hierarchyKeys.reduce<TimelineHierarchyData>((merged, key) => {
+        const next = normalizeTimelineHierarchyData(storageItems[key]);
+        return mergeTimelineHierarchy(merged, next);
+      }, EMPTY_TIMELINE_HIERARCHY_DATA);
+
+      return {
+        success: true,
+        data: timelineHierarchy,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: new AppError(
+          ErrorCode.STORAGE_READ_FAILED,
+          'Failed to load timeline hierarchy data',
           {},
           error instanceof Error ? error : undefined,
         ),
