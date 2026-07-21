@@ -1,9 +1,8 @@
 <div align="center">
-  <img src="../docs/public/assets/promotion/Promo-Banner-cn.png" alt="promotion"/>
-  <h3>打造属于你的 Gemini™ 体验 ✨</h3>
+  <img src="../docs/public/logo.png" alt="Voyager logo" width="120" height="120">
+  <h3>打造属于你的 AI Chatbot 体验 ✨</h3>
   <p>
-    优雅的时间轴导航、文件夹管理对话、构建专属提示词库。<br>
-    <b>这是 Google Gemini 缺失的那块拼图。</b>
+    <b>Gemini · Claude · ChatGPT，终于完整了。</b>
   </p>
   
   <p>
@@ -15,21 +14,25 @@
     <img src="https://img.shields.io/badge/Brave-✓-FB542B?style=flat-square&logo=brave&logoColor=white" alt="Brave">
   </p>
   <p>
-    <img src="https://img.shields.io/github/stars/Nagi-ovo/gemini-voyager?style=flat-square&logo=github" alt="GitHub Star">
-    <img src="https://img.shields.io/github/forks/Nagi-ovo/gemini-voyager?style=flat-square&logo=github" alt="GitHub Fork">
-    <img src="https://img.shields.io/github/v/release/Nagi-ovo/gemini-voyager?style=flat-square&logo=github" alt="最新版本">
-    <img src="https://img.shields.io/github/downloads/Nagi-ovo/gemini-voyager/total?style=flat-square&logo=github" alt="GitHub 下载量">
+    <img src="../badges/github-stars.svg" alt="GitHub Star">
+    <img src="../badges/github-forks.svg" alt="GitHub Fork">
+    <img src="../badges/github-release.svg" alt="最新版本">
+    <img src="../badges/github-downloads.svg" alt="GitHub 下载量">
     <img src="https://img.shields.io/chrome-web-store/users/iifacdnjakkhjjiengaffnegbndgingi?style=flat-square&logo=google-chrome" alt="Chrome 商店用户数">
     <img src="https://img.shields.io/chrome-web-store/rating/iifacdnjakkhjjiengaffnegbndgingi?style=flat-square&logo=google-chrome" alt="Chrome 商店评分">
+    <img src="https://img.shields.io/badge/edge%20users-50k%2B-0078D7?style=flat-square&logo=microsoftedge&logoColor=white" alt="Edge 商店用户数">
     <img src="https://img.shields.io/amo/users/gemini-voyager?style=flat-square&logo=firefox" alt="Firefox 商店用户数">
     <img src="https://img.shields.io/amo/rating/gemini-voyager?style=flat-square&logo=firefox" alt="Firefox 商店评分">
   </p>
   <p>
-    <a href="https://trendshift.io/repositories/16094" target="_blank"><img src="https://trendshift.io/api/badge/repositories/16094" alt="Nagi-ovo%2Fgemini-voyager | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-    <a href="https://www.producthunt.com/products/gemini-voyager?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-gemini-voyager" target="_blank" rel="noopener noreferrer"><img alt="Gemini Voyager - All-in-one Gemini suite: folders, chat export and much more | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1064704&amp;theme=light&amp;t=1768842096186"></a>
+    <a href="https://trendshift.io/repositories/16094" target="_blank"><img src="https://trendshift.io/api/badge/repositories/16094" alt="Nagi-ovo%2Fvoyager | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+    <a href="https://www.producthunt.com/products/gemini-voyager?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-gemini-voyager" target="_blank" rel="noopener noreferrer"><img alt="Voyager - AI conversation tools for Gemini, Claude, and ChatGPT | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1064704&amp;theme=light&amp;t=1768842096186"></a>
   </p>
-  <p align="center">
-    ✨ 我们已在 Product Hunt 上线！欢迎来分享你的想法和反馈。❤️
+  <p>
+    <a href="https://x.com/Nag1ovo" target="_blank"><img src="https://img.shields.io/badge/@Nag1ovo-000000?style=flat-square&logo=x&logoColor=white" alt="X"></a>
+    <a href="https://discord.gg/TEUFxdMbGb" target="_blank"><img src="https://img.shields.io/badge/Discord-加入社区-5865F2?style=flat-square&logo=discord&logoColor=white" alt="Discord"></a>
+    <a href="https://www.xiaohongshu.com/user/profile/5d366136000000001101950a" target="_blank"><img src="https://img.shields.io/badge/小红书-@卡普迪姆-FF2442?style=flat-square" alt="小红书"></a>
+    <a href="https://space.bilibili.com/312249633" target="_blank"><img src="https://img.shields.io/badge/Bilibili-@卡普迪姆-FB7299?style=flat-square&logo=bilibili&logoColor=white" alt="Bilibili"></a>
   </p>
 </div>
 
@@ -46,31 +49,27 @@
   <a href="./README_KO.md">한국어</a>
 </p>
 
+<!-- Fable 5 Verified badge source: https://github.com/yetone/alma-releases/issues/56 (@yetone). -->
 <p align="center">
-    <img src="https://count.getloli.com/@gemini-voyager?name=gemini-voyager&theme=rule34&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto" width="400">
-  </p>
-
-<p align="center">
-  <a href="https://x.com/Nag1ovo/status/2024507762483277927?s=20" target="_blank">
-    <img src="../docs/public/assets/x-recommendation.png" alt="KOL Recommendation" width="500">
+  <a href="https://github.com/yetone/alma-releases/issues/56" target="_blank" rel="noopener noreferrer" title="Fable 5 Verified badge by @yetone" aria-label="Fable 5 Verified badge by @yetone">
+    <img src="../docs/public/assets/fable-5-verified.png" alt="Fable 5 Verified" width="360">
   </a>
-  <br>
-  <b>🎉 感谢知名科技圈大 V 与社区的强烈推荐！</b>
 </p>
 
-> [!NOTE]
-> 如果 Voyager 帮到了你，欢迎分享到 X、即刻、小红书、Linux.do、V2EX 等等，也欢迎推荐给海外 KOL。每一次分享都能让更多人看到这个项目，从而改善 Gemini 的使用体验。谢谢。
+<!-- <p align="center">
+    <img src="https://count.getloli.com/@gemini-voyager?name=gemini-voyager&theme=rule34&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto" width="400">
+  </p> -->
 
-> [!IMPORTANT]
-> Voyager 曾因商标争议被 Chrome Web Store 下架，所有积累的用户和评价都归零了。现在我们已重新上架，正在从头开始重建——如果你觉得 Voyager 好用，去商店页面留个评分或评价，对我们来说意义重大。
+> [!NOTE]
+> 如果 Voyager 帮到了你，欢迎分享到 X、即刻、小红书、Linux.do、V2EX 等等，也欢迎推荐给海外 KOL。每一次分享都能让更多人看到这个项目。谢谢。
 
 ---
 
 ## 👋 为什么开发 Voyager？
 
-我们都很喜欢 Gemini，但有时候总觉得它少了一点"秩序感"。
+我们热爱 AI 聊天助手，但有时候总觉得它们少了一点"秩序感"。
 
-这就是我们开发 **Voyager** 的初衷。它不仅仅是一个工具，更是一个能帮你把 AI 对话变得井井有条、触手可及的得力助手。无论你是需要处理大量对话的研究人员，还是喜欢收藏代码片段的开发者，亦或是单纯的整理控，Voyager 都是为你准备的。
+这就是我开发 **Voyager** 的初衷。它能帮你把 AI 对话变得井井有条、触手可及——无论你用的是 Gemini、Claude 还是 ChatGPT。不管你是需要处理大量对话的研究人员，还是喜欢收藏代码片段的开发者，亦或是单纯的整理控，Voyager 都是为你准备的。
 
 <p align="center">
   <a href="https://x.com/Nag1ovo/status/2024509398601597412?s=20" target="_blank">
@@ -99,7 +98,7 @@
 - **💾 [对话导出](https://voyager.nagi.fun/guide/export)**: 支持导出为 JSON、Markdown 或 PDF（含图片）。
 - **🧜‍♀️ [Mermaid 渲染](https://voyager.nagi.fun/guide/mermaid)**: 自动渲染流程图、时序图等 Mermaid 图表。
 - **📝 [Markdown 渲染修复](https://voyager.nagi.fun/guide/markdown-fix)**: 自动修复 Gemini 注入 HTML 导致的 Markdown 加粗失效问题。
-- **🍌 [NanoBanana](https://voyager.nagi.fun/guide/nanobanana)**: 自动去除 Gemini 生成图片的无损水印。
+- **🍌 [Image Refinement](https://voyager.nagi.fun/guide/nanobanana)**: 自动去除 Gemini 生成图片的无损水印。
 - **🔬 [Deep Research](https://voyager.nagi.fun/guide/deep-research)**: 一键提取 Deep Research 对话的思考过程和研究链接。
 - **🛠️ 效率工具**:
   - **[批量删除](https://voyager.nagi.fun/guide/batch-delete)**: 批量清理对话记录。
@@ -110,6 +109,16 @@
   - **[默认模型](https://voyager.nagi.fun/guide/default-model)**: 为新对话设置默认选中的模型。
   - **[隐藏最近项目](https://voyager.nagi.fun/guide/recents-hider)**: 隐藏侧边栏的“最近”列表，减少干扰。
   - **隐藏升级提醒**: 自动隐藏 Gemini 侧边栏和模型切换菜单中的“升级到 Google AI Ultra”按钮（默认开启）。
+
+### 🔌 Claude & ChatGPT
+
+通过 [Voyager 插件引擎](https://voyager.nagi.fun/plugins)，这些功能让你的体验延伸到 Gemini 之外：
+
+- **📍 Claude 时间线**: 对话侧边栏，支持星标消息和搜索——同样的导航体验，现在也能在 Claude 上使用。
+- **📊 Claude 用量条**: 直接在 Claude 界面中追踪会话和每周用量。
+- **📐 公式复制**: 一键复制 LaTeX 和 MathML 源码（与 Gemini 共享）。
+- **📖 舒适阅读宽度**: 调整 Claude 和 ChatGPT 的对话宽度，获得更好的阅读体验。
+- **🈶 CJK 渲染修复**: 修复 Claude 上的中日韩字符渲染问题。
 
 ### 🎨 个性化体验
 
@@ -128,24 +137,22 @@
     <img src="https://img.shields.io/badge/Chrome%20应用商店-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Chrome 应用商店" height="36">
   </a>
   &nbsp;&nbsp;
-  <a href="https://microsoftedge.microsoft.com/addons/detail/gemini-voyager/gibmkggjijalcjinbdhcpklodjkhhlne" target="_blank">
-    <img src="https://img.shields.io/badge/Microsoft%20Edge-0078D7?style=for-the-badge&logo=microsoftedge&logoColor=white" alt="Microsoft Edge Add-ons" height="36">
-  </a>
+  <a href="https://microsoftedge.microsoft.com/addons/detail/voyager/gibmkggjijalcjinbdhcpklodjkhhlne" target="_blank"><img src="https://img.shields.io/badge/Edge%20Add--ons-0078D7?style=for-the-badge&logo=microsoftedge&logoColor=white" alt="Edge Add-ons" height="36"></a>
   &nbsp;&nbsp;
   <a href="https://addons.mozilla.org/firefox/addon/gemini-voyager/" target="_blank">
     <img src="https://img.shields.io/badge/Firefox%20Add--ons-FF7139?style=for-the-badge&logo=firefox&logoColor=white" alt="Firefox Add-ons" height="36">
   </a>
   &nbsp;&nbsp;
-  <a href="https://github.com/Nagi-ovo/gemini-voyager/releases/latest/" target="_blank">
+  <a href="https://github.com/Nagi-ovo/voyager/releases/latest/" target="_blank">
     <img src="https://img.shields.io/badge/Safari-000000?style=for-the-badge&logo=safari&logoColor=white" alt="Safari 下载" height="36">
   </a>
 </div>
 
 <p align="center">
-  <sub><b>Chrome 应用商店</b>同样适用于 Edge、Opera、Brave、Vivaldi、Arc 等 Chromium 浏览器。</sub>
+  <sub><b>Edge 用户：</b>考虑到移动端和平板用户需求，Voyager 会继续维护并发布 Edge Add-ons 版本。若商店审核延迟，仍可临时使用 Chrome 应用店版本或 GitHub 手动包。</sub>
 </p>
 
-> **商店状态：** Chrome ✅ · Firefox ✅ · Edge ✅ · Safari ✅
+> **商店状态：** Chrome ✅ · Firefox ✅ · Safari ✅ · Edge ✅
 
 关于 **手动安装** 或 **开发构建**，请参阅 [安装指南](https://voyager.nagi.fun/guide/installation)。
 
@@ -154,8 +161,8 @@
 ## ☕ 支持本项目
 
 <div align="center">
-  <a href="https://github.com/Nagi-ovo/gemini-voyager">
-    <img src="https://raw.githubusercontent.com/Nagi-ovo/gemini-voyager/main/docs/public/assets/sponsors.svg" width="1000px" />
+  <a href="https://github.com/Nagi-ovo/voyager">
+    <img src="https://raw.githubusercontent.com/Nagi-ovo/voyager/main/docs/public/assets/sponsors.svg" width="1000px" />
   </a>
 </div>
 
@@ -229,11 +236,11 @@
 
 ## 🤝 参与贡献与开发
 
-[<img src="https://devin.ai/assets/askdeepwiki.png" alt="Ask DeepWiki" height="20"/>](https://deepwiki.com/Nagi-ovo/gemini-voyager)
+[<img src="https://devin.ai/assets/askdeepwiki.png" alt="Ask DeepWiki" height="20"/>](https://deepwiki.com/Nagi-ovo/voyager)
 
 欢迎参与贡献！
 
-- **Issue**：使用 [Bug 报告](https://github.com/Nagi-ovo/gemini-voyager/blob/main/.github/ISSUE_TEMPLATE/bug_report.yml) 或 [功能请求](https://github.com/Nagi-ovo/gemini-voyager/blob/main/.github/ISSUE_TEMPLATE/feature_request.yml) 模板。
+- **Issue**：使用 [Bug 报告](https://github.com/Nagi-ovo/voyager/blob/main/.github/ISSUE_TEMPLATE/bug_report.yml) 或 [功能请求](https://github.com/Nagi-ovo/voyager/blob/main/.github/ISSUE_TEMPLATE/feature_request.yml) 模板。
 - **Pull Request**：请查看 [贡献指南](./CONTRIBUTING.md)。
 
 <details>
@@ -255,7 +262,7 @@ bun run build:safari
 bun run build:all
 ```
 
-**Safari 开发**：详见 [safari/README.md](../safari/README.md)。
+**Safari 开发**：运行 `bun run build:safari`，然后打开 `Voyager/` 中已纳入版本控制的 Xcode 工程。
 
 </details>
 
@@ -265,23 +272,31 @@ bun run build:all
 
 特别感谢所有为 Voyager 做出贡献的贡献者们 ❤️
 
-<a href="https://github.com/Nagi-ovo/gemini-voyager/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=Nagi-ovo/gemini-voyager&max=200&columns=14" />
+<a href="https://github.com/Nagi-ovo/voyager/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=Nagi-ovo/voyager&max=200&columns=14" />
 </a>
 
 ---
 
 ## 🌟 致谢
 
-- **[gemini-watermark-remover](https://github.com/journey-ad/gemini-watermark-remover) / [GeminiWatermarkTool](https://github.com/allenk/GeminiWatermarkTool)** - NanoBanana 基于这些项目适配而来，相关第三方 MIT 声明保留在 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。
+> Voyager 只是一个小小的 side project。比起做那些把其他扩展用户迁移过来的入口，我更想把时间花在真正帮到人的事情上。
+
+- **[ChatGPT Conversation Timeline](https://github.com/Reborn14/chatgpt-conversation-timeline)** - 本项目的灵感来源。
+
+- **[gemini-watermark-remover](https://github.com/journey-ad/gemini-watermark-remover) / [GeminiWatermarkTool](https://github.com/allenk/GeminiWatermarkTool)** - Image Refinement 基于这些项目适配而来，相关第三方 MIT 声明保留在 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。
+
+- **[Gemini Helper](https://github.com/urzeye/tampermonkey-scripts)** - 默认模型锁定功能中的部分交互逻辑参考自 Gemini Helper，并已在源码中保留 attribution。
+
+## 🌍 生态
+
+受 Voyager 启发的项目：
+
+如果你的项目受到 Voyager 启发、直接 fork 自 Voyager，或基于 Voyager 改造而来，欢迎提交 PR 加入这里。
 
 - **[DeepSeek Voyager](https://github.com/Azurboy/deepseek-voyager)** - 为 DeepSeek 适配的 Fork 版本。
 
 - **[claude-nexus](https://github.com/Qiuner/claude-nexus)** - 受 Voyager 启发的 Claude.ai 增强扩展，提供时间线导航、文件夹管理、提示词库等功能，并与 Voyager 的提示词导入/导出完全兼容！
-
-- **[ChatGPT Conversation Timeline](https://github.com/Reborn14/chatgpt-conversation-timeline)** - 本项目的灵感来源。
-
-- **[Ophel Atlas](https://github.com/urzeye/ophel)** - 将 AI 对话转化为有组织、可搜索文档的浏览器扩展，支持自动生成大纲、对话管理和提示词库，兼容多个 AI 平台。
 
 - **[Better_Doubao](https://github.com/Rex16200513/Better_Doubao)** - 为豆包提供增强导航、组织管理和生产力功能的浏览器扩展。
 
@@ -290,16 +305,18 @@ bun run build:all
 ## 📄 许可证
 
 Voyager 基于 **GPL-3.0** 许可证发布。
-NanoBanana 相关代码与资源的第三方 MIT 声明保留在 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。
+Image Refinement 相关代码与资源的第三方 MIT 声明保留在 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。
+
+Gemini 是 Google LLC 的商标。Claude 是 Anthropic, PBC 的商标。ChatGPT 是 OpenAI, Inc. 的商标。Voyager 是独立项目，与上述公司无隶属、背书或赞助关系。
 
 ---
 
 <div align="center">
-  <a href="https://www.star-history.com/#Nagi-ovo/gemini-voyager&type=date&legend=top-left">
+  <a href="https://www.star-history.com/#Nagi-ovo/voyager&type=date&legend=top-left">
    <picture>
-     <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Nagi-ovo/gemini-voyager&type=date&theme=dark&legend=top-left" />
-     <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Nagi-ovo/gemini-voyager&type=date&legend=top-left" />
-     <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Nagi-ovo/gemini-voyager&type=date&legend=top-left" />
+     <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Nagi-ovo/voyager&type=date&theme=dark&legend=top-left" />
+     <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Nagi-ovo/voyager&type=date&legend=top-left" />
+     <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Nagi-ovo/voyager&type=date&legend=top-left" />
    </picture>
   </a>
   <p>Made with ❤️ by Jesse Zhang</p>

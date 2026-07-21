@@ -151,9 +151,9 @@ A: Yes! Simply export from one browser and import to another.
 - **Deduplication Strategy**: Deduplicate by `id` and `conversationId`
 - **File Encoding**: UTF-8
 - **Max File Size**: Theoretically unlimited (limited by browser memory)
-- **Compatibility**: Chrome 88+, Firefox 85+, Safari 14+
+- **Compatibility**: Chrome 88+, Firefox 85+, Safari 15.4+
 
 ## Feedback & Support
 
 For issues or suggestions, please visit:
-https://github.com/Nagi-ovo/gemini-voyager/issues/36
+https://github.com/Nagi-ovo/voyager/issues/36

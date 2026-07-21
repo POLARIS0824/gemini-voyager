@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  _openFullscreenForTest,
   _resetMermaidLoader,
   isGenericLanguageLabel,
   isMermaidCode,
   loadMermaid,
+  normalizeMermaidCode,
   normalizeWhitespace,
 } from '../index';
 
@@ -44,6 +46,26 @@ describe('Mermaid dynamic loading', () => {
       // Second call returns cached instance immediately (no new import)
       const second = await loadMermaid();
       expect(second).toBe(first);
+    });
+  });
+
+  describe('fullscreen lifecycle', () => {
+    it('removes document listeners for every close path', () => {
+      vi.useFakeTimers();
+      const removeSpy = vi.spyOn(document, 'removeEventListener');
+
+      _openFullscreenForTest('<svg width="100" height="100"><path d="M0 0" /></svg>');
+      document
+        .querySelector<HTMLButtonElement>('.gv-mermaid-modal-toolbar button:last-child')!
+        .click();
+
+      expect(removeSpy).toHaveBeenCalledWith('keydown', expect.any(Function));
+      expect(removeSpy).toHaveBeenCalledWith('mousemove', expect.any(Function));
+      expect(removeSpy).toHaveBeenCalledWith('mouseup', expect.any(Function));
+
+      vi.runAllTimers();
+      expect(document.querySelector('.gv-mermaid-modal')).toBeNull();
+      vi.useRealTimers();
     });
   });
 
@@ -343,6 +365,85 @@ describe('Mermaid dynamic loading', () => {
     it('should leave standard whitespace unchanged', () => {
       const input = 'graph TD\n  A --> B\n  B --> C';
       expect(normalizeWhitespace(input)).toBe('graph TD\n  A --> B\n  B --> C');
+    });
+  });
+
+  describe('normalizeMermaidCode', () => {
+    it('moves a trailing comment after linkStyle onto its own line', () => {
+      const input = `graph TD
+        A --> B
+        linkStyle 0 stroke:#FF5722,stroke-width:3px; %% emphasize the edge`;
+
+      expect(normalizeMermaidCode(input)).toBe(`graph TD
+        A --> B
+        linkStyle 0 stroke:#FF5722,stroke-width:3px;
+        %% emphasize the edge`);
+    });
+
+    it('handles trailing comments on other style directives', () => {
+      const input = `graph TD
+        classDef result fill:#C8E6C9; %% result style
+        class A result; %% apply result style`;
+
+      expect(normalizeMermaidCode(input)).toBe(`graph TD
+        classDef result fill:#C8E6C9;
+        %% result style
+        class A result;
+        %% apply result style`);
+    });
+
+    it('leaves standalone comments and diagram text unchanged', () => {
+      const input = `graph TD
+        %% standalone comment
+        A[Progress %% complete] --> B`;
+
+      expect(normalizeMermaidCode(input)).toBe(input);
+    });
+
+    it('quotes unquoted subgraph titles that contain parentheses', () => {
+      const input = `graph LR
+        subgraph 流量层 (日活十亿)
+          A --> B
+        end`;
+
+      expect(normalizeMermaidCode(input)).toBe(`graph LR
+        subgraph "流量层 (日活十亿)"
+          A --> B
+        end`);
+    });
+
+    it('leaves quoted and id-based subgraph titles unchanged', () => {
+      const input = `graph LR
+        subgraph "流量层 (日活十亿)"
+        end
+        subgraph traffic["流量层 (日活十亿)"]
+        end`;
+
+      expect(normalizeMermaidCode(input)).toBe(input);
+    });
+
+    it('repairs a translated empty activation when the participant is later deactivated', () => {
+      const input = `sequenceDiagram
+        participant 你
+        激活->>你:
+        你->>系统: 修复
+        deactivate 你`;
+
+      expect(normalizeMermaidCode(input)).toBe(`sequenceDiagram
+        participant 你
+        activate 你
+        你->>系统: 修复
+        deactivate 你`);
+    });
+
+    it('does not reinterpret a participant named 激活 or an unmatched empty message', () => {
+      const input = `sequenceDiagram
+        participant 激活
+        participant 你
+        激活->>你:
+        你->>系统: 修复`;
+
+      expect(normalizeMermaidCode(input)).toBe(input);
     });
   });
 

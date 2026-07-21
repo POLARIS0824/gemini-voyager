@@ -21,28 +21,44 @@ function mockInsertTextCommand(): void {
   Object.defineProperty(document, 'execCommand', {
     configurable: true,
     value: vi.fn((command: string, _showUi?: boolean, value?: string) => {
-      if (command !== 'insertText' || typeof value !== 'string') {
-        return false;
-      }
-
       const selection = window.getSelection();
       if (!selection || selection.rangeCount === 0) {
         return false;
       }
 
-      const range = selection.getRangeAt(0);
-      range.deleteContents();
+      if (command === 'insertText' && typeof value === 'string') {
+        const range = selection.getRangeAt(0);
+        range.deleteContents();
 
-      const textNode = document.createTextNode(value);
-      range.insertNode(textNode);
+        const textNode = document.createTextNode(value);
+        range.insertNode(textNode);
 
-      const caretRange = document.createRange();
-      caretRange.setStartAfter(textNode);
-      caretRange.collapse(true);
-      selection.removeAllRanges();
-      selection.addRange(caretRange);
+        const caretRange = document.createRange();
+        caretRange.setStartAfter(textNode);
+        caretRange.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(caretRange);
 
-      return true;
+        return true;
+      }
+
+      if (command === 'insertParagraph') {
+        const range = selection.getRangeAt(0);
+        range.deleteContents();
+
+        const br = document.createElement('br');
+        range.insertNode(br);
+
+        const caretRange = document.createRange();
+        caretRange.setStartAfter(br);
+        caretRange.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(caretRange);
+
+        return true;
+      }
+
+      return false;
     }),
   });
 }
@@ -84,6 +100,75 @@ describe('chat input helpers', () => {
     setVisibleRect(visibleInput);
 
     expect(findChatInput()).toBe(visibleInput);
+  });
+
+  it('still prefers visible input when hidden matches are allowed', () => {
+    document.body.innerHTML = `
+      <rich-textarea>
+        <div id="hidden-input" contenteditable="true"></div>
+      </rich-textarea>
+      <rich-textarea>
+        <div id="visible-input" contenteditable="true" role="textbox"></div>
+      </rich-textarea>
+    `;
+
+    const hiddenInput = document.getElementById('hidden-input');
+    const visibleInput = document.getElementById('visible-input');
+    if (!(hiddenInput instanceof HTMLElement) || !(visibleInput instanceof HTMLElement)) {
+      throw new Error('Expected test inputs.');
+    }
+
+    hiddenInput.getBoundingClientRect = () =>
+      ({
+        height: 0,
+        width: 0,
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        x: 0,
+        y: 0,
+        toJSON: () => {},
+      }) as DOMRect;
+    setVisibleRect(visibleInput);
+
+    expect(findChatInput({ requireVisible: false })).toBe(visibleInput);
+  });
+
+  it('prefers the visible ChatGPT ProseMirror editor over its hidden fallback textarea', () => {
+    document.body.innerHTML = `
+      <form>
+        <textarea aria-label="Chat with ChatGPT"></textarea>
+        <div id="prompt-textarea" contenteditable="true" role="textbox"></div>
+      </form>
+    `;
+
+    const fallback = document.querySelector('textarea');
+    const editor = document.getElementById('prompt-textarea');
+    if (!(fallback instanceof HTMLTextAreaElement) || !(editor instanceof HTMLElement)) {
+      throw new Error('Expected ChatGPT inputs.');
+    }
+
+    fallback.getBoundingClientRect = () =>
+      ({ height: 0, width: 0, top: 0, left: 0, right: 0, bottom: 0, x: 0, y: 0 }) as DOMRect;
+    setVisibleRect(editor);
+
+    expect(findChatInput()).toBe(editor);
+    expect(findChatInput({ requireVisible: false })).toBe(editor);
+  });
+
+  it('finds the Claude ProseMirror composer by its stable test id', () => {
+    document.body.innerHTML = `
+      <fieldset>
+        <div data-testid="chat-input" class="tiptap ProseMirror" contenteditable="true" role="textbox"></div>
+      </fieldset>
+    `;
+
+    const editor = document.querySelector<HTMLElement>('[data-testid="chat-input"]');
+    if (!editor) throw new Error('Expected Claude input.');
+    setVisibleRect(editor);
+
+    expect(findChatInput()).toBe(editor);
   });
 
   it('replaces the current contenteditable selection and dispatches input', () => {
@@ -171,6 +256,60 @@ describe('chat input helpers', () => {
     expect(input.selectionStart).toBe(12);
     expect(input.selectionEnd).toBe(12);
     expect(onInput).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves newlines when inserting multi-line text into contenteditable', () => {
+    document.body.innerHTML = `
+      <rich-textarea>
+        <div id="input" contenteditable="true" role="textbox"></div>
+      </rich-textarea>
+    `;
+
+    const input = document.getElementById('input');
+    if (!(input instanceof HTMLElement)) {
+      throw new Error('Expected contenteditable input.');
+    }
+
+    setVisibleRect(input);
+    input.focus = vi.fn();
+
+    const execCommand = document.execCommand as ReturnType<typeof vi.fn>;
+    execCommand.mockClear();
+
+    expect(insertTextIntoChatInput('Line 1\n\nLine 3', input)).toBe(true);
+
+    const callSequence = execCommand.mock.calls.map(([cmd, , value]) => ({ cmd, value }));
+    expect(callSequence).toEqual([
+      { cmd: 'insertText', value: 'Line 1' },
+      { cmd: 'insertParagraph', value: undefined },
+      { cmd: 'insertParagraph', value: undefined },
+      { cmd: 'insertText', value: 'Line 3' },
+    ]);
+    expect(execCommand).not.toHaveBeenCalledWith('insertText', false, 'Line 1\n\nLine 3');
+    expect(input.querySelectorAll('br')).toHaveLength(2);
+  });
+
+  it('falls back to <br> separators when execCommand cannot handle multi-line text', () => {
+    document.body.innerHTML = `
+      <rich-textarea>
+        <div id="input" class="ql-blank" contenteditable="true" role="textbox"></div>
+      </rich-textarea>
+    `;
+
+    const input = document.getElementById('input');
+    if (!(input instanceof HTMLElement)) {
+      throw new Error('Expected contenteditable input.');
+    }
+
+    setVisibleRect(input);
+    input.focus = vi.fn();
+
+    vi.spyOn(document, 'execCommand').mockReturnValue(false);
+
+    expect(insertTextIntoChatInput('Line 1\n\nLine 3', input)).toBe(true);
+    expect(input.querySelectorAll('br')).toHaveLength(2);
+    expect(input.textContent).toBe('Line 1Line 3');
+    expect(input.classList.contains('ql-blank')).toBe(false);
   });
 
   it('falls back to manual contenteditable insertion when execCommand fails', () => {

@@ -9,10 +9,54 @@
  *               ├─ span.cdk-visually-hidden  ("你说" / "You said")
  *               └─ p.query-text-line.ng-star-inserted  ← processed here
  */
-import katex from 'katex';
-
 /** Selector for user message text paragraph elements. */
 const USER_MSG_SELECTOR = 'p.query-text-line';
+
+/**
+ * Lazily loaded KaTeX instance. KaTeX is only needed when a user message
+ * actually contains LaTeX, so it is dynamically imported to keep it out of the
+ * synchronously-loaded content-script chunk (mirrors loadMermaid()).
+ */
+let katexInstance: (typeof import('katex'))['default'] | null = null;
+let katexLoadFailed = false;
+let katexLoaderForTest: (() => Promise<typeof import('katex')>) | null = null;
+
+/**
+ * Reset internal loader state. Only for testing.
+ * @internal
+ */
+export const _resetUserLatexKatexLoader = (): void => {
+  katexInstance = null;
+  katexLoadFailed = false;
+  katexLoaderForTest = null;
+};
+
+/**
+ * Override the KaTeX loader. Only for testing async load races.
+ * @internal
+ */
+export const _setUserLatexKatexLoaderForTest = (
+  loader: (() => Promise<typeof import('katex')>) | null,
+): void => {
+  katexInstance = null;
+  katexLoadFailed = false;
+  katexLoaderForTest = loader;
+};
+
+const loadKatex = async (): Promise<typeof katexInstance> => {
+  if (katexInstance) return katexInstance;
+  if (katexLoadFailed) return null;
+
+  try {
+    const mod = await (katexLoaderForTest ? katexLoaderForTest() : import('katex'));
+    katexInstance = mod.default;
+    return katexInstance;
+  } catch (error) {
+    katexLoadFailed = true;
+    console.error('[Gemini Voyager] Failed to load KaTeX for user LaTeX:', error);
+    return null;
+  }
+};
 
 type Segment = { kind: 'text'; value: string } | { kind: 'math'; value: string; display: boolean };
 
@@ -139,7 +183,7 @@ export function parseSegments(text: string): Segment[] {
 /**
  * Render LaTeX in a single user message paragraph element.
  */
-function processElement(el: HTMLElement): void {
+async function processElement(el: HTMLElement): Promise<void> {
   if (el.dataset.userLatexProcessed) return;
 
   const raw = el.textContent ?? '';
@@ -155,6 +199,21 @@ function processElement(el: HTMLElement): void {
 
   if (!hasMath) {
     el.dataset.userLatexProcessed = '1';
+    return;
+  }
+
+  // Mark processed up-front so the debounced observer can't re-enter this
+  // element while KaTeX is loading asynchronously.
+  el.dataset.userLatexProcessed = '1';
+
+  const katex = await loadKatex();
+  if (!katex) return; // load failed — leave the original "$...$" text in place
+
+  // If Gemini repainted this node while KaTeX was loading, the captured `raw`
+  // (and its segments) are stale. Bail and let a later observer pass reprocess
+  // the fresh content instead of clobbering it with the old rendering.
+  if (el.textContent !== raw) {
+    delete el.dataset.userLatexProcessed;
     return;
   }
 
@@ -185,12 +244,13 @@ function processElement(el: HTMLElement): void {
   // Replace element content with rendered output
   el.textContent = '';
   el.appendChild(frag);
-  el.dataset.userLatexProcessed = '1';
 }
 
 /** Scan all currently visible user message lines. */
 function processAll(): void {
-  document.querySelectorAll<HTMLElement>(USER_MSG_SELECTOR).forEach(processElement);
+  document.querySelectorAll<HTMLElement>(USER_MSG_SELECTOR).forEach((el) => {
+    void processElement(el);
+  });
 }
 
 let observer: MutationObserver | null = null;

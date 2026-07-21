@@ -7,13 +7,13 @@
 ## 系统要求
 
 - **macOS 11+**
-- **Safari 14+**
+- **Safari 15.4+**
 
 ## 安装步骤
 
 ### 1. 下载
 
-从 [GitHub Releases](https://github.com/Nagi-ovo/gemini-voyager/releases) 下载最新的 `gemini-voyager-X.Y.Z.dmg`。
+从 [GitHub Releases](https://github.com/Nagi-ovo/voyager/releases) 下载最新的 `voyager-vX.Y.Z.dmg`。
 
 ### 2. 安装
 
@@ -38,12 +38,15 @@
 
 ## 开发者
 
-想从源代码构建或参与开发？查看 [Safari 开发指南](../../../safari/README_ZH.md) 了解：
+先构建 Web 扩展，再打开仓库中的 Xcode 工程：
 
-- 从源代码构建
-- 开发工作流
-- 添加 Swift 原生代码
-- 高级调试
+```bash
+bun i
+bun run build:safari
+open "Voyager/Voyager.xcodeproj"
+```
+
+实际使用的 Swift 文件都在 `Voyager/` 中，不需要再手动添加另一套 Swift 文件。
 
 ## 卸载
 
@@ -52,4 +55,4 @@
 
 ---
 
-**需要帮助？** 在 [GitHub](https://github.com/Nagi-ovo/gemini-voyager/issues) 提交 Issue
+**需要帮助？** 在 [GitHub](https://github.com/Nagi-ovo/voyager/issues) 提交 Issue

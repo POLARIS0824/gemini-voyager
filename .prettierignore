@@ -3,6 +3,7 @@ gemini-voyager-sync/
 
 # Build outputs
 dist_chrome/
+dist_edge/
 dist_firefox/
 dist_safari/
 dist/
@@ -23,7 +24,7 @@ pnpm-lock.yaml
 coverage/
 
 # Safari Xcode project (Apple-generated files)
-Gemini Voyager/
+Voyager/
 safari/
 
 # Firefox signed extension output

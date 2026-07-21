@@ -7,6 +7,11 @@ import { getTranslationSync } from '../../../utils/i18n';
 import type { PreviewMarkerData } from './types';
 
 const SEARCH_DEBOUNCE_MS = 200;
+const RESIZE_DEBOUNCE_MS = 120;
+const COMPACT_CLOSE_DELAY_MS = 160;
+const LONG_PRESS_DURATION_MS = 550;
+const LONG_PRESS_MOVE_TOLERANCE_PX = 6;
+const LONG_PRESS_CLICK_SUPPRESSION_MS = 350;
 
 const LIST_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>`;
 
@@ -17,16 +22,41 @@ export class TimelinePreviewPanel {
   private toggleBtn: HTMLElement | null = null;
   private _isOpen = false;
   private _isPinned = false;
+  private _isCompactMode = false;
   private markers: ReadonlyArray<PreviewMarkerData> = [];
   private filteredMarkers: ReadonlyArray<PreviewMarkerData> = [];
   private activeTurnId: string | null = null;
   private searchQuery = '';
   private searchDebounceTimer: number | null = null;
+  private resizeDebounceTimer: number | null = null;
+  private compactCloseTimer: number | null = null;
   private onNavigate: ((turnId: string, index: number) => void) | null = null;
   private onSearchChange: ((query: string) => void) | null = null;
+  private onToggleStar: ((turnId: string) => void | Promise<void>) | null = null;
+  private pressTargetItem: HTMLElement | null = null;
+  private pressStartPosition: { x: number; y: number } | null = null;
+  private longPressTimer: number | null = null;
+  private longPressTriggeredTurnId: string | null = null;
+  private suppressClickUntil = 0;
+  private suppressClickTurnId: string | null = null;
+  private onListPointerDown: ((event: PointerEvent) => void) | null = null;
+  private onListPointerLeave: (() => void) | null = null;
+  private onWindowPointerMove: ((event: PointerEvent) => void) | null = null;
+  private onWindowPointerUp: (() => void) | null = null;
+  private onWindowPointerCancel: (() => void) | null = null;
   private onDocumentPointerDown: ((e: PointerEvent) => void) | null = null;
   private onKeyDown: ((e: KeyboardEvent) => void) | null = null;
   private onWindowResize: (() => void) | null = null;
+  private onAnchorMouseEnter: (() => void) | null = null;
+  private onAnchorMouseLeave: (() => void) | null = null;
+  private onPanelMouseEnter: (() => void) | null = null;
+  private onPanelMouseLeave: (() => void) | null = null;
+  private onAnchorFocusIn: (() => void) | null = null;
+  private onAnchorFocusOut: (() => void) | null = null;
+  private onAnchorKeyDown: ((event: KeyboardEvent) => void) | null = null;
+  private onAnchorPointerDown: (() => void) | null = null;
+  private onAnchorClick: ((event: MouseEvent) => void) | null = null;
+  private anchorWasOpenOnPointerDown: boolean | null = null;
   private onStorageChanged:
     | ((changes: Record<string, browser.Storage.StorageChange>, areaName: string) => void)
     | null = null;
@@ -44,9 +74,11 @@ export class TimelinePreviewPanel {
   init(
     onNavigate: (turnId: string, index: number) => void,
     onSearchChange?: (query: string) => void,
+    onToggleStar?: (turnId: string) => void | Promise<void>,
   ): void {
     this.onNavigate = onNavigate;
     this.onSearchChange = onSearchChange ?? null;
+    this.onToggleStar = onToggleStar ?? null;
     this.createDOM();
     this.applyDirection();
     this.positionToggle();
@@ -79,6 +111,30 @@ export class TimelinePreviewPanel {
     this._isPinned = pinned;
   }
 
+  setCompactMode(compact: boolean): void {
+    if (this._isCompactMode === compact) return;
+    this._isCompactMode = compact;
+    this.cancelCompactClose();
+    this.toggleBtn?.classList.toggle('timeline-preview-toggle-compact', compact);
+    this.panelEl?.classList.toggle('timeline-preview-panel-compact', compact);
+
+    if (compact) {
+      this.anchorElement.tabIndex = 0;
+      this.anchorElement.setAttribute('role', 'button');
+      this.anchorElement.setAttribute(
+        'aria-label',
+        getTranslationSync('timelineCompactOpenPreview'),
+      );
+      this.anchorElement.setAttribute('aria-expanded', this._isOpen ? 'true' : 'false');
+    } else {
+      this.anchorElement.removeAttribute('tabindex');
+      this.anchorElement.removeAttribute('role');
+      this.anchorElement.removeAttribute('aria-label');
+      this.anchorElement.removeAttribute('aria-expanded');
+      if (this._isOpen && !this._isPinned) this.close();
+    }
+  }
+
   toggle(): void {
     if (this._isOpen) {
       this.close();
@@ -95,15 +151,21 @@ export class TimelinePreviewPanel {
     this.panelEl.classList.add('visible');
     this.toggleBtn?.classList.add('active');
     this.toggleBtn?.setAttribute('aria-pressed', 'true');
+    if (this._isCompactMode) this.anchorElement.setAttribute('aria-expanded', 'true');
     this.scrollActiveIntoView();
   }
 
   close(): void {
     if (!this._isOpen || !this.panelEl) return;
+    this.cancelLongPress();
+    this.longPressTriggeredTurnId = null;
+    this.suppressClickTurnId = null;
+    this.suppressClickUntil = 0;
     this._isOpen = false;
     this.panelEl.classList.remove('visible');
     this.toggleBtn?.classList.remove('active');
     this.toggleBtn?.setAttribute('aria-pressed', 'false');
+    if (this._isCompactMode) this.anchorElement.setAttribute('aria-expanded', 'false');
     if (this.searchInput) {
       this.searchInput.value = '';
       this.searchQuery = '';
@@ -113,10 +175,19 @@ export class TimelinePreviewPanel {
   }
 
   destroy(): void {
+    this.cancelLongPress();
+    this.longPressTriggeredTurnId = null;
+    this.suppressClickTurnId = null;
+    this.suppressClickUntil = 0;
     if (this.searchDebounceTimer) {
       clearTimeout(this.searchDebounceTimer);
       this.searchDebounceTimer = null;
     }
+    if (this.resizeDebounceTimer !== null) {
+      clearTimeout(this.resizeDebounceTimer);
+      this.resizeDebounceTimer = null;
+    }
+    this.cancelCompactClose();
     if (this.onDocumentPointerDown) {
       document.removeEventListener('pointerdown', this.onDocumentPointerDown);
       this.onDocumentPointerDown = null;
@@ -129,6 +200,63 @@ export class TimelinePreviewPanel {
       window.removeEventListener('resize', this.onWindowResize);
       this.onWindowResize = null;
     }
+    if (this.onListPointerDown) {
+      this.listEl?.removeEventListener('pointerdown', this.onListPointerDown);
+      this.onListPointerDown = null;
+    }
+    if (this.onListPointerLeave) {
+      this.listEl?.removeEventListener('pointerleave', this.onListPointerLeave);
+      this.onListPointerLeave = null;
+    }
+    if (this.onWindowPointerMove) {
+      window.removeEventListener('pointermove', this.onWindowPointerMove);
+      this.onWindowPointerMove = null;
+    }
+    if (this.onWindowPointerUp) {
+      window.removeEventListener('pointerup', this.onWindowPointerUp);
+      this.onWindowPointerUp = null;
+    }
+    if (this.onWindowPointerCancel) {
+      window.removeEventListener('pointercancel', this.onWindowPointerCancel);
+      this.onWindowPointerCancel = null;
+    }
+    if (this.onAnchorMouseEnter) {
+      this.anchorElement.removeEventListener('mouseenter', this.onAnchorMouseEnter);
+      this.onAnchorMouseEnter = null;
+    }
+    if (this.onAnchorMouseLeave) {
+      this.anchorElement.removeEventListener('mouseleave', this.onAnchorMouseLeave);
+      this.onAnchorMouseLeave = null;
+    }
+    if (this.onPanelMouseEnter && this.panelEl) {
+      this.panelEl.removeEventListener('mouseenter', this.onPanelMouseEnter);
+      this.onPanelMouseEnter = null;
+    }
+    if (this.onPanelMouseLeave && this.panelEl) {
+      this.panelEl.removeEventListener('mouseleave', this.onPanelMouseLeave);
+      this.onPanelMouseLeave = null;
+    }
+    if (this.onAnchorFocusIn) {
+      this.anchorElement.removeEventListener('focusin', this.onAnchorFocusIn);
+      this.onAnchorFocusIn = null;
+    }
+    if (this.onAnchorFocusOut) {
+      this.anchorElement.removeEventListener('focusout', this.onAnchorFocusOut);
+      this.onAnchorFocusOut = null;
+    }
+    if (this.onAnchorKeyDown) {
+      this.anchorElement.removeEventListener('keydown', this.onAnchorKeyDown);
+      this.onAnchorKeyDown = null;
+    }
+    if (this.onAnchorPointerDown) {
+      this.anchorElement.removeEventListener('pointerdown', this.onAnchorPointerDown);
+      this.onAnchorPointerDown = null;
+    }
+    if (this.onAnchorClick) {
+      this.anchorElement.removeEventListener('click', this.onAnchorClick);
+      this.onAnchorClick = null;
+    }
+    this.anchorWasOpenOnPointerDown = null;
     if (this.onStorageChanged) {
       browser.storage.onChanged.removeListener(this.onStorageChanged);
       this.onStorageChanged = null;
@@ -142,8 +270,13 @@ export class TimelinePreviewPanel {
     this.onSearchChange?.('');
     this.onNavigate = null;
     this.onSearchChange = null;
+    this.onToggleStar = null;
     this.markers = [];
     this.filteredMarkers = [];
+    this.anchorElement.removeAttribute('tabindex');
+    this.anchorElement.removeAttribute('role');
+    this.anchorElement.removeAttribute('aria-label');
+    this.anchorElement.removeAttribute('aria-expanded');
   }
 
   private createDOM(): void {
@@ -191,7 +324,12 @@ export class TimelinePreviewPanel {
       if (!this._isOpen) return;
       if (this._isPinned) return;
       const target = e.target as Node;
-      if (this.panelEl?.contains(target) || this.toggleBtn?.contains(target)) return;
+      if (
+        this.panelEl?.contains(target) ||
+        this.toggleBtn?.contains(target) ||
+        this.anchorElement.contains(target)
+      )
+        return;
       this.close();
     };
     document.addEventListener('pointerdown', this.onDocumentPointerDown);
@@ -207,12 +345,123 @@ export class TimelinePreviewPanel {
     };
     document.addEventListener('keydown', this.onKeyDown);
 
-    // Reposition on resize
+    this.onListPointerDown = (event: PointerEvent) => {
+      if (!this.onToggleStar || event.isPrimary === false) return;
+      if (typeof event.button === 'number' && event.button !== 0) return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const item = target.closest<HTMLElement>('.timeline-preview-item');
+      if (!item || !this.listEl?.contains(item)) return;
+
+      this.cancelLongPress();
+      this.longPressTriggeredTurnId = null;
+      this.pressTargetItem = item;
+      this.pressStartPosition = { x: event.clientX, y: event.clientY };
+      item.classList.add('holding');
+      this.longPressTimer = window.setTimeout(() => {
+        const pressedItem = this.pressTargetItem;
+        const turnId = pressedItem?.dataset.turnId;
+        this.longPressTimer = null;
+        this.pressTargetItem = null;
+        this.pressStartPosition = null;
+        pressedItem?.classList.remove('holding');
+        if (!turnId || !this.onToggleStar) return;
+
+        this.longPressTriggeredTurnId = turnId;
+        try {
+          void Promise.resolve(this.onToggleStar(turnId)).catch((error) => {
+            console.error('[TimelinePreviewPanel] Failed to toggle star:', error);
+          });
+        } catch (error) {
+          console.error('[TimelinePreviewPanel] Failed to toggle star:', error);
+        }
+      }, LONG_PRESS_DURATION_MS);
+    };
+    this.onListPointerLeave = () => this.cancelLongPress();
+    this.onWindowPointerMove = (event: PointerEvent) => {
+      if (!this.pressTargetItem || !this.pressStartPosition) return;
+      const dx = event.clientX - this.pressStartPosition.x;
+      const dy = event.clientY - this.pressStartPosition.y;
+      if (dx * dx + dy * dy > LONG_PRESS_MOVE_TOLERANCE_PX * LONG_PRESS_MOVE_TOLERANCE_PX) {
+        this.cancelLongPress();
+      }
+    };
+    this.onWindowPointerUp = () => {
+      if (this.longPressTriggeredTurnId) {
+        this.suppressClickTurnId = this.longPressTriggeredTurnId;
+        this.suppressClickUntil = Date.now() + LONG_PRESS_CLICK_SUPPRESSION_MS;
+        this.longPressTriggeredTurnId = null;
+      }
+      this.cancelLongPress();
+    };
+    this.onWindowPointerCancel = () => {
+      this.longPressTriggeredTurnId = null;
+      this.cancelLongPress();
+    };
+    this.listEl?.addEventListener('pointerdown', this.onListPointerDown);
+    this.listEl?.addEventListener('pointerleave', this.onListPointerLeave);
+    window.addEventListener('pointermove', this.onWindowPointerMove, { passive: true });
+    window.addEventListener('pointerup', this.onWindowPointerUp, { passive: true });
+    window.addEventListener('pointercancel', this.onWindowPointerCancel, { passive: true });
+
+    // Reposition on resize (debounced: positionPanel reads offsetHeight after
+    // writing styles, which forces layout — avoid doing that per resize event)
     this.onWindowResize = () => {
-      this.positionToggle();
-      if (this._isOpen) this.positionPanel();
+      if (this.resizeDebounceTimer !== null) clearTimeout(this.resizeDebounceTimer);
+      this.resizeDebounceTimer = window.setTimeout(() => {
+        this.resizeDebounceTimer = null;
+        this.positionToggle();
+        if (this._isOpen) this.positionPanel();
+      }, RESIZE_DEBOUNCE_MS);
     };
     window.addEventListener('resize', this.onWindowResize);
+
+    this.onAnchorMouseEnter = () => {
+      if (!this._isCompactMode) return;
+      this.cancelCompactClose();
+      this.open();
+    };
+    this.onAnchorMouseLeave = () => this.scheduleCompactClose();
+    this.onPanelMouseEnter = () => {
+      if (!this._isCompactMode) return;
+      this.cancelCompactClose();
+    };
+    this.onPanelMouseLeave = () => this.scheduleCompactClose();
+    this.onAnchorFocusIn = () => {
+      if (!this._isCompactMode) return;
+      this.cancelCompactClose();
+      this.open();
+    };
+    this.onAnchorFocusOut = () => this.scheduleCompactClose();
+    this.onAnchorKeyDown = (event: KeyboardEvent) => {
+      if (!this._isCompactMode || (event.key !== 'Enter' && event.key !== ' ')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.toggle();
+    };
+    this.onAnchorPointerDown = () => {
+      if (!this._isCompactMode) return;
+      // Pointer focus can open the panel before the subsequent click fires.
+      // Preserve the pre-click state so a closed rail still opens on touch.
+      this.anchorWasOpenOnPointerDown = this._isOpen;
+    };
+    this.onAnchorClick = (event: MouseEvent) => {
+      if (!this._isCompactMode) return;
+      event.stopPropagation();
+      const wasOpen = this.anchorWasOpenOnPointerDown ?? this._isOpen;
+      this.anchorWasOpenOnPointerDown = null;
+      if (wasOpen) this.close();
+      else this.open();
+    };
+    this.anchorElement.addEventListener('mouseenter', this.onAnchorMouseEnter);
+    this.anchorElement.addEventListener('mouseleave', this.onAnchorMouseLeave);
+    this.panelEl?.addEventListener('mouseenter', this.onPanelMouseEnter);
+    this.panelEl?.addEventListener('mouseleave', this.onPanelMouseLeave);
+    this.anchorElement.addEventListener('focusin', this.onAnchorFocusIn);
+    this.anchorElement.addEventListener('focusout', this.onAnchorFocusOut);
+    this.anchorElement.addEventListener('keydown', this.onAnchorKeyDown);
+    this.anchorElement.addEventListener('pointerdown', this.onAnchorPointerDown);
+    this.anchorElement.addEventListener('click', this.onAnchorClick);
 
     // Re-render translated text on language change
     this.onStorageChanged = (changes, areaName) => {
@@ -228,9 +477,31 @@ export class TimelinePreviewPanel {
     if (this.searchInput) {
       this.searchInput.placeholder = getTranslationSync('timelinePreviewSearch');
     }
+    if (this._isCompactMode) {
+      this.anchorElement.setAttribute(
+        'aria-label',
+        getTranslationSync('timelineCompactOpenPreview'),
+      );
+    }
     if (this._isOpen) {
       this.renderList();
     }
+  }
+
+  private scheduleCompactClose(): void {
+    if (!this._isCompactMode || this._isPinned) return;
+    this.cancelCompactClose();
+    this.compactCloseTimer = window.setTimeout(() => {
+      this.compactCloseTimer = null;
+      if (!this._isCompactMode || this._isPinned) return;
+      this.close();
+    }, COMPACT_CLOSE_DELAY_MS);
+  }
+
+  private cancelCompactClose(): void {
+    if (this.compactCloseTimer === null) return;
+    clearTimeout(this.compactCloseTimer);
+    this.compactCloseTimer = null;
   }
 
   private isRTLContext(): boolean {
@@ -281,7 +552,9 @@ export class TimelinePreviewPanel {
     const barRect = this.anchorElement.getBoundingClientRect();
     const panelWidth = 320;
     const gap = 12;
-    const maxHeight = Math.min(500, window.innerHeight * 0.7);
+    const maxHeight = this._isCompactMode
+      ? Math.min(700, window.innerHeight * 0.82)
+      : Math.min(500, window.innerHeight * 0.7);
     const barCenterY = barRect.top + barRect.height / 2;
     const isRTL = this.isRTLContext();
 
@@ -318,6 +591,10 @@ export class TimelinePreviewPanel {
     }
     if (this._isOpen) {
       this.renderList();
+      // Lazy-loaded history can grow the list after the panel has already been
+      // positioned. Re-measure it so the old top offset cannot push the newly
+      // taller panel below the viewport.
+      this.positionPanel();
     }
     this.onSearchChange?.(this.searchQuery);
   }
@@ -335,6 +612,7 @@ export class TimelinePreviewPanel {
 
   private renderList(): void {
     if (!this.listEl) return;
+    this.cancelLongPress();
     this.listEl.textContent = '';
 
     if (this.filteredMarkers.length === 0) {
@@ -390,11 +668,28 @@ export class TimelinePreviewPanel {
       item.appendChild(timeLabel);
     }
 
-    item.addEventListener('click', () => {
+    item.addEventListener('click', (event) => {
+      if (this.suppressClickTurnId === marker.id && Date.now() < this.suppressClickUntil) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.suppressClickTurnId = null;
+        this.suppressClickUntil = 0;
+        return;
+      }
       this.onNavigate?.(marker.id, marker.index);
     });
 
     return item;
+  }
+
+  private cancelLongPress(): void {
+    if (this.longPressTimer !== null) {
+      clearTimeout(this.longPressTimer);
+      this.longPressTimer = null;
+    }
+    this.pressTargetItem?.classList.remove('holding');
+    this.pressTargetItem = null;
+    this.pressStartPosition = null;
   }
 
   /** Split text around case-insensitive query matches and wrap each match in <mark>. */

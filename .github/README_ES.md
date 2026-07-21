@@ -1,9 +1,8 @@
 <div align="center">
-  <img src="../docs/public/assets/promotion/Promo-Banner.png" alt="promotion"/>
-  <h3>Haz que tu experiencia con Gemini™ sea verdaderamente tuya ✨</h3>
+  <img src="../docs/public/logo.png" alt="Voyager logo" width="120" height="120">
+  <h3>Haz que tu experiencia con chatbots de IA sea única ✨</h3>
   <p>
-    Navegación elegante por línea de tiempo, organización de chats con carpetas y tu propio depósito de prompts.<br>
-    <b>Es la pieza que le faltaba a Google Gemini.</b>
+    <b>Gemini · Claude · ChatGPT — por fin, completo.</b>
   </p>
   
   <p>
@@ -15,21 +14,25 @@
     <img src="https://img.shields.io/badge/Brave-✓-FB542B?style=flat-square&logo=brave&logoColor=white" alt="Brave">
   </p>
   <p>
-    <img src="https://img.shields.io/github/stars/Nagi-ovo/gemini-voyager?style=flat-square&logo=github" alt="GitHub stars">
-    <img src="https://img.shields.io/github/forks/Nagi-ovo/gemini-voyager?style=flat-square&logo=github" alt="GitHub forks">
-    <img src="https://img.shields.io/github/v/release/Nagi-ovo/gemini-voyager?style=flat-square&logo=github" alt="Latest version">
-    <img src="https://img.shields.io/github/downloads/Nagi-ovo/gemini-voyager/total?style=flat-square&logo=github" alt="GitHub downloads">
+    <img src="../badges/github-stars.svg" alt="GitHub stars">
+    <img src="../badges/github-forks.svg" alt="GitHub forks">
+    <img src="../badges/github-release.svg" alt="Latest version">
+    <img src="../badges/github-downloads.svg" alt="GitHub downloads">
     <img src="https://img.shields.io/chrome-web-store/users/iifacdnjakkhjjiengaffnegbndgingi?style=flat-square&logo=google-chrome" alt="Chrome Web Store users">
     <img src="https://img.shields.io/chrome-web-store/rating/iifacdnjakkhjjiengaffnegbndgingi?style=flat-square&logo=google-chrome" alt="Chrome Web Store rating">
+    <img src="https://img.shields.io/badge/edge%20users-50k%2B-0078D7?style=flat-square&logo=microsoftedge&logoColor=white" alt="Edge Add-ons users">
     <img src="https://img.shields.io/amo/users/gemini-voyager?style=flat-square&logo=firefox" alt="Firefox Add-ons users">
     <img src="https://img.shields.io/amo/rating/gemini-voyager?style=flat-square&logo=firefox" alt="Firefox Add-ons rating">
   </p>
   <p>
-    <a href="https://trendshift.io/repositories/16094" target="_blank"><img src="https://trendshift.io/api/badge/repositories/16094" alt="Nagi-ovo%2Fgemini-voyager | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-    <a href="https://www.producthunt.com/products/gemini-voyager?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-gemini-voyager" target="_blank" rel="noopener noreferrer"><img alt="Gemini Voyager - All-in-one Gemini suite: folders, chat export and much more | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1064704&amp;theme=light&amp;t=1768842096186"></a>
+    <a href="https://trendshift.io/repositories/16094" target="_blank"><img src="https://trendshift.io/api/badge/repositories/16094" alt="Nagi-ovo%2Fvoyager | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+    <a href="https://www.producthunt.com/products/gemini-voyager?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-gemini-voyager" target="_blank" rel="noopener noreferrer"><img alt="Voyager - AI conversation tools for Gemini, Claude, and ChatGPT | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1064704&amp;theme=light&amp;t=1768842096186"></a>
   </p>
-  <p align="center">
-    ✨ ¡Estamos en Product Hunt! Nos encantaría conocer tu opinión. ❤️
+  <p>
+    <a href="https://x.com/Nag1ovo" target="_blank"><img src="https://img.shields.io/badge/@Nag1ovo-000000?style=flat-square&logo=x&logoColor=white" alt="X"></a>
+    <a href="https://discord.gg/TEUFxdMbGb" target="_blank"><img src="https://img.shields.io/badge/Discord-Join-5865F2?style=flat-square&logo=discord&logoColor=white" alt="Discord"></a>
+    <a href="https://www.xiaohongshu.com/user/profile/5d366136000000001101950a" target="_blank"><img src="https://img.shields.io/badge/小红书-@卡普迪姆-FF2442?style=flat-square" alt="Xiaohongshu"></a>
+    <a href="https://space.bilibili.com/312249633" target="_blank"><img src="https://img.shields.io/badge/Bilibili-@卡普迪姆-FB7299?style=flat-square&logo=bilibili&logoColor=white" alt="Bilibili"></a>
   </p>
 </div>
 
@@ -46,29 +49,25 @@
   <a href="./README_KO.md">한국어</a>
 </p>
 
+<!-- Fable 5 Verified badge source: https://github.com/yetone/alma-releases/issues/56 (@yetone). -->
 <p align="center">
-    <img src="https://count.getloli.com/@gemini-voyager?name=gemini-voyager&theme=rule34&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto" width="400">
-  </p>
-
-<p align="center">
-  <a href="https://x.com/Nag1ovo/status/2024507762483277927?s=20" target="_blank">
-    <img src="../docs/public/assets/x-recommendation.png" alt="KOL Recommendation" width="500">
+  <a href="https://github.com/yetone/alma-releases/issues/56" target="_blank" rel="noopener noreferrer" title="Fable 5 Verified badge by @yetone" aria-label="Fable 5 Verified badge by @yetone">
+    <img src="../docs/public/assets/fable-5-verified.png" alt="Fable 5 Verified" width="360">
   </a>
-  <br>
-  <b>🎉 ¡Altamente recomendado por los principales influencers tecnológicos!</b>
 </p>
 
-> [!NOTE]
-> Si Voyager te resulta útil, compártelo en X, Reddit, YouTube, etc. Cada difusión ayuda a que más personas descubran el proyecto y mejoren la experiencia con Gemini. Gracias.
+<!-- <p align="center">
+    <img src="https://count.getloli.com/@gemini-voyager?name=gemini-voyager&theme=rule34&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto" width="400">
+  </p> -->
 
-> [!IMPORTANT]
-> Voyager fue retirado anteriormente de la Chrome Web Store debido a una disputa de marca comercial, lo que provocó la pérdida de todos los usuarios y reseñas acumulados. Ahora estamos de vuelta y reconstruyendo desde cero — si encuentras útil Voyager, dejar una valoración o reseña en la página de la tienda significaría mucho para nosotros.
+> [!NOTE]
+> Si Voyager te resulta útil, compártelo en X, Reddit, YouTube, etc. Cada difusión ayuda a que más personas descubran el proyecto. Gracias.
 
 ---
 
 ## 👋 ¿Por qué Voyager?
 
-Nos encanta Gemini, pero a veces desearíamos que tuviera un poco más de estructura.
+Nos encantan los chatbots de IA — Gemini, Claude, ChatGPT — pero a veces desearíamos que tuvieran un poco más de estructura.
 
 Por eso creamos **Voyager**. No es solo una herramienta; es un compañero que te ayuda a mantener tus conversaciones con IA organizadas, accesibles y productivas. Ya seas un investigador que maneja docenas de hilos, un desarrollador que guarda fragmentos de código, o simplemente alguien que ama el orden, Voyager está diseñado para ti.
 
@@ -99,7 +98,7 @@ Por eso creamos **Voyager**. No es solo una herramienta; es un compañero que te
 - **💾 [Exportación de Chat](https://voyager.nagi.fun/es/guide/export)**: Exporta conversaciones a JSON, Markdown o PDF con imágenes incluidas.
 - **🧜‍♀️ [Renderizado Mermaid](https://voyager.nagi.fun/es/guide/mermaid)**: Renderizado automático de diagramas de flujo, diagramas de secuencia y otros gráficos Mermaid.
 - **📝 [Corrección de Renderizado Markdown](https://voyager.nagi.fun/es/guide/markdown-fix)**: Corrige automáticamente la sintaxis de negrita de Markdown dañada por los elementos HTML inyectados por Gemini.
-- **🍌 [NanoBanana](https://voyager.nagi.fun/es/guide/nanobanana)**: Eliminación de marca de agua sin pérdida para imágenes generadas por Gemini.
+- **🍌 [Image Refinement](https://voyager.nagi.fun/es/guide/nanobanana)**: Eliminación de marca de agua sin pérdida para imágenes generadas por Gemini.
 - **🔬 [Deep Research](https://voyager.nagi.fun/es/guide/deep-research)**: Extrae procesos de pensamiento y enlaces de investigación de las sesiones de Deep Research.
 - **🛠️ Herramientas de Productividad**:
   - **[Eliminación por Lote](https://voyager.nagi.fun/es/guide/batch-delete)**: Limpia tu historial de forma masiva.
@@ -109,6 +108,14 @@ Por eso creamos **Voyager**. No es solo una herramienta; es un compañero que te
   - **[Colapso de Entrada](https://voyager.nagi.fun/es/guide/input-collapse)**: Área de entrada auto-colapsable para más espacio de lectura.
   - **[Modelo Predeterminado](https://voyager.nagi.fun/es/guide/default-model)**: Establece tu modelo preferido por defecto.
   - **[Ocultar elementos recientes y Gems](https://voyager.nagi.fun/es/guide/recents-hider)**: Oculta la lista "Recientes" en la barra lateral para reducir las distracciones.
+
+### 🔌 Claude & ChatGPT
+
+- **📍 Claude Timeline**: Barra lateral con mensajes destacados y búsqueda — la misma navegación, ahora en Claude.
+- **📊 Claude Usage Bar**: Rastrea tu uso de sesión y semanal directamente en la interfaz de Claude.
+- **📐 Copia de fórmulas**: Copia con un clic de códigos fuente LaTeX y MathML (compartido con Gemini).
+- **↔️ Ancho de lectura cómodo**: Ajusta el ancho del chat para una mejor experiencia de lectura en Claude y ChatGPT.
+- **🔤 Corrección CJK**: Soluciona problemas de renderizado de caracteres CJK en Claude.
 
 ### 🎨 Personalización
 
@@ -127,24 +134,22 @@ Por eso creamos **Voyager**. No es solo una herramienta; es un compañero que te
     <img src="https://img.shields.io/badge/Chrome%20Web%20Store-4285F4?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Chrome Web Store" height="36">
   </a>
   &nbsp;&nbsp;
-  <a href="https://microsoftedge.microsoft.com/addons/detail/gemini-voyager/gibmkggjijalcjinbdhcpklodjkhhlne" target="_blank">
-    <img src="https://img.shields.io/badge/Microsoft%20Edge-0078D7?style=for-the-badge&logo=microsoftedge&logoColor=white" alt="Microsoft Edge Add-ons" height="36">
-  </a>
+  <a href="https://microsoftedge.microsoft.com/addons/detail/voyager/gibmkggjijalcjinbdhcpklodjkhhlne" target="_blank"><img src="https://img.shields.io/badge/Edge%20Add--ons-0078D7?style=for-the-badge&logo=microsoftedge&logoColor=white" alt="Edge Add-ons" height="36"></a>
   &nbsp;&nbsp;
   <a href="https://addons.mozilla.org/firefox/addon/gemini-voyager/" target="_blank">
     <img src="https://img.shields.io/badge/Firefox%20Add--ons-FF7139?style=for-the-badge&logo=firefox&logoColor=white" alt="Firefox Add-ons" height="36">
   </a>
   &nbsp;&nbsp;
-  <a href="https://github.com/Nagi-ovo/gemini-voyager/releases/latest/" target="_blank">
+  <a href="https://github.com/Nagi-ovo/voyager/releases/latest/" target="_blank">
     <img src="https://img.shields.io/badge/Safari-000000?style=for-the-badge&logo=safari&logoColor=white" alt="Safari Descargar" height="36">
   </a>
 </div>
 
 <p align="center">
-  <sub><b>Chrome Web Store</b> también funciona en Edge, Opera, Brave, Vivaldi, Arc y otros navegadores Chromium.</sub>
+  <sub><b>Usuarios de Edge:</b> Voyager seguirá manteniendo y publicando la versión de Edge Add-ons para quienes necesitan Edge en móvil o tablet. Si la revisión se retrasa, siguen disponibles Chrome Web Store y los paquetes manuales de GitHub.</sub>
 </p>
 
-> **Estado de la Tienda:** Chrome ✅ · Firefox ✅ · Edge ✅ · Safari ✅
+> **Estado de la Tienda:** Chrome ✅ · Firefox ✅ · Safari ✅ · Edge ✅
 
 Para **instalación manual** o **compilaciones de desarrollo**, consulta la [Guía de Instalación](https://voyager.nagi.fun/es/guide/installation).
 
@@ -153,8 +158,8 @@ Para **instalación manual** o **compilaciones de desarrollo**, consulta la [Gu�
 ## ☕ Apoya este Proyecto
 
 <div align="center">
-  <a href="https://github.com/Nagi-ovo/gemini-voyager">
-    <img src="https://raw.githubusercontent.com/Nagi-ovo/gemini-voyager/main/docs/public/assets/sponsors.svg" width="1000px" />
+  <a href="https://github.com/Nagi-ovo/voyager">
+    <img src="https://raw.githubusercontent.com/Nagi-ovo/voyager/main/docs/public/assets/sponsors.svg" width="1000px" />
   </a>
 </div>
 
@@ -203,11 +208,11 @@ Recomiendo encarecidamente **[Typeless (typeless.com)](https://www.typeless.com/
 
 ## 🤝 Contribución y Desarrollo
 
-[<img src="https://devin.ai/assets/askdeepwiki.png" alt="Ask DeepWiki" height="20"/>](https://deepwiki.com/Nagi-ovo/gemini-voyager)
+[<img src="https://devin.ai/assets/askdeepwiki.png" alt="Ask DeepWiki" height="20"/>](https://deepwiki.com/Nagi-ovo/voyager)
 
 ¡Damos la bienvenida a las contribuciones!
 
-- **Issues**: Usa nuestras plantillas de [informe de errores](https://github.com/Nagi-ovo/gemini-voyager/blob/main/.github/ISSUE_TEMPLATE/bug_report.md) o [solicitud de funcionalidades](https://github.com/Nagi-ovo/gemini-voyager/blob/main/.github/ISSUE_TEMPLATE/feature_request.yml).
+- **Issues**: Usa nuestras plantillas de [informe de errores](https://github.com/Nagi-ovo/voyager/blob/main/.github/ISSUE_TEMPLATE/bug_report.md) o [solicitud de funcionalidades](https://github.com/Nagi-ovo/voyager/blob/main/.github/ISSUE_TEMPLATE/feature_request.yml).
 - **Pull Requests**: Revisa [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ¡Gracias por ayudar a que Voyager sea mejor! ❤️
@@ -216,23 +221,31 @@ Recomiendo encarecidamente **[Typeless (typeless.com)](https://www.typeless.com/
 
 Un agradecimiento especial a todos los colaboradores por sus contribuciones a Voyager ❤️
 
-<a href="https://github.com/Nagi-ovo/gemini-voyager/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=Nagi-ovo/gemini-voyager&max=200&columns=14" />
+<a href="https://github.com/Nagi-ovo/voyager/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=Nagi-ovo/voyager&max=200&columns=14" />
 </a>
 
 ---
 
 ## 🌟 Créditos
 
-- **[gemini-watermark-remover](https://github.com/journey-ad/gemini-watermark-remover) / [GeminiWatermarkTool](https://github.com/allenk/GeminiWatermarkTool)** - NanoBanana está adaptado de estos proyectos. Los avisos MIT de terceros conservados están en [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
+> Voyager es un pequeño proyecto personal. Prefiero dedicar mi tiempo a construir cosas que ayuden a la gente que a crear rutas de migración diseñadas para alejar usuarios de otras extensiones.
+
+- **[ChatGPT Conversation Timeline](https://github.com/Reborn14/chatgpt-conversation-timeline)** - La fuente original de inspiración para este proyecto.
+
+- **[gemini-watermark-remover](https://github.com/journey-ad/gemini-watermark-remover) / [GeminiWatermarkTool](https://github.com/allenk/GeminiWatermarkTool)** - Image Refinement está adaptado de estos proyectos. Los avisos MIT de terceros conservados están en [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
+
+- **[Gemini Helper](https://github.com/urzeye/tampermonkey-scripts)** - La lógica de bloqueo del modelo predeterminado incluye ideas de interacción adaptadas de Gemini Helper, con atribución conservada en el código fuente.
+
+## 🌍 Ecosistema
+
+Proyectos inspirados por Voyager:
+
+Si tu proyecto está inspirado en Voyager, es un fork directo o está construido sobre Voyager, no dudes en abrir un PR para añadirlo aquí.
 
 - **[DeepSeek Voyager](https://github.com/Azurboy/deepseek-voyager)** - Un fork de Voyager adaptado para DeepSeek.
 
 - **[claude-nexus](https://github.com/Qiuner/claude-nexus)** - Una extensión de mejora para Claude.ai inspirada en Voyager, con navegación de línea de tiempo, gestión de carpetas, biblioteca de prompts y más, con compatibilidad total de importación/exportación de prompts con Voyager.
-
-- **[ChatGPT Conversation Timeline](https://github.com/Reborn14/chatgpt-conversation-timeline)** - La fuente original de inspiración para la navegación por línea de tiempo.
-
-- **[Ophel Atlas](https://github.com/urzeye/ophel)** - Una extensión de navegador que transforma las conversaciones de IA en documentos organizados y buscables, con esquemas autogenerados, gestión de conversaciones y biblioteca de prompts, compatible con múltiples plataformas de IA.
 
 - **[Better_Doubao](https://github.com/Rex16200513/Better_Doubao)** - Una extensión de navegador avanzada que potencia Doubao con navegación mejorada, organización y funciones de productividad.
 
@@ -241,16 +254,18 @@ Un agradecimiento especial a todos los colaboradores por sus contribuciones a Vo
 ## 📄 Licencia
 
 Voyager se distribuye bajo **GPL-3.0**.
-Los avisos MIT de terceros conservados para el código y los recursos relacionados con NanoBanana están en [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
+Los avisos MIT de terceros conservados para el código y los recursos relacionados con Image Refinement están en [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
+
+Gemini es una marca registrada de Google LLC. Claude es una marca registrada de Anthropic, PBC. ChatGPT es una marca registrada de OpenAI, Inc. Voyager es un proyecto independiente, sin afiliación, respaldo ni patrocinio de estas empresas.
 
 ---
 
 <div align="center">
-  <a href="https://www.star-history.com/#Nagi-ovo/gemini-voyager&type=date&legend=top-left">
+  <a href="https://www.star-history.com/#Nagi-ovo/voyager&type=date&legend=top-left">
    <picture>
-     <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Nagi-ovo/gemini-voyager&type=date&theme=dark&legend=top-left" />
-     <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Nagi-ovo/gemini-voyager&type=date&legend=top-left" />
-     <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Nagi-ovo/gemini-voyager&type=date&legend=top-left" />
+     <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Nagi-ovo/voyager&type=date&theme=dark&legend=top-left" />
+     <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Nagi-ovo/voyager&type=date&legend=top-left" />
+     <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Nagi-ovo/voyager&type=date&legend=top-left" />
    </picture>
   </a>
   <p>Hecho con ❤️ por Jesse Zhang</p>

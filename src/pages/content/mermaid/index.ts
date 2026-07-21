@@ -365,7 +365,30 @@ const openFullscreen = (svgHtml: string) => {
     applyTransform();
   };
 
+  let closing = false;
+  const handleMouseMove = (e: MouseEvent) => {
+    if (!isDragging) return;
+    translateX = e.clientX - startX;
+    translateY = e.clientY - startY;
+    applyTransform();
+  };
+  const handleMouseUp = () => {
+    isDragging = false;
+    content.classList.remove('dragging');
+  };
+  const handleKeyDown = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') closeModal();
+  };
+  const removeDocumentListeners = () => {
+    document.removeEventListener('keydown', handleKeyDown);
+    document.removeEventListener('mousemove', handleMouseMove);
+    document.removeEventListener('mouseup', handleMouseUp);
+  };
   const closeModal = () => {
+    if (closing) return;
+    closing = true;
+    removeDocumentListeners();
+    handleMouseUp();
     modal.classList.remove('visible');
     setTimeout(() => {
       modal.remove();
@@ -385,12 +408,6 @@ const openFullscreen = (svgHtml: string) => {
   });
 
   // ESC to close
-  const handleKeyDown = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      closeModal();
-      document.removeEventListener('keydown', handleKeyDown);
-    }
-  };
   document.addEventListener('keydown', handleKeyDown);
 
   // Mouse wheel zoom
@@ -416,17 +433,8 @@ const openFullscreen = (svgHtml: string) => {
     content.classList.add('dragging');
   });
 
-  document.addEventListener('mousemove', (e) => {
-    if (!isDragging) return;
-    translateX = e.clientX - startX;
-    translateY = e.clientY - startY;
-    applyTransform();
-  });
-
-  document.addEventListener('mouseup', () => {
-    isDragging = false;
-    content.classList.remove('dragging');
-  });
+  document.addEventListener('mousemove', handleMouseMove);
+  document.addEventListener('mouseup', handleMouseUp);
 
   // Auto-fit SVG to viewport
   const svgElement = content.querySelector('svg');
@@ -451,6 +459,9 @@ const openFullscreen = (svgHtml: string) => {
     modal.classList.add('visible');
   });
 };
+
+/** @internal Exported for lifecycle testing. */
+export const _openFullscreenForTest = openFullscreen;
 
 /**
  * Normalize whitespace characters in Mermaid code
@@ -479,11 +490,58 @@ export const normalizeWhitespace = (code: string): string => {
 };
 
 /**
+ * Repair a small set of unambiguous Mermaid mistakes commonly produced by
+ * models. Keep these rules narrow so valid diagram text is not rewritten.
+ *
+ * @internal Exported for testing
+ */
+export const normalizeMermaidCode = (code: string): string => {
+  const lines = normalizeWhitespace(code).split('\n');
+  const hasActivationParticipant = lines.some((line) =>
+    /^\s*(?:actor|participant)\s+激活(?:\s+as\b|\s*$)/i.test(line),
+  );
+  const lastDeactivationByParticipant = new Map<string, number>();
+
+  lines.forEach((line, index) => {
+    const match = line.match(/^\s*deactivate\s+(\S+)\s*$/i);
+    if (match) lastDeactivationByParticipant.set(match[1], index);
+  });
+
+  return lines
+    .flatMap((line, index) => {
+      const activationMatch = line.match(/^(\s*)激活\s*->>\s*([^:\s]+)\s*:\s*$/);
+      if (
+        activationMatch &&
+        !hasActivationParticipant &&
+        (lastDeactivationByParticipant.get(activationMatch[2]) ?? -1) > index
+      ) {
+        return [`${activationMatch[1]}activate ${activationMatch[2]}`];
+      }
+
+      const subgraphMatch = line.match(
+        /^(\s*subgraph\s+)([^"[\]\r\n]*\([^"[\]\r\n]*\)[^"[\]\r\n]*)\s*$/i,
+      );
+      if (subgraphMatch) {
+        return [`${subgraphMatch[1]}"${subgraphMatch[2].trim()}"`];
+      }
+
+      const trailingCommentMatch = line.match(
+        /^(\s*)((?:classDef|class|style|linkStyle)\b.*?;\s*)%%(.*)$/i,
+      );
+      if (!trailingCommentMatch) return [line];
+
+      const [, indent, statement, comment] = trailingCommentMatch;
+      return [`${indent}${statement.trimEnd()}`, `${indent}%%${comment}`];
+    })
+    .join('\n');
+};
+
+/**
  * Render Mermaid diagram for a code block
  */
 const renderMermaid = async (codeBlock: HTMLElement, code: string) => {
-  // Normalize whitespace before processing
-  const normalizedCode = normalizeWhitespace(code);
+  // Normalize common copy/paste and model-output issues before processing.
+  const normalizedCode = normalizeMermaidCode(code);
   if (codeBlock.dataset.mermaidCode === normalizedCode) return;
   if (codeBlock.dataset.mermaidProcessing === 'true') return;
 

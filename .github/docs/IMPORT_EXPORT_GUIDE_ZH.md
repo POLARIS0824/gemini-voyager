@@ -151,9 +151,9 @@ A: 支持！只需在一个浏览器导出，在另一个浏览器导入即可�
 - **去重策略**: 按 `id` 和 `conversationId` 去重
 - **文件编码**: UTF-8
 - **最大文件大小**: 理论无限制（受浏览器内存限制）
-- **兼容性**: Chrome 88+, Firefox 85+, Safari 14+
+- **兼容性**: Chrome 88+, Firefox 85+, Safari 15.4+
 
 ## 反馈与支持
 
 如有问题或建议，请访问：
-https://github.com/Nagi-ovo/gemini-voyager/issues/36
+https://github.com/Nagi-ovo/voyager/issues/36

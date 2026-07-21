@@ -20,11 +20,11 @@ The folder manager allows users to:
 - **`index.ts`** - Entry point that initializes the folder manager
 - **`README.md`** - This file
 
-[<img src="https://devin.ai/assets/askdeepwiki.png" alt="Ask DeepWiki" height="20"/>](https://deepwiki.com/Nagi-ovo/gemini-voyager)
+[<img src="https://devin.ai/assets/askdeepwiki.png" alt="Ask DeepWiki" height="20"/>](https://deepwiki.com/Nagi-ovo/voyager)
 
 ## Adding Support for New Gems
 
-[<img src="https://devin.ai/assets/askdeepwiki.png" alt="Ask DeepWiki" height="20"/>](https://deepwiki.com/Nagi-ovo/gemini-voyager)
+[<img src="https://devin.ai/assets/askdeepwiki.png" alt="Ask DeepWiki" height="20"/>](https://deepwiki.com/Nagi-ovo/voyager)
 
 To add support for a new Gem (either official Google Gems or custom Gems):
 
@@ -83,7 +83,7 @@ If you're adding support for a new official Google Gem, please submit a pull req
 
 ## Technical Details
 
-[<img src="https://devin.ai/assets/askdeepwiki.png" alt="Ask DeepWiki" height="20"/>](https://deepwiki.com/Nagi-ovo/gemini-voyager)
+[<img src="https://devin.ai/assets/askdeepwiki.png" alt="Ask DeepWiki" height="20"/>](https://deepwiki.com/Nagi-ovo/voyager)
 
 ### Gem Detection
 
@@ -97,6 +97,18 @@ The folder manager detects Gem conversations by analyzing the `jslog` attribute:
 - Regular conversations: `/app/{hex-id}`
 - Gem conversations: `/gem/{gem-id}/{hex-id}`
 - Multi-account support: `/u/{account-number}/...`
+
+### AI Studio History Drag Sources
+
+AI Studio exposes saved prompts in two shapes:
+
+- `/library` table rows
+- V2 left-nav History hover popovers rendered as body-level overlays
+
+Both paths must populate Voyager's JSON drag payload before a prompt is dropped into a folder.
+The payload includes the prompt id, title, and URL; if a browser native URL drag reaches the
+folder without that JSON payload, the folder can only recover the id and must fall back to the
+localized untitled label.
 
 ### Icon Mapping
 

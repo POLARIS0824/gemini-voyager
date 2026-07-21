@@ -49,8 +49,8 @@ AI ツールは優れたアシスタントですが、「怠惰な」コピー�
 
 ```bash
 # リポジトリをクローン
-git clone https://github.com/Nagi-ovo/gemini-voyager.git
-cd gemini-voyager
+git clone https://github.com/Nagi-ovo/voyager.git
+cd voyager
 
 # 依存関係をインストール
 bun install
@@ -71,13 +71,23 @@ bun run dev
 
 ### 2. Issue を担当する
 
-未割り当ての Issue に `/claim` とコメントすると、自動的にあなた自身が担当者に割り当てられます。ボットが割り当てを確認します。
+`community-only` ラベルが付いていない未割り当ての Issue では、`/claim` とコメントすると自動的に担当者へ割り当てられます。ボットが割り当てを確認します。
 
-### 3. 必要に応じて担当を解除
+### 3. コミュニティ限定 Issue
+
+`community-only` ラベルの Issue は、確認済みの Voyager コミュニティメンバー専用です：
+
+1. コミュニティメンバーが `/claim` とコメントします。
+2. メンテナーがメンバー資格を確認し、`/approve @username` とコメントします。
+3. ボットによる割り当て後に実装や PR の作成を開始してください。
+
+このラベルを付けると、`help wanted` と `good first issue` は自動的に削除されます。その他のコントリビューターは [Voyager Discord](https://discord.gg/TEUFxdMbGb) に参加するか、`community-only` のない Issue を選択してください。
+
+### 4. 必要に応じて担当を解除
 
 Issue に取り組めなくなった場合は、`/unclaim` とコメントして、他の人のために解放してください。
 
-### 4. 貢献のチェックボックス
+### 5. 貢献のチェックボックス
 
 Issue を作成する際、「I am willing to contribute code」チェックボックスをオンにして、機能の実装や修正に興味があることを示すことができます。
 
@@ -109,7 +119,7 @@ bun install
 1. `bun run dev` を実行して開発ビルドを開始します
 2. Chrome を開き、`chrome://extensions/` に移動します
 3. 「デベロッパー モード」を有効にします
-4. 「パッケージ化されていない拡張機能を読み込む」をクリックし、`dist_chrome` フォルダを選択します
+4. 「パッケージ化されていない拡張機能を読み込む」をクリックし、`dist_chrome_dev` フォルダを選択します
 
 ---
 
@@ -272,9 +282,9 @@ Voyager は、以下の機能で Gemini AI チャット体験を向上させま�
 
 ## ヘルプを得る
 
-- 💬 [GitHub Discussions](https://github.com/Nagi-ovo/gemini-voyager/discussions) - 質問する
-- 🐛 [Issues](https://github.com/Nagi-ovo/gemini-voyager/issues) - バグを報告する
-- 📖 [ドキュメント](https://gemini-voyager.vercel.app/) - ドキュメントを読む
+- 💬 [GitHub Discussions](https://github.com/Nagi-ovo/voyager/discussions) - 質問する
+- 🐛 [Issues](https://github.com/Nagi-ovo/voyager/issues) - バグを報告する
+- 📖 [ドキュメント](https://voyager.nagi.fun/) - ドキュメントを読む
 
 ---
 

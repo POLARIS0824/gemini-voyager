@@ -91,6 +91,35 @@ describe('ImageExportService', () => {
     expect(global.URL.createObjectURL).not.toHaveBeenCalled();
   });
 
+  it('renders uploaded file placeholders in image exports', async () => {
+    let renderedAttachmentText = '';
+    let renderedStyles = '';
+    const userElement = document.createElement('div');
+    userElement.innerHTML = `
+      <user-query-file-preview>
+        <div data-test-id="uploaded-file">
+          <button class="new-file-preview-file" aria-label="proposal.pdf">PDF</button>
+        </div>
+      </user-query-file-preview>
+    `;
+    (toBlob as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      async (node: HTMLElement) => {
+        renderedAttachmentText = node.querySelector('.gv-export-attachment')?.textContent ?? '';
+        renderedStyles = node.parentElement?.querySelector('style')?.textContent ?? '';
+        return new Blob(['x'], { type: 'image/png' });
+      },
+    );
+
+    await ImageExportService.renderConversationBlob(
+      [{ user: '', assistant: 'Reviewed', starred: false, userElement }],
+      mockMetadata,
+      {},
+    );
+
+    expect(renderedAttachmentText).toContain('proposal.pdf');
+    expect(renderedStyles).toContain('.gv-image-export-content .gv-export-attachment');
+  });
+
   it('retries transient image render failures on Chrome and succeeds', async () => {
     (toBlob as unknown as ReturnType<typeof vi.fn>).mockReset();
     (toBlob as unknown as ReturnType<typeof vi.fn>)
@@ -134,6 +163,19 @@ describe('ImageExportService', () => {
     expect(capturedStyle).toContain('line-height: 1.9;');
     expect(capturedStyle).toContain('font-size: 50px;');
     expect(capturedStyle).toContain('max-width: 100%;');
+    expect(capturedStyle).toContain('.gv-image-export-doc .katex .base');
+    expect(capturedStyle).toContain('white-space: nowrap;');
+    expect(capturedStyle).toContain('width: min-content;');
+    expect(capturedStyle).toContain('.gv-image-export-doc .katex .vlist > span');
+    expect(capturedStyle).toContain('height: 0;');
+    expect(capturedStyle).toContain('.gv-image-export-doc .katex .mfrac .frac-line');
+    expect(capturedStyle).toContain('.gv-image-export-doc .katex .sqrt > .root');
+    expect(capturedStyle).toContain('.gv-image-export-doc .katex svg');
+    expect(capturedStyle).toContain('fill: currentColor;');
+    expect(capturedStyle).toContain('.gv-image-export-doc .katex img.katex-svg');
+    expect(capturedStyle).toContain('max-width: none;');
+    expect(capturedStyle).toContain('object-fit: fill;');
+    expect(capturedStyle).toContain('.gv-image-export-doc .katex .hide-tail');
   });
 
   it('retries image render without img elements on Safari when primary render fails', async () => {
@@ -208,5 +250,73 @@ describe('ImageExportService', () => {
 
     expect(capturedWidth).toBe('1360px');
     expect(capturedFontSize).toBe('24px');
+  });
+
+  it('fetches blob: image URLs so dom-to-image can rasterize generated images', async () => {
+    // Reproduces the "export to image misses generated images" issue: Gemini
+    // renders generated images with blob: URLs that don't survive the
+    // dom-to-image SVG sandbox. inlineImages must fetch them — previously the
+    // blob: branch was short-circuited by the `^https?:` guard. The end-to-end
+    // chain (fetch → Response.blob → FileReader.readAsDataURL) depends on
+    // jsdom polyfills that vary between local and CI runs, so we assert only
+    // the load-bearing fact: our code DID call fetch with the blob URL.
+    const assistantElement = document.createElement('div');
+    assistantElement.innerHTML =
+      '<message-content><div class="markdown"><p>Look:</p><img src="blob:https://gemini.google.com/abc" alt="plain" /></div></message-content>';
+
+    const turns: ChatTurn[] = [
+      { user: 'show me', assistant: 'here', starred: false, assistantElement },
+    ];
+
+    const fetchedUrls: string[] = [];
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn(async (url: string | URL | Request) => {
+      fetchedUrls.push(String(url));
+      return new Response(new Blob(['fake'], { type: 'image/png' }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    (toBlob as unknown as ReturnType<typeof vi.fn>).mockReset();
+    (toBlob as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
+      new Blob(['x'], { type: 'image/png' }),
+    );
+
+    try {
+      await ImageExportService.export(turns, mockMetadata, { filename: 'gen.png' });
+    } finally {
+      global.fetch = originalFetch;
+    }
+
+    expect(fetchedUrls).toContain('blob:https://gemini.google.com/abc');
+  });
+
+  it('leaves data: image URLs untouched (no extra fetch round-trips)', async () => {
+    const assistantElement = document.createElement('div');
+    assistantElement.innerHTML =
+      '<message-content><div class="markdown"><img src="data:image/png;base64,UFJFMQ==" alt="inline" /></div></message-content>';
+
+    const turns: ChatTurn[] = [
+      { user: 'inline', assistant: 'ok', starred: false, assistantElement },
+    ];
+
+    const fetchSpy = vi.fn(async () => new Response(new Blob([]), { status: 200 }));
+    const originalFetch = global.fetch;
+    global.fetch = fetchSpy as unknown as typeof fetch;
+
+    (toBlob as unknown as ReturnType<typeof vi.fn>).mockReset();
+    (toBlob as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
+      new Blob(['x'], { type: 'image/png' }),
+    );
+
+    try {
+      await ImageExportService.export(turns, mockMetadata, { filename: 'pass.png' });
+    } finally {
+      global.fetch = originalFetch;
+    }
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    const capturedContainer = (toBlob as unknown as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as HTMLElement;
+    const img = capturedContainer.querySelector('img') as HTMLImageElement | null;
+    expect(img?.getAttribute('src') || img?.src).toBe('data:image/png;base64,UFJFMQ==');
   });
 });

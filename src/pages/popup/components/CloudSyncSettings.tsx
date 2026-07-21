@@ -10,15 +10,19 @@ import { restoreBackupableSyncSettings } from '@/core/services/SettingsBackupSer
 import { StorageKeys } from '@/core/types/common';
 import type { FolderData } from '@/core/types/folder';
 import type {
+  PluginStateExportPayload,
   PromptItem,
   SettingsExportPayload,
   SyncAccountScope,
   SyncMode,
   SyncPlatform,
+  SyncProvider,
   SyncState,
 } from '@/core/types/sync';
 import { DEFAULT_SYNC_STATE } from '@/core/types/sync';
-import { isSafari } from '@/core/utils/browser';
+import { getVoyagerBuildTarget, isSafari } from '@/core/utils/browser';
+import { deleteSafariICloudBackup } from '@/core/utils/safariICloudSync';
+import { restorePluginState } from '@/features/plugins/storage/pluginState';
 import {
   getTimelineHierarchyStorageKey,
   getTimelineHierarchyStorageKeysToRead,
@@ -30,6 +34,7 @@ import type { StarredMessagesData } from '@/pages/content/timeline/starredTypes'
 import { Button } from '../../../components/ui/button';
 import { Card, CardContent, CardTitle } from '../../../components/ui/card';
 import { Label } from '../../../components/ui/label';
+import { Switch } from '../../../components/ui/switch';
 import { useLanguage } from '../../../contexts/LanguageContext';
 import {
   mergeFolderData,
@@ -46,6 +51,18 @@ function isFolderData(value: unknown): value is FolderData {
     typeof data.folderContents === 'object' &&
     data.folderContents !== null
   );
+}
+
+function parseStoredFolderData(value: unknown): FolderData | null {
+  if (isFolderData(value)) return value;
+  if (typeof value !== 'string') return null;
+
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isFolderData(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 function isPromptItemArray(value: unknown): value is PromptItem[] {
@@ -79,21 +96,37 @@ function isTimelineHierarchyData(value: unknown): value is TimelineHierarchyData
   return typeof conversations === 'object' && conversations !== null;
 }
 
+type DownloadMode = 'merge' | 'overwrite';
+
 /**
  * CloudSyncSettings component for popup
  * Allows users to configure Google Drive sync settings
  */
-export function CloudSyncSettings() {
+interface CloudSyncSettingsProps {
+  sourceTabId?: number;
+}
+
+const PLATFORM_LOGO_URLS: Record<SyncPlatform, string> = {
+  gemini: 'https://www.gstatic.com/lamda/images/gemini_sparkle_4g_512_lt_f94943af3be039176192d.png',
+  aistudio:
+    'https://www.gstatic.com/images/branding/productlogos/ai_studio/v1/web-512dp/logo_ai_studio_color_1x_web_512dp.png',
+};
+
+export function CloudSyncSettings({ sourceTabId }: CloudSyncSettingsProps = {}) {
   const { t } = useLanguage();
-  const isSafariBrowser = isSafari();
+  const supportsICloud = getVoyagerBuildTarget() === 'safari' || isSafari();
 
   const [syncState, setSyncState] = useState<SyncState>(DEFAULT_SYNC_STATE);
-  const [statusMessage, setStatusMessage] = useState<{ text: string; kind: 'ok' | 'err' } | null>(
-    null,
-  );
+  const [statusMessage, setStatusMessage] = useState<{
+    text: string;
+    kind: 'ok' | 'warn' | 'err';
+  } | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isDeletingICloudBackup, setIsDeletingICloudBackup] = useState(false);
+  const [downloadMode, setDownloadMode] = useState<DownloadMode | null>(null);
   const [platform, setPlatform] = useState<SyncPlatform>('gemini');
+  const [highlightSyncEnabled, setHighlightSyncEnabled] = useState(true);
 
   const getBaseFolderStorageKey = useCallback(
     (targetPlatform: SyncPlatform) =>
@@ -101,16 +134,27 @@ export function CloudSyncSettings() {
     [],
   );
 
+  const getTargetTab = useCallback(async (): Promise<chrome.tabs.Tab | undefined> => {
+    if (typeof sourceTabId === 'number') {
+      try {
+        return await chrome.tabs.get(sourceTabId);
+      } catch {}
+    }
+
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    return tab;
+  }, [sourceTabId]);
+
   // Detect current platform from active tab URL
   const detectPlatform = useCallback(async (): Promise<SyncPlatform> => {
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const tab = await getTargetTab();
       return detectAccountPlatformFromUrl(tab?.url ?? null);
     } catch (e) {
       console.warn('[CloudSyncSettings] Failed to detect platform:', e);
     }
     return 'gemini';
-  }, []);
+  }, [getTargetTab]);
 
   const resolveCurrentPageSyncScope = useCallback(
     async (respectIsolationSetting: boolean): Promise<SyncAccountScope | null> => {
@@ -124,9 +168,10 @@ export function CloudSyncSettings() {
       let pageUrl = '';
       let routeUserId: string | null = null;
       let email: string | null = null;
+      let pageContextAvailable = false;
 
       try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const tab = await getTargetTab();
         pageUrl = tab?.url || '';
         routeUserId = platform === 'gemini' ? extractRouteUserIdFromUrl(pageUrl) : null;
 
@@ -141,6 +186,7 @@ export function CloudSyncSettings() {
             };
 
             if (response?.ok && response.context) {
+              pageContextAvailable = true;
               routeUserId = response.context.routeUserId ?? routeUserId;
               email = response.context.email ?? null;
             }
@@ -152,7 +198,7 @@ export function CloudSyncSettings() {
         // Ignore tab query failure; account service will fallback to default scope.
       }
 
-      if (!routeUserId && !email) {
+      if (!routeUserId && !email && !pageContextAvailable) {
         return null;
       }
 
@@ -168,7 +214,7 @@ export function CloudSyncSettings() {
         routeUserId: resolvedScope.routeUserId,
       };
     },
-    [platform],
+    [getTargetTab, platform],
   );
 
   const resolveAccountSyncContext = useCallback(async (): Promise<{
@@ -212,10 +258,16 @@ export function CloudSyncSettings() {
   useEffect(() => {
     const fetchState = async () => {
       try {
-        const response = await chrome.runtime.sendMessage({ type: 'gv.sync.getState' });
+        const [response, highlightSetting] = await Promise.all([
+          chrome.runtime.sendMessage({ type: 'gv.sync.getState' }),
+          chrome.storage.local.get({ [StorageKeys.HIGHLIGHT_CLOUD_SYNC_ENABLED]: true }),
+        ]);
         if (response?.ok && response.state) {
           setSyncState(response.state);
         }
+        setHighlightSyncEnabled(
+          highlightSetting[StorageKeys.HIGHLIGHT_CLOUD_SYNC_ENABLED] !== false,
+        );
       } catch (error) {
         console.error('[CloudSyncSettings] Failed to get sync state:', error);
       }
@@ -302,6 +354,33 @@ export function CloudSyncSettings() {
     }
   }, []);
 
+  const handleProviderChange = useCallback(async (provider: SyncProvider) => {
+    setStatusMessage(null);
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'gv.sync.setProvider',
+        payload: { provider },
+      });
+      if (response?.ok && response.state) {
+        setSyncState(response.state);
+      }
+    } catch (error) {
+      console.error('[CloudSyncSettings] Failed to set sync provider:', error);
+    }
+  }, []);
+
+  const handleHighlightSyncChange = useCallback(async (enabled: boolean) => {
+    setHighlightSyncEnabled(enabled);
+    try {
+      await chrome.storage.local.set({
+        [StorageKeys.HIGHLIGHT_CLOUD_SYNC_ENABLED]: enabled,
+      });
+    } catch (error) {
+      setHighlightSyncEnabled(!enabled);
+      console.error('[CloudSyncSettings] Failed to save highlight sync setting:', error);
+    }
+  }, []);
+
   // Handle sign out
   const handleSignOut = useCallback(async () => {
     try {
@@ -314,6 +393,28 @@ export function CloudSyncSettings() {
     }
   }, []);
 
+  const handleDeleteICloudBackup = useCallback(async () => {
+    if (!window.confirm(t('syncDeleteICloudConfirm'))) return;
+
+    setStatusMessage(null);
+    setIsDeletingICloudBackup(true);
+    try {
+      const deleted = await deleteSafariICloudBackup();
+      setStatusMessage({
+        text: t('syncDeleteICloudSuccess').replace('{count}', String(deleted)),
+        kind: 'ok',
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatusMessage({
+        text: t('syncDeleteICloudFailed').replace('{error}', message),
+        kind: 'err',
+      });
+    } finally {
+      setIsDeletingICloudBackup(false);
+    }
+  }, [t]);
+
   // Handle sync now (upload current data)
   const handleSyncNow = useCallback(async () => {
     setStatusMessage(null);
@@ -322,6 +423,10 @@ export function CloudSyncSettings() {
     try {
       const accountContext = await resolveAccountSyncContext();
       const timelineHierarchyContext = await resolveTimelineHierarchySyncContext();
+      const highlightAccountScope =
+        platform === 'gemini' && highlightSyncEnabled
+          ? await resolveCurrentPageSyncScope(false)
+          : null;
       let accountScope = accountContext.accountScope;
       let folderStorageKey = accountContext.folderStorageKey;
       const timelineHierarchyAccountScope = timelineHierarchyContext.accountScope;
@@ -332,7 +437,7 @@ export function CloudSyncSettings() {
 
       // 1. Try to get fresh folder data from active tab
       try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const tab = await getTargetTab();
         if (tab?.id) {
           // Short timeout to avoid blocking
           const response = (await Promise.race([
@@ -362,15 +467,12 @@ export function CloudSyncSettings() {
           folderStorageKey,
           StorageKeys.PROMPT_ITEMS,
         ]);
-        const storedFoldersValue = storageResult[folderStorageKey];
+        const storedFolders = parseStoredFolderData(storageResult[folderStorageKey]);
         const storedPromptsValue = storageResult[StorageKeys.PROMPT_ITEMS];
 
         // Only use storage folders if we didn't get them from tab
-        if (
-          (!folders.folders || folders.folders.length === 0) &&
-          isFolderData(storedFoldersValue)
-        ) {
-          folders = storedFoldersValue;
+        if ((!folders.folders || folders.folders.length === 0) && storedFolders) {
+          folders = storedFolders;
           console.log(`[CloudSyncSettings] Loaded folders from ${folderStorageKey} (fallback)`);
         }
 
@@ -397,15 +499,27 @@ export function CloudSyncSettings() {
           platform,
           accountScope,
           timelineHierarchyAccountScope,
+          highlightAccountScope,
+          includeHighlights: platform === 'gemini' && highlightSyncEnabled,
         },
-      })) as { ok?: boolean; error?: string; state?: SyncState } | undefined;
+      })) as
+        | {
+            ok?: boolean;
+            error?: string;
+            state?: SyncState;
+            highlights?: { synced?: boolean; skipped?: boolean };
+          }
+        | undefined;
 
       if (response?.state) {
         setSyncState(response.state);
       }
 
       if (response?.ok) {
-        setStatusMessage({ text: t('syncSuccess'), kind: 'ok' });
+        setStatusMessage({
+          text: t(response.highlights?.skipped ? 'syncSuccessHighlightsSkipped' : 'syncSuccess'),
+          kind: response.highlights?.skipped ? 'warn' : 'ok',
+        });
       } else {
         throw new Error(response?.error || response?.state?.error || t('syncUploadFailed'));
       }
@@ -418,244 +532,319 @@ export function CloudSyncSettings() {
     }
   }, [
     getBaseFolderStorageKey,
+    getTargetTab,
+    highlightSyncEnabled,
     platform,
     resolveAccountSyncContext,
+    resolveCurrentPageSyncScope,
     resolveTimelineHierarchySyncContext,
     t,
   ]);
 
-  // Handle download from Drive (restore data) - NOW MERGES instead of overwrite
-  const handleDownloadFromDrive = useCallback(async () => {
-    setStatusMessage(null);
-    setIsDownloading(true);
-
-    try {
-      const accountContext = await resolveAccountSyncContext();
-      const timelineHierarchyContext = await resolveTimelineHierarchySyncContext();
-      let accountScope = accountContext.accountScope;
-      let folderStorageKey = accountContext.folderStorageKey;
-      const timelineHierarchyAccountScope = timelineHierarchyContext.accountScope;
-      const timelineHierarchyStorageKey = timelineHierarchyContext.storageKey;
-
-      // Download from Google Drive (platform-specific)
-      const response = (await chrome.runtime.sendMessage({
-        type: 'gv.sync.download',
-        payload: { platform, accountScope, timelineHierarchyAccountScope },
-      })) as
-        | {
-            ok?: boolean;
-            error?: string;
-            state?: SyncState;
-            data?: {
-              folders?: { data?: FolderData };
-              prompts?: { items?: PromptItem[] };
-              settings?: SettingsExportPayload;
-              starred?: { data?: StarredMessagesData };
-              timelineHierarchy?: { data?: TimelineHierarchyData };
-            } | null;
-          }
-        | undefined;
-
-      if (response?.state) {
-        setSyncState(response.state);
-      }
-
-      if (!response?.ok) {
-        throw new Error(response?.error || response?.state?.error || t('syncDownloadFailed'));
-      }
-
-      if (!response.data) {
-        setStatusMessage({ text: t('syncNoData'), kind: 'err' });
-        setIsDownloading(false);
+  // Handle download from Drive (restore data) with merge as the default safe path.
+  const handleDownloadFromDrive = useCallback(
+    async (mode: DownloadMode = 'merge') => {
+      if (mode === 'overwrite' && !window.confirm(t('syncOverwriteConfirm'))) {
         return;
       }
 
-      // Get current local data for merging - prioritize Content Script
-      let localFolders: FolderData = { folders: [], folderContents: {} };
-      let localPrompts: PromptItem[] = [];
-      let localTimelineHierarchy: TimelineHierarchyData = { conversations: {} };
+      setStatusMessage(null);
+      setIsDownloading(true);
+      setDownloadMode(mode);
 
-      // 1. Try to get fresh folder data from active tab
       try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        console.log('[CloudSyncSettings] Active tab:', tab?.id, tab?.url);
-        if (tab?.id) {
-          const tabResponse = (await Promise.race([
-            chrome.tabs.sendMessage(tab.id, { type: 'gv.sync.requestData' }),
-            new Promise((_, reject) => setTimeout(() => reject('Timeout after 2s'), 2000)),
-          ])) as { ok?: boolean; data?: FolderData; accountScope?: SyncAccountScope } | null;
+        const accountContext = await resolveAccountSyncContext();
+        const timelineHierarchyContext = await resolveTimelineHierarchySyncContext();
+        const highlightAccountScope =
+          platform === 'gemini' && highlightSyncEnabled
+            ? await resolveCurrentPageSyncScope(false)
+            : null;
+        let accountScope = accountContext.accountScope;
+        let folderStorageKey = accountContext.folderStorageKey;
+        const timelineHierarchyAccountScope = timelineHierarchyContext.accountScope;
+        const timelineHierarchyStorageKey = timelineHierarchyContext.storageKey;
 
-          console.log('[CloudSyncSettings] Tab response:', tabResponse);
-          if (tabResponse?.ok && tabResponse.data) {
-            localFolders = tabResponse.data;
-            console.log(
-              '[CloudSyncSettings] Got fresh folder data from content script:',
-              'folders:',
-              localFolders.folders?.length,
-              'folderContents keys:',
-              Object.keys(localFolders.folderContents || {}).length,
-            );
-            if (tabResponse.accountScope) {
-              accountScope = tabResponse.accountScope;
-              folderStorageKey = buildScopedStorageKey(
-                getBaseFolderStorageKey(platform),
-                tabResponse.accountScope.accountKey,
+        // Download from Google Drive (platform-specific)
+        const response = (await chrome.runtime.sendMessage({
+          type: 'gv.sync.download',
+          payload: {
+            platform,
+            accountScope,
+            timelineHierarchyAccountScope,
+            highlightAccountScope,
+            includeHighlights: platform === 'gemini' && highlightSyncEnabled,
+          },
+        })) as
+          | {
+              ok?: boolean;
+              error?: string;
+              state?: SyncState;
+              highlights?: {
+                synced?: boolean;
+                skipped?: boolean;
+                count?: number;
+                empty?: boolean;
+              };
+              data?: {
+                folders?: { data?: FolderData };
+                prompts?: { items?: PromptItem[] };
+                settings?: SettingsExportPayload;
+                plugins?: PluginStateExportPayload;
+                starred?: { data?: StarredMessagesData };
+                timelineHierarchy?: { data?: TimelineHierarchyData };
+              } | null;
+            }
+          | undefined;
+
+        if (response?.state) {
+          setSyncState(response.state);
+        }
+
+        if (!response?.ok) {
+          throw new Error(response?.error || response?.state?.error || t('syncDownloadFailed'));
+        }
+
+        if (!response.data) {
+          if (response.highlights?.synced) {
+            setStatusMessage({ text: t('syncSuccess'), kind: 'ok' });
+            return;
+          }
+          setStatusMessage({ text: t('syncNoData'), kind: 'err' });
+          setIsDownloading(false);
+          return;
+        }
+
+        // Get current local data for merging - prioritize Content Script
+        let localFolders: FolderData = { folders: [], folderContents: {} };
+        let localPrompts: PromptItem[] = [];
+        let localTimelineHierarchy: TimelineHierarchyData = { conversations: {} };
+
+        // 1. Try to get fresh folder data from active tab
+        try {
+          const tab = await getTargetTab();
+          console.log('[CloudSyncSettings] Active tab:', tab?.id, tab?.url);
+          if (tab?.id) {
+            const tabResponse = (await Promise.race([
+              chrome.tabs.sendMessage(tab.id, { type: 'gv.sync.requestData' }),
+              new Promise((_, reject) => setTimeout(() => reject('Timeout after 2s'), 2000)),
+            ])) as { ok?: boolean; data?: FolderData; accountScope?: SyncAccountScope } | null;
+
+            console.log('[CloudSyncSettings] Tab response:', tabResponse);
+            if (tabResponse?.ok && tabResponse.data) {
+              localFolders = tabResponse.data;
+              console.log(
+                '[CloudSyncSettings] Got fresh folder data from content script:',
+                'folders:',
+                localFolders.folders?.length,
+                'folderContents keys:',
+                Object.keys(localFolders.folderContents || {}).length,
               );
+              if (tabResponse.accountScope) {
+                accountScope = tabResponse.accountScope;
+                folderStorageKey = buildScopedStorageKey(
+                  getBaseFolderStorageKey(platform),
+                  tabResponse.accountScope.accountKey,
+                );
+              }
             }
           }
-        }
-      } catch (e) {
-        console.warn('[CloudSyncSettings] Tab fetch failed/skipped:', e);
-      }
-
-      // 2. Fallback to storage
-      try {
-        const storageResult = await chrome.storage.local.get([
-          folderStorageKey,
-          StorageKeys.PROMPT_ITEMS,
-          ...getTimelineHierarchyStorageKeysToRead(timelineHierarchyAccountScope?.accountKey),
-        ]);
-        const storedFoldersValue = storageResult[folderStorageKey];
-        const storedPromptsValue = storageResult[StorageKeys.PROMPT_ITEMS];
-
-        // Only use storage folders if we didn't get them from tab
-        if (
-          (!localFolders.folders || localFolders.folders.length === 0) &&
-          isFolderData(storedFoldersValue)
-        ) {
-          localFolders = storedFoldersValue;
-          console.log(`[CloudSyncSettings] Loaded folders from ${folderStorageKey} (fallback)`);
+        } catch (e) {
+          console.warn('[CloudSyncSettings] Tab fetch failed/skipped:', e);
         }
 
-        // Prompts only for Gemini platform
-        if (platform === 'gemini' && isPromptItemArray(storedPromptsValue)) {
-          localPrompts = storedPromptsValue;
-        }
+        // 2. Fallback to storage
+        try {
+          const storageResult = await chrome.storage.local.get([
+            folderStorageKey,
+            StorageKeys.PROMPT_ITEMS,
+            ...getTimelineHierarchyStorageKeysToRead(timelineHierarchyAccountScope?.accountKey),
+          ]);
+          const storedFolders = parseStoredFolderData(storageResult[folderStorageKey]);
+          const storedPromptsValue = storageResult[StorageKeys.PROMPT_ITEMS];
 
-        if (platform === 'gemini') {
-          const resolvedHierarchy = resolveTimelineHierarchyDataForStorageScope(
-            storageResult as Record<string, unknown>,
-            timelineHierarchyAccountScope?.accountKey,
-            timelineHierarchyAccountScope?.routeUserId ?? null,
-          );
-          if (isTimelineHierarchyData(resolvedHierarchy)) {
-            localTimelineHierarchy = resolvedHierarchy;
+          // Only use storage folders if we didn't get them from tab
+          if ((!localFolders.folders || localFolders.folders.length === 0) && storedFolders) {
+            localFolders = storedFolders;
+            console.log(`[CloudSyncSettings] Loaded folders from ${folderStorageKey} (fallback)`);
           }
+
+          // Prompts only for Gemini platform
+          if (platform === 'gemini' && isPromptItemArray(storedPromptsValue)) {
+            localPrompts = storedPromptsValue;
+          }
+
+          if (platform === 'gemini') {
+            const resolvedHierarchy = resolveTimelineHierarchyDataForStorageScope(
+              storageResult as Record<string, unknown>,
+              timelineHierarchyAccountScope?.accountKey,
+              timelineHierarchyAccountScope?.routeUserId ?? null,
+            );
+            if (isTimelineHierarchyData(resolvedHierarchy)) {
+              localTimelineHierarchy = resolvedHierarchy;
+            }
+          }
+        } catch (err) {
+          console.error('[CloudSyncSettings] Error loading local data for merge:', err);
         }
-      } catch (err) {
-        console.error('[CloudSyncSettings] Error loading local data for merge:', err);
-      }
 
-      // Sync payloads contain feature-specific export payloads from Google Drive files.
-      const {
-        folders: cloudFoldersPayload,
-        prompts: cloudPromptsPayload,
-        settings: cloudSettingsPayload,
-        starred: cloudStarredPayload,
-        timelineHierarchy: cloudTimelineHierarchyPayload,
-      } = response.data;
-      const cloudFolderData = cloudFoldersPayload?.data || { folders: [], folderContents: {} };
-      const cloudPromptItems = cloudPromptsPayload?.items || [];
-      const cloudStarredData: StarredMessagesData = cloudStarredPayload?.data || { messages: {} };
-      const cloudTimelineHierarchyData: TimelineHierarchyData =
-        cloudTimelineHierarchyPayload?.data || { conversations: {} };
+        // Sync payloads contain feature-specific export payloads from Google Drive files.
+        const {
+          folders: cloudFoldersPayload,
+          prompts: cloudPromptsPayload,
+          settings: cloudSettingsPayload,
+          plugins: cloudPluginsPayload,
+          starred: cloudStarredPayload,
+          timelineHierarchy: cloudTimelineHierarchyPayload,
+        } = response.data;
+        const cloudFolderDataRaw = cloudFoldersPayload?.data;
+        const hasCloudFolderData = isFolderData(cloudFolderDataRaw);
+        const cloudFolderData = hasCloudFolderData
+          ? cloudFolderDataRaw
+          : { folders: [], folderContents: {} };
+        const cloudPromptItems = cloudPromptsPayload?.items || [];
+        const cloudStarredData: StarredMessagesData = cloudStarredPayload?.data || { messages: {} };
+        const cloudTimelineHierarchyData: TimelineHierarchyData =
+          cloudTimelineHierarchyPayload?.data || { conversations: {} };
 
-      console.log('[CloudSyncSettings] === MERGE DEBUG ===');
-      console.log('[CloudSyncSettings] Local folders count:', localFolders.folders?.length || 0);
-      console.log(
-        '[CloudSyncSettings] Local folderContents:',
-        JSON.stringify(Object.keys(localFolders.folderContents || {})),
-      );
-      console.log('[CloudSyncSettings] Cloud folders count:', cloudFolderData.folders?.length || 0);
-      console.log(
-        '[CloudSyncSettings] Cloud folderContents:',
-        JSON.stringify(Object.keys(cloudFolderData.folderContents || {})),
-      );
-      console.log(
-        '[CloudSyncSettings] Cloud starred conversations:',
-        Object.keys(cloudStarredData.messages || {}).length,
-      );
-      console.log(
-        '[CloudSyncSettings] Cloud hierarchy conversations:',
-        Object.keys(cloudTimelineHierarchyData.conversations || {}).length,
-      );
+        console.log('[CloudSyncSettings] === MERGE DEBUG ===');
+        console.log('[CloudSyncSettings] Local folders count:', localFolders.folders?.length || 0);
+        console.log(
+          '[CloudSyncSettings] Local folderContents:',
+          JSON.stringify(Object.keys(localFolders.folderContents || {})),
+        );
+        console.log(
+          '[CloudSyncSettings] Cloud folders count:',
+          cloudFolderData.folders?.length || 0,
+        );
+        console.log(
+          '[CloudSyncSettings] Cloud folderContents:',
+          JSON.stringify(Object.keys(cloudFolderData.folderContents || {})),
+        );
+        console.log(
+          '[CloudSyncSettings] Cloud starred conversations:',
+          Object.keys(cloudStarredData.messages || {}).length,
+        );
+        console.log(
+          '[CloudSyncSettings] Cloud hierarchy conversations:',
+          Object.keys(cloudTimelineHierarchyData.conversations || {}).length,
+        );
 
-      // Get local starred messages for merge
-      let localStarred: StarredMessagesData = { messages: {} };
-      try {
-        const starredResult = await chrome.storage.local.get(['geminiTimelineStarredMessages']);
-        if (isStarredMessagesData(starredResult.geminiTimelineStarredMessages)) {
-          localStarred = starredResult.geminiTimelineStarredMessages;
+        // Get local starred messages for merge
+        let localStarred: StarredMessagesData = { messages: {} };
+        try {
+          const starredResult = await chrome.storage.local.get(['geminiTimelineStarredMessages']);
+          if (isStarredMessagesData(starredResult.geminiTimelineStarredMessages)) {
+            localStarred = starredResult.geminiTimelineStarredMessages;
+          }
+        } catch (err) {
+          console.warn('[CloudSyncSettings] Could not get local starred messages:', err);
         }
-      } catch (err) {
-        console.warn('[CloudSyncSettings] Could not get local starred messages:', err);
-      }
 
-      // Perform Merge
-      const mergedFolders = mergeFolderData(localFolders, cloudFolderData);
-      const mergedPrompts = mergePrompts(localPrompts, cloudPromptItems);
-      const mergedStarred = mergeStarredMessages(localStarred, cloudStarredData);
-      const mergedTimelineHierarchy = mergeTimelineHierarchy(
-        localTimelineHierarchy,
-        cloudTimelineHierarchyData,
-      );
-      await restoreBackupableSyncSettings(cloudSettingsPayload?.data);
-
-      console.log('[CloudSyncSettings] Merged folders count:', mergedFolders.folders?.length || 0);
-      console.log(
-        '[CloudSyncSettings] Merged folderContents:',
-        JSON.stringify(Object.keys(mergedFolders.folderContents || {})),
-      );
-      console.log(
-        '[CloudSyncSettings] Merged starred conversations:',
-        Object.keys(mergedStarred.messages || {}).length,
-      );
-      console.log(
-        '[CloudSyncSettings] Merged hierarchy conversations:',
-        Object.keys(mergedTimelineHierarchy.conversations || {}).length,
-      );
-      console.log('[CloudSyncSettings] === END MERGE DEBUG ===');
-
-      // Save merged data to storage (platform-specific storage key for folders)
-      const storageUpdate: Record<string, unknown> = {
-        [folderStorageKey]: mergedFolders,
-      };
-
-      // Only save prompts and starred for Gemini platform
-      if (platform === 'gemini') {
-        storageUpdate[StorageKeys.PROMPT_ITEMS] = mergedPrompts;
-        storageUpdate.geminiTimelineStarredMessages = mergedStarred;
-        storageUpdate[timelineHierarchyStorageKey] = mergedTimelineHierarchy;
-      }
-
-      await chrome.storage.local.set(storageUpdate);
-
-      // Notify content script to reload folders
-      try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (tab?.id) {
-          await chrome.tabs.sendMessage(tab.id, { type: 'gv.folders.reload' });
-          console.log('[CloudSyncSettings] Sent reload message to content script');
+        const shouldOverwrite = mode === 'overwrite';
+        if (shouldOverwrite && !hasCloudFolderData) {
+          setStatusMessage({ text: t('syncOverwriteMissingFolders'), kind: 'err' });
+          setIsDownloading(false);
+          return;
         }
-      } catch (err) {
-        console.warn('[CloudSyncSettings] Could not notify content script:', err);
-      }
 
-      setStatusMessage({ text: t('syncSuccess'), kind: 'ok' });
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Download failed';
-      console.error('[CloudSyncSettings] Download failed:', error);
-      setStatusMessage({ text: t('syncError').replace('{error}', errorMessage), kind: 'err' });
-    } finally {
-      setIsDownloading(false);
-    }
-  }, [
-    getBaseFolderStorageKey,
-    platform,
-    resolveAccountSyncContext,
-    resolveTimelineHierarchySyncContext,
-    t,
-  ]);
+        const nextFolders = shouldOverwrite
+          ? cloudFolderData
+          : mergeFolderData(localFolders, cloudFolderData);
+        const nextPrompts = shouldOverwrite
+          ? cloudPromptItems
+          : mergePrompts(localPrompts, cloudPromptItems);
+        const nextStarred = shouldOverwrite
+          ? cloudStarredData
+          : mergeStarredMessages(localStarred, cloudStarredData);
+        const nextTimelineHierarchy = shouldOverwrite
+          ? cloudTimelineHierarchyData
+          : mergeTimelineHierarchy(localTimelineHierarchy, cloudTimelineHierarchyData);
+        await restoreBackupableSyncSettings(
+          cloudSettingsPayload?.data,
+          undefined,
+          shouldOverwrite ? 'overwrite' : 'merge',
+        );
+        if (cloudPluginsPayload?.format === 'gemini-voyager.plugins.v1') {
+          await restorePluginState(
+            cloudPluginsPayload.data,
+            shouldOverwrite ? 'overwrite' : 'merge',
+          );
+        }
+
+        console.log(
+          '[CloudSyncSettings] Resolved folders count:',
+          nextFolders.folders?.length || 0,
+        );
+        console.log(
+          '[CloudSyncSettings] Resolved folderContents:',
+          JSON.stringify(Object.keys(nextFolders.folderContents || {})),
+        );
+        console.log(
+          '[CloudSyncSettings] Resolved starred conversations:',
+          Object.keys(nextStarred.messages || {}).length,
+        );
+        console.log(
+          '[CloudSyncSettings] Resolved hierarchy conversations:',
+          Object.keys(nextTimelineHierarchy.conversations || {}).length,
+        );
+        console.log('[CloudSyncSettings] === END MERGE DEBUG ===');
+
+        // Save merged data to storage (platform-specific storage key for folders)
+        const storageUpdate: Record<string, unknown> = {
+          [folderStorageKey]: nextFolders,
+        };
+
+        // Only save prompts and starred for Gemini platform
+        if (platform === 'gemini') {
+          storageUpdate[StorageKeys.PROMPT_ITEMS] = nextPrompts;
+          storageUpdate.geminiTimelineStarredMessages = nextStarred;
+          storageUpdate[timelineHierarchyStorageKey] = nextTimelineHierarchy;
+        }
+
+        await chrome.storage.local.set(storageUpdate);
+
+        // Notify content script to reload folders
+        try {
+          const tab = await getTargetTab();
+          if (tab?.id) {
+            await chrome.tabs.sendMessage(tab.id, { type: 'gv.folders.reload' });
+            console.log('[CloudSyncSettings] Sent reload message to content script');
+          }
+        } catch (err) {
+          console.warn('[CloudSyncSettings] Could not notify content script:', err);
+        }
+
+        const foldersMissing = !hasCloudFolderData;
+        setStatusMessage({
+          text: t(
+            foldersMissing
+              ? 'syncSuccessFoldersMissing'
+              : response.highlights?.skipped
+                ? 'syncSuccessHighlightsSkipped'
+                : 'syncSuccess',
+          ),
+          kind: foldersMissing || response.highlights?.skipped ? 'warn' : 'ok',
+        });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Download failed';
+        console.error('[CloudSyncSettings] Download failed:', error);
+        setStatusMessage({ text: t('syncError').replace('{error}', errorMessage), kind: 'err' });
+      } finally {
+        setIsDownloading(false);
+        setDownloadMode(null);
+      }
+    },
+    [
+      getBaseFolderStorageKey,
+      getTargetTab,
+      highlightSyncEnabled,
+      platform,
+      resolveAccountSyncContext,
+      resolveCurrentPageSyncScope,
+      resolveTimelineHierarchySyncContext,
+      t,
+    ],
+  );
 
   // Clear status message after 3 seconds
   useEffect(() => {
@@ -665,19 +854,51 @@ export function CloudSyncSettings() {
     }
   }, [statusMessage]);
 
-  // Don't render on Safari
-  if (isSafariBrowser) return null;
-
   return (
-    <Card className="p-4 transition-all hover:shadow-md">
-      <CardTitle className="mb-4">{t('cloudSync')}</CardTitle>
-      <CardContent className="space-y-4 p-0">
+    <Card className="p-3 transition-all hover:shadow-md">
+      <CardTitle className="mb-2">{t('cloudSync')}</CardTitle>
+      <CardContent className="space-y-3 p-0">
         {/* Description */}
-        <p className="text-muted-foreground text-xs">{t('cloudSyncDescription')}</p>
+        <p className="text-muted-foreground text-xs">
+          {t(
+            syncState.provider === 'icloud' ? 'cloudSyncDescriptionICloud' : 'cloudSyncDescription',
+          )}
+        </p>
+
+        {supportsICloud && (
+          <div className="grid grid-cols-[auto_1fr] items-center gap-3">
+            <Label className="text-sm font-medium">{t('syncProvider')}</Label>
+            <div className="bg-secondary/60 grid grid-cols-2 gap-1 rounded-xl p-1">
+              {(['googleDrive', 'icloud'] as const).map((provider) => (
+                <button
+                  key={provider}
+                  className={`rounded-lg px-2 py-1.5 text-xs font-bold transition-colors ${
+                    syncState.provider === provider
+                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                  onClick={() => void handleProviderChange(provider)}
+                  aria-pressed={syncState.provider === provider}
+                >
+                  {provider === 'icloud' ? t('syncProviderICloud') : t('syncProviderGoogleDrive')}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {supportsICloud && syncState.provider === 'googleDrive' && !syncState.isAuthenticated && (
+          <a
+            className="border-primary/25 bg-primary/5 text-primary hover:bg-primary/10 flex h-9 w-full items-center justify-center rounded-lg border text-xs font-semibold transition-colors"
+            href="gemini-voyager://google-drive-auth"
+          >
+            {t('syncConnectGoogleDrive')}
+          </a>
+        )}
 
         {/* Sync Mode Toggle */}
-        <div>
-          <Label className="mb-2 block text-sm font-medium">{t('syncMode')}</Label>
+        <div className="grid grid-cols-[auto_1fr] items-center gap-3">
+          <Label className="text-sm font-medium">{t('syncMode')}</Label>
           <div className="bg-secondary/60 relative grid grid-cols-2 gap-1 rounded-xl p-1">
             <div
               className="bg-primary pointer-events-none absolute top-1 bottom-1 w-[calc(50%-4px)] rounded-lg shadow-sm transition-all duration-300 ease-out"
@@ -686,7 +907,7 @@ export function CloudSyncSettings() {
               }}
             />
             <button
-              className={`relative z-10 rounded-lg px-2 py-2 text-xs font-bold transition-all duration-200 ${
+              className={`relative z-10 rounded-lg px-2 py-1.5 text-xs font-bold transition-all duration-200 ${
                 syncState.mode === 'disabled'
                   ? 'text-primary-foreground'
                   : 'text-muted-foreground hover:text-foreground'
@@ -696,7 +917,7 @@ export function CloudSyncSettings() {
               {t('syncModeDisabled')}
             </button>
             <button
-              className={`relative z-10 rounded-lg px-2 py-2 text-xs font-bold transition-all duration-200 ${
+              className={`relative z-10 rounded-lg px-2 py-1.5 text-xs font-bold transition-all duration-200 ${
                 syncState.mode === 'manual'
                   ? 'text-primary-foreground'
                   : 'text-muted-foreground hover:text-foreground'
@@ -708,16 +929,40 @@ export function CloudSyncSettings() {
           </div>
         </div>
 
+        {platform === 'gemini' && (
+          <div className="highlight-cloud-sync-row border-border/70 bg-muted/30 gap-3 rounded-lg border px-3 py-2">
+            <div className="min-w-0">
+              <Label htmlFor="highlight-cloud-sync" className="cursor-pointer text-sm font-medium">
+                {t('highlightCloudSync')}
+              </Label>
+              <p
+                id="highlight-cloud-sync-hint"
+                className="text-muted-foreground mt-0.5 text-xs leading-snug"
+              >
+                {t('highlightCloudSyncHint')}
+              </p>
+            </div>
+            <div className="highlight-cloud-sync-control">
+              <Switch
+                id="highlight-cloud-sync"
+                checked={highlightSyncEnabled}
+                onChange={(event) => void handleHighlightSyncChange(event.target.checked)}
+                aria-describedby="highlight-cloud-sync-hint"
+              />
+            </div>
+          </div>
+        )}
+
         {/* Sync Actions - Only show if not disabled */}
         {syncState.mode !== 'disabled' && (
           <>
             {/* Upload/Download Buttons */}
-            <div className="flex gap-2">
+            <div className="grid gap-2">
               {/* Upload Button (Local → Drive) */}
               <Button
                 variant="outline"
                 size="sm"
-                className="group hover:border-primary/50 flex-1"
+                className="group hover:border-primary/50 w-full"
                 onClick={handleSyncNow}
                 disabled={isUploading || isDownloading}
               >
@@ -754,72 +999,155 @@ export function CloudSyncSettings() {
                 </span>
               </Button>
 
-              {/* Sync Button (Drive → Local) */}
-              <Button
-                variant="outline"
-                size="sm"
-                className="group hover:border-primary/50 flex-1"
-                onClick={handleDownloadFromDrive}
-                disabled={isUploading || isDownloading}
-              >
-                <span className="flex items-center gap-1 text-xs transition-transform group-hover:scale-105">
-                  {isDownloading ? (
-                    <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
-                      <circle
-                        className="opacity-25"
-                        cx="12"
-                        cy="12"
-                        r="10"
+              <div className="grid grid-cols-2 gap-2">
+                {/* Sync Button (Drive → Local) */}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="group hover:border-primary/50"
+                  onClick={() => handleDownloadFromDrive('merge')}
+                  disabled={isUploading || isDownloading}
+                >
+                  <span className="flex items-center gap-1 text-xs transition-transform group-hover:scale-105">
+                    {downloadMode === 'merge' ? (
+                      <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                        <circle
+                          className="opacity-25"
+                          cx="12"
+                          cy="12"
+                          r="10"
+                          stroke="currentColor"
+                          strokeWidth="4"
+                        />
+                        <path
+                          className="opacity-75"
+                          fill="currentColor"
+                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                        />
+                      </svg>
+                    ) : (
+                      <svg
+                        width="12"
+                        height="12"
+                        viewBox="0 0 24 24"
+                        fill="none"
                         stroke="currentColor"
-                        strokeWidth="4"
-                      />
-                      <path
-                        className="opacity-75"
-                        fill="currentColor"
-                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                      />
-                    </svg>
-                  ) : (
-                    <svg
-                      width="12"
-                      height="12"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                    >
-                      <path d="M1 4v6h6M23 20v-6h-6" />
-                      <path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15" />
-                    </svg>
-                  )}
-                  {t('syncMerge')}
-                </span>
-              </Button>
+                        strokeWidth="2"
+                      >
+                        <path d="M1 4v6h6M23 20v-6h-6" />
+                        <path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15" />
+                      </svg>
+                    )}
+                    {t('syncMerge')}
+                  </span>
+                </Button>
+
+                {/* Overwrite Button (Drive → Local, destructive) */}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="group hover:border-destructive/50"
+                  onClick={() => handleDownloadFromDrive('overwrite')}
+                  disabled={isUploading || isDownloading}
+                >
+                  <span className="flex items-center gap-1 text-xs transition-transform group-hover:scale-105">
+                    {downloadMode === 'overwrite' ? (
+                      <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                        <circle
+                          className="opacity-25"
+                          cx="12"
+                          cy="12"
+                          r="10"
+                          stroke="currentColor"
+                          strokeWidth="4"
+                        />
+                        <path
+                          className="opacity-75"
+                          fill="currentColor"
+                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                        />
+                      </svg>
+                    ) : (
+                      <svg
+                        width="12"
+                        height="12"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                      >
+                        <path d="M3 12h18" />
+                        <path d="M12 3v18" />
+                      </svg>
+                    )}
+                    {t('syncOverwrite')}
+                  </span>
+                </Button>
+              </div>
             </div>
 
-            {/* Platform Indicator & Sync Times */}
-            <div className="text-muted-foreground space-y-0.5 text-center text-xs">
-              <p className="text-foreground/70 font-medium">
-                {platform === 'aistudio' ? '📊 AI Studio' : '✨ Gemini'}
-              </p>
-              <p>
-                ↑{' '}
-                {formatLastUpload(
-                  platform === 'aistudio'
-                    ? syncState.lastUploadTimeAIStudio
-                    : syncState.lastUploadTime,
-                )}
-              </p>
-              <p>
-                ↓{' '}
-                {formatLastSync(
-                  platform === 'aistudio' ? syncState.lastSyncTimeAIStudio : syncState.lastSyncTime,
-                )}
-              </p>
+            {/* Platform context & sync times */}
+            <div
+              data-testid="sync-platform-summary"
+              className="border-border/60 bg-muted/25 relative isolate overflow-hidden rounded-xl border px-3 py-2.5"
+            >
+              <div className="relative z-10 min-w-0 pe-14">
+                <p className="text-foreground/75 mb-1.5 flex min-w-0 items-center gap-1.5 text-xs font-semibold">
+                  <span
+                    aria-hidden="true"
+                    className="bg-primary/70 size-1.5 shrink-0 rounded-full"
+                  />
+                  <span className="sr-only">{t('currentPlatform')}: </span>
+                  <span className="min-w-0 break-words">
+                    {t(platform === 'aistudio' ? 'platformAIStudio' : 'platformGemini')}
+                  </span>
+                </p>
+
+                <div className="text-muted-foreground grid min-w-0 gap-1 text-xs leading-snug">
+                  <p className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-1.5">
+                    <span aria-hidden="true" className="text-foreground/45">
+                      ↑
+                    </span>
+                    <span className="min-w-0 break-words">
+                      {formatLastUpload(
+                        platform === 'aistudio'
+                          ? syncState.lastUploadTimeAIStudio
+                          : syncState.lastUploadTime,
+                      )}
+                    </span>
+                  </p>
+                  <p className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-1.5">
+                    <span aria-hidden="true" className="text-foreground/45">
+                      ↓
+                    </span>
+                    <span className="min-w-0 break-words">
+                      {formatLastSync(
+                        platform === 'aistudio'
+                          ? syncState.lastSyncTimeAIStudio
+                          : syncState.lastSyncTime,
+                      )}
+                    </span>
+                  </p>
+                </div>
+              </div>
+
+              <div
+                aria-hidden="true"
+                data-testid="sync-platform-mark"
+                className="pointer-events-none absolute inset-y-0 end-0 flex w-20 items-center justify-center overflow-hidden"
+              >
+                <div className="bg-primary/10 absolute inset-3 rounded-full blur-xl" />
+                <img
+                  src={PLATFORM_LOGO_URLS[platform]}
+                  alt=""
+                  draggable={false}
+                  className="size-16 object-contain opacity-[0.13] saturate-75 select-none dark:opacity-[0.2] dark:saturate-100"
+                />
+              </div>
             </div>
 
             {/* Sign Out Button - Only show if authenticated */}
-            {syncState.isAuthenticated && (
+            {syncState.provider === 'googleDrive' && syncState.isAuthenticated && (
               <Button
                 variant="ghost"
                 size="sm"
@@ -832,11 +1160,27 @@ export function CloudSyncSettings() {
           </>
         )}
 
+        {supportsICloud && syncState.provider === 'icloud' && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground hover:text-destructive w-full text-xs"
+            onClick={handleDeleteICloudBackup}
+            disabled={isUploading || isDownloading || isDeletingICloudBackup}
+          >
+            {isDeletingICloudBackup ? t('syncDeletingICloudBackup') : t('syncDeleteICloudBackup')}
+          </Button>
+        )}
+
         {/* Status Message */}
         {statusMessage && (
           <p
             className={`text-center text-xs ${
-              statusMessage.kind === 'ok' ? 'text-green-600' : 'text-destructive'
+              statusMessage.kind === 'ok'
+                ? 'text-green-600'
+                : statusMessage.kind === 'warn'
+                  ? 'text-amber-600'
+                  : 'text-destructive'
             }`}
           >
             {statusMessage.text}

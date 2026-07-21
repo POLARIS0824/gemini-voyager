@@ -17,6 +17,13 @@ export function fixBrokenBoldTags(root: HTMLElement) {
   let node: Node | null;
 
   while ((node = walker.nextNode())) {
+    // Cheap relevance gate FIRST: almost no text node on the page contains
+    // '**', and this walker also runs over sidebar-row bursts (issue #753) —
+    // the ancestor-walk skip chain below must only be paid by actual hits.
+    if (!node.textContent?.includes('**')) {
+      continue;
+    }
+
     const parent = node.parentElement;
     // Skip if inside code block, pre tags, or math/formula containers
     if (
@@ -40,9 +47,7 @@ export function fixBrokenBoldTags(root: HTMLElement) {
       continue;
     }
 
-    if (node.textContent?.includes('**')) {
-      textNodes.push(node as Text);
-    }
+    textNodes.push(node as Text);
   }
 
   for (const startNode of textNodes) {
@@ -194,20 +199,26 @@ export function startMarkdownPatcher() {
   // Initial fix
   fixBrokenBoldTags(document.body);
 
-  const observer = new MutationObserver((mutations) => {
-    // Collect all added nodes to scan them
-    const nodesToScan: HTMLElement[] = [];
+  const pendingNodes = new Set<HTMLElement>();
+  let debounceTimer: number | null = null;
 
+  const observer = new MutationObserver((mutations) => {
     for (const m of mutations) {
       m.addedNodes.forEach((node) => {
         if (node.nodeType === Node.ELEMENT_NODE) {
-          nodesToScan.push(node as HTMLElement);
+          pendingNodes.add(node as HTMLElement);
         }
       });
     }
 
-    if (nodesToScan.length > 0) {
+    if (pendingNodes.size === 0) return;
+    if (debounceTimer !== null) window.clearTimeout(debounceTimer);
+    debounceTimer = window.setTimeout(() => {
+      debounceTimer = null;
+      const nodesToScan = Array.from(pendingNodes);
+      pendingNodes.clear();
       nodesToScan.forEach((node) => {
+        if (!node.isConnected) return;
         // Skip editable areas to avoid modifying user input
         if (
           node.closest('rich-textarea') ||
@@ -218,7 +229,7 @@ export function startMarkdownPatcher() {
         }
         fixBrokenBoldTags(node);
       });
-    }
+    }, 100);
   });
 
   observer.observe(document.body, {
@@ -226,5 +237,10 @@ export function startMarkdownPatcher() {
     subtree: true,
   });
 
-  return () => observer.disconnect();
+  return () => {
+    observer.disconnect();
+    if (debounceTimer !== null) window.clearTimeout(debounceTimer);
+    debounceTimer = null;
+    pendingNodes.clear();
+  };
 }

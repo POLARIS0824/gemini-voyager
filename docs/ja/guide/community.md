@@ -29,11 +29,24 @@ Discord サーバーに参加して、他の Voyager ユーザーと交流しま
   </a>
 </div>
 
+## 📱 その他のSNS
+
+以下のプラットフォームでも見つけられます：
+
+<div style="margin: 1rem 0; display: flex; gap: 12px; flex-wrap: wrap;">
+  <a href="https://www.xiaohongshu.com/user/profile/5d366136000000001101950a" target="_blank" style="text-decoration: none;">
+    <img src="https://img.shields.io/badge/小紅書-@卡普迪姆-FF2442?style=for-the-badge" alt="小紅書">
+  </a>
+  <a href="https://space.bilibili.com/312249633" target="_blank" style="text-decoration: none;">
+    <img src="https://img.shields.io/badge/Bilibili-@卡普迪姆-FB7299?style=for-the-badge&logo=bilibili&logoColor=white" alt="Bilibili">
+  </a>
+</div>
+
 ## 🐙 GitHub Issues
 
 バグを発見した場合や、具体的な機能リクエストがある場合は、GitHub で Issue を作成することをお勧めします：
 
-- [バグ報告を提出する](https://github.com/Nagi-ovo/gemini-voyager/issues/new?template=bug_report.yml)
-- [機能提案を提出する](https://github.com/Nagi-ovo/gemini-voyager/issues/new?template=feature_request.yml)
+- [バグ報告を提出する](https://github.com/Nagi-ovo/voyager/issues/new?template=bug_report.yml)
+- [機能提案を提出する](https://github.com/Nagi-ovo/voyager/issues/new?template=feature_request.yml)
 
 Voyager をサポートしていただき、ありがとうございます！❤️

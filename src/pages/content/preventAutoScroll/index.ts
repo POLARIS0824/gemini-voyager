@@ -1,3 +1,5 @@
+import { StorageKeys } from '@/core/types/common';
+import { getVoyagerBuildTarget } from '@/core/utils/browser';
 import { isExtensionContextInvalidatedError } from '@/core/utils/extensionContext';
 
 const GV_BRIDGE_ID = 'gv-prevent-auto-scroll-bridge';
@@ -13,12 +15,21 @@ function getBridgeElement(): HTMLElement {
   return bridge;
 }
 
-function notifyScript(enabled: boolean): void {
+function notifyScript(settings: { ctrlEnterSend?: boolean; enabled?: boolean }): void {
   const bridge = getBridgeElement();
-  bridge.dataset.enabled = String(enabled);
+  if (typeof settings.enabled === 'boolean') {
+    bridge.dataset.enabled = String(settings.enabled);
+  }
+  if (typeof settings.ctrlEnterSend === 'boolean') {
+    bridge.dataset.ctrlEnterSend = String(settings.ctrlEnterSend);
+  }
 }
 
 function injectScript(): void {
+  // Safari loads the page-world bridge through a native MAIN-world manifest
+  // entry because Gemini's CSP blocks extension <script> elements.
+  if (getVoyagerBuildTarget() === 'safari') return;
+
   const scriptId = 'gv-prevent-auto-scroll-script';
   if (document.getElementById(scriptId)) return;
 
@@ -33,34 +44,31 @@ function injectScript(): void {
 
 export async function startPreventAutoScroll(): Promise<void> {
   try {
-    // Initialize bridge element first
     getBridgeElement();
 
-    // Check if feature is enabled, default to true or false?
-    // Probably default to true since it's a helpful feature, but typically
-    // we let user turn it on/off in popup.
-    const result = await chrome.storage?.sync?.get({ gvPreventAutoScrollEnabled: false });
-    const isEnabled = result?.gvPreventAutoScrollEnabled !== false; // wait, if default is false, then !== false is true...
-    // Let's set default to false for new feature to not surprise users unless they turn it on.
-
-    // Ah, wait. Usually settings default to false or true.
-    // Let's make it default to false so they have to opt-in, or true if requested.
-    // The user requested: "I hope we can have a feature to prevent jump". Let's make it default false to be safe.
-
-    // Wait, let's fix the logic:
-    // const isEnabled = result?.gvPreventAutoScrollEnabled === true;
-
-    notifyScript(result?.gvPreventAutoScrollEnabled === true);
+    const result = await chrome.storage?.sync?.get({
+      [StorageKeys.PREVENT_AUTO_SCROLL_ENABLED]: false,
+      [StorageKeys.CTRL_ENTER_SEND]: false,
+    });
+    notifyScript({
+      enabled: result?.[StorageKeys.PREVENT_AUTO_SCROLL_ENABLED] === true,
+      ctrlEnterSend: result?.[StorageKeys.CTRL_ENTER_SEND] === true,
+    });
     injectScript();
 
-    // Listen for storage changes to update the bridge dynamically
     chrome.storage.onChanged.addListener((changes, area) => {
-      if (area === 'sync' && changes.gvPreventAutoScrollEnabled) {
-        notifyScript(changes.gvPreventAutoScrollEnabled.newValue === true);
+      if (area !== 'sync') return;
+      if (changes[StorageKeys.PREVENT_AUTO_SCROLL_ENABLED]) {
+        notifyScript({
+          enabled: changes[StorageKeys.PREVENT_AUTO_SCROLL_ENABLED].newValue === true,
+        });
+      }
+      if (changes[StorageKeys.CTRL_ENTER_SEND]) {
+        notifyScript({
+          ctrlEnterSend: changes[StorageKeys.CTRL_ENTER_SEND].newValue === true,
+        });
       }
     });
-
-    console.log('[Gemini Voyager] Prevent auto scroll initialized');
   } catch (error) {
     if (isExtensionContextInvalidatedError(error)) {
       return;

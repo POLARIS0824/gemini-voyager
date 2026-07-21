@@ -1,11 +1,9 @@
 /* Prompt Manager content module
  * - Injects a floating trigger button using the extension icon
  * - Opens a small anchored panel above the trigger (default)
- * - Panel supports: i18n language switch, add prompt, tag chips, search, copy, import/export
+ * - Panel supports: i18n language switch, add prompt, tag chips, search, copy
  * - Optional lock to pin panel position; when locked, panel is draggable and persisted
  */
-import DOMPurify from 'dompurify';
-import JSZip from 'jszip';
 import 'katex/dist/katex.min.css';
 import type { marked as MarkedFn } from 'marked';
 import browser from 'webextension-polyfill';
@@ -15,19 +13,25 @@ import {
   detectAccountContextFromDocument,
 } from '@/core/services/AccountIsolationService';
 import { logger } from '@/core/services/LoggerService';
-import { exportBackupableSyncSettings } from '@/core/services/SettingsBackupService';
 import { promptStorageService } from '@/core/services/StorageService';
 import { type StorageKey, StorageKeys } from '@/core/types/common';
+import {
+  type HighlightAccountScope,
+  type HighlightRecordV1,
+  getHighlightColorHex,
+} from '@/core/types/highlight';
 import { isSafari, shouldShowSafariUpdateReminder } from '@/core/utils/browser';
 import { isExtensionContextInvalidatedError } from '@/core/utils/extensionContext';
 import { migrateFromLocalStorage } from '@/core/utils/storageMigration';
 import { shouldShowUpdateReminderForCurrentVersion } from '@/core/utils/updateReminder';
-import { EXTENSION_VERSION, compareVersions } from '@/core/utils/version';
+import { compareVersions } from '@/core/utils/version';
 import {
-  getTimelineHierarchyStorageKeysToRead,
-  resolveTimelineHierarchyDataForStorageScope,
-} from '@/pages/content/timeline/hierarchyStorage';
-import { normalizeTimelineHierarchyData } from '@/pages/content/timeline/hierarchyTypes';
+  type SavedLibraryFilter,
+  type SavedLibraryItem,
+  buildSavedLibraryItemUrl,
+  filterSavedLibraryItems,
+  toSavedLibraryItems,
+} from '@/features/savedLibrary/model';
 import { getCurrentLanguage, getTranslationSync, initI18n, setCachedLanguage } from '@/utils/i18n';
 import {
   APP_LANGUAGES,
@@ -40,10 +44,14 @@ import type { TranslationKey } from '@/utils/translations';
 
 import { hasUnreadChangelog, openChangelog, showChangelogModalDirect } from '../changelog/index';
 import { insertTextIntoChatInput } from '../chatInput/index';
-import { createFolderStorageAdapter } from '../folder/storage/FolderStorageAdapter';
 import { expandInputCollapseIfNeeded } from '../inputCollapse/index';
+import { StarredMessagesService } from '../timeline/StarredMessagesService';
+import type { StarredMessage } from '../timeline/starredTypes';
+import { extractPlainTitle } from './compactTitle';
 import { activatePromptText } from './promptClickAction';
 import { getScrollHintState } from './scrollHint';
+import { formatStarredMessageTime } from './starredLibrary';
+import { sanitizeSelectedTags } from './tagFilterState';
 
 type PromptItem = {
   id: string;
@@ -51,16 +59,28 @@ type PromptItem = {
   tags: string[];
   createdAt: number;
   updatedAt?: number;
+  /**
+   * Optional user-authored label used as the headline in compact list view.
+   * Falls back to `extractPlainTitle(text)` when absent so existing prompts
+   * render without any migration. Introduced for issue #586 feedback item 4c.
+   */
+  name?: string;
 };
 
 type PanelPosition = { top: number; left: number };
 type TriggerPosition = { bottom: number; right: number };
+type PMPanelView = 'prompts' | 'starred';
+
+function isPMPanelView(value: unknown): value is PMPanelView {
+  return value === 'prompts' || value === 'starred';
+}
 
 const STORAGE_KEYS = {
   items: StorageKeys.PROMPT_ITEMS,
   locked: StorageKeys.PROMPT_PANEL_LOCKED,
   position: StorageKeys.PROMPT_PANEL_POSITION,
   triggerPos: StorageKeys.PROMPT_TRIGGER_POSITION,
+  selectedTags: StorageKeys.PROMPT_SELECTED_TAGS,
   language: StorageKeys.LANGUAGE, // reuse global language key
   theme: StorageKeys.PROMPT_THEME,
 } as const;
@@ -72,8 +92,87 @@ const ID = {
 
 const LATEST_VERSION_CACHE_KEY = 'gvLatestVersionCache';
 const LATEST_VERSION_MAX_AGE = 1000 * 60 * 60 * 6; // 6 hours
+const SPONSOR_HEART_PATH_16 =
+  'M7.655 14.916h-.002l-.006-.003l-.018-.01a22 22 0 0 1-3.744-2.584C2.045 10.731 0 8.35 0 5.5C0 2.836 2.086 1 4.25 1C5.797 1 7.153 1.802 8 3.02C8.847 1.802 10.203 1 11.75 1C13.914 1 16 2.836 16 5.5c0 2.85-2.044 5.231-3.886 6.818a22 22 0 0 1-3.433 2.414a7 7 0 0 1-.31.17l-.018.01l-.008.004a.75.75 0 0 1-.69 0';
 
 type PMTheme = 'light' | 'dark';
+type PMViewMode = 'compact' | 'comfortable';
+
+async function resolveCurrentHighlightScope(): Promise<HighlightAccountScope> {
+  const context = detectAccountContextFromDocument(window.location.href, document);
+  const resolved = await accountIsolationService.resolveAccountScope({
+    pageUrl: window.location.href,
+    routeUserId: context.routeUserId,
+    email: context.email,
+  });
+  return {
+    platform: window.location.hostname.startsWith('aistudio.') ? 'aistudio' : 'gemini',
+    accountKey: resolved.accountKey,
+    accountId: resolved.accountId,
+    routeUserId: resolved.routeUserId,
+  };
+}
+
+async function loadCurrentAccountHighlightRecords(): Promise<HighlightRecordV1[]> {
+  try {
+    const scope = await resolveCurrentHighlightScope();
+    const response = (await browser.runtime.sendMessage({
+      type: 'gv.highlight.list',
+      payload: { scope, includeDeleted: false },
+    })) as { ok?: boolean; records?: HighlightRecordV1[]; error?: string } | undefined;
+    if (!response?.ok) throw new Error(response?.error || 'Failed to load highlights');
+    return Array.isArray(response.records) ? response.records : [];
+  } catch (error) {
+    logger.warn('[PromptManager] Failed to load highlights', { error: String(error) });
+    throw error;
+  }
+}
+
+async function removeStoredHighlight(item: SavedLibraryItem): Promise<boolean> {
+  if (item.kind !== 'highlight' || !item.accountHash || !item.platform) return false;
+  try {
+    const scope = await resolveCurrentHighlightScope();
+    const response = (await browser.runtime.sendMessage({
+      type: 'gv.highlight.delete',
+      payload: {
+        scope,
+        conversationId: item.conversationId,
+        id: item.id,
+      },
+    })) as { ok?: boolean } | undefined;
+    return response?.ok === true;
+  } catch (error) {
+    logger.warn('[PromptManager] Failed to remove highlight', { error: String(error) });
+    return false;
+  }
+}
+
+function navigateToSavedLibraryItem(item: SavedLibraryItem): boolean {
+  let target: URL;
+  try {
+    target = new URL(buildSavedLibraryItemUrl(item), window.location.href);
+  } catch (error) {
+    logger.warn('[PromptManager] Blocked invalid saved item URL', { error: String(error) });
+    return false;
+  }
+  if (target.origin !== window.location.origin) {
+    window.open(target.href, '_blank', 'noopener,noreferrer');
+    return true;
+  }
+
+  window.history.pushState(
+    window.history.state,
+    '',
+    `${target.pathname}${target.search}${target.hash}`,
+  );
+  window.dispatchEvent(
+    typeof PopStateEvent === 'function'
+      ? new PopStateEvent('popstate', { state: window.history.state })
+      : new Event('popstate'),
+  );
+  return true;
+  window.dispatchEvent(new Event('hashchange'));
+}
 
 function detectPageTheme(): PMTheme {
   if (
@@ -102,15 +201,6 @@ function getRuntimeUrl(path: string): string {
   } catch {
     const win = window as Window & { chrome?: { runtime?: { getURL?: (path: string) => string } } };
     return win.chrome?.runtime?.getURL?.(path) || path;
-  }
-}
-
-function safeParseJSON<T>(raw: string, fallback: T): T {
-  try {
-    const v = JSON.parse(raw);
-    return v as T;
-  } catch {
-    return fallback;
   }
 }
 
@@ -208,12 +298,9 @@ async function getLatestVersionCached(): Promise<string | null> {
       return cached.version;
     }
 
-    const resp = await fetch(
-      'https://api.github.com/repos/Nagi-ovo/gemini-voyager/releases/latest',
-      {
-        headers: { Accept: 'application/vnd.github+json' },
-      },
-    );
+    const resp = await fetch('https://api.github.com/repos/Nagi-ovo/voyager/releases/latest', {
+      headers: { Accept: 'application/vnd.github+json' },
+    });
     if (!resp.ok) {
       throw new Error(`HTTP ${resp.status}`);
     }
@@ -260,6 +347,27 @@ function escapeHtml(s: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+function createSponsorHeartIcon(size = 14): SVGSVGElement {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('width', String(size));
+  svg.setAttribute('height', String(size));
+  svg.setAttribute('viewBox', '0 0 16 16');
+  svg.setAttribute('fill', 'currentColor');
+  svg.setAttribute('aria-hidden', 'true');
+
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', SPONSOR_HEART_PATH_16);
+  svg.appendChild(path);
+
+  return svg;
+}
+
+function renderSupportLinkLabel(link: HTMLAnchorElement, label: string): void {
+  const labelEl = createEl('span', 'gv-pm-support-label');
+  labelEl.textContent = label;
+  link.replaceChildren(createSponsorHeartIcon(), labelEl);
 }
 
 function dedupeTags(tags: string[]): string[] {
@@ -317,6 +425,41 @@ function computeAnchoredPosition(
 
 export async function startPromptManager(): Promise<{ destroy: () => void }> {
   let marked!: typeof MarkedFn;
+  let DOMPurify!: typeof import('dompurify').default;
+
+  // Lazily load marked + the KaTeX extension only when a markdown preview is
+  // actually rendered. marked-katex-extension pulls in the ~265 KB KaTeX chunk,
+  // so doing this at startup would load KaTeX on every Gemini/AI Studio page even
+  // when the user never opens the prompt panel. Cached after the first call.
+  let markdownReady: Promise<void> | null = null;
+  const ensureMarkdown = (): Promise<void> => {
+    if (!markdownReady) {
+      markdownReady = (async () => {
+        const [markedModule, katexModule, domPurifyModule] = await Promise.all([
+          import('marked'),
+          import('marked-katex-extension'),
+          import('dompurify'),
+        ]);
+        marked = markedModule.marked;
+        const { default: markedKatex } = katexModule;
+        DOMPurify = domPurifyModule.default;
+        try {
+          // markdown config: single newlines as <br> and KaTeX inline/display math
+          marked.use(
+            markedKatex({
+              throwOnError: false,
+              output: 'html',
+              trust: true, // Trust the rendering environment (content script context)
+              strict: false, // Disable strict mode checks including quirks mode detection
+            }),
+          );
+          marked.setOptions({ breaks: true });
+        } catch {}
+      })();
+    }
+    return markdownReady;
+  };
+
   try {
     // Check if the prompt manager should be hidden & changelog badge state
     let pmHiddenByUser = false;
@@ -331,6 +474,18 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
         'Failed to check hide prompt manager setting, continuing with default behavior',
         { error },
       );
+    }
+
+    function downloadTextFile(data: string, filename: string, mimeType: string): void {
+      const url = URL.createObjectURL(new Blob([data], { type: mimeType }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
     }
 
     try {
@@ -404,23 +559,8 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
       // Continue even if migration fails - data will still work from current storage
     }
 
-    // Dynamic imports to prevent side effects on unsupported pages
-    // Dynamic imports to prevent side effects on unsupported pages
-    marked = (await import('marked')).marked;
-    const { default: markedKatex } = await import('marked-katex-extension');
+    // marked + KaTeX now load lazily via ensureMarkdown() on first preview render.
 
-    // markdown config: respect single newlines as <br> and KaTeX inline/display math
-    try {
-      marked.use(
-        markedKatex({
-          throwOnError: false,
-          output: 'html',
-          trust: true, // Trust the rendering environment (content script context)
-          strict: false, // Disable strict mode checks including quirks mode detection
-        }),
-      );
-      marked.setOptions({ breaks: true });
-    } catch {}
     // Initialize centralized i18n system
     await initI18n();
     const i18n = createI18n();
@@ -553,25 +693,37 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
     versionBadge.addEventListener('click', async (e) => {
       e.stopPropagation();
       closePanel();
+      // The user explicitly asked for release notes: if the modal cannot
+      // open (chunk load blocked, missing notes for this version, …) fall
+      // back to the GitHub releases page instead of silently doing nothing,
+      // and log the error so site-specific failures (e.g. on Claude/ChatGPT
+      // custom websites) are diagnosable from the console.
+      const openReleasesFallback = () => {
+        window.open('https://github.com/Nagi-ovo/voyager/releases', '_blank', 'noopener');
+      };
       // If badge was active, clear it
       if (changelogBadgeActive) {
         changelogBadgeActive = false;
         trigger.classList.remove('gv-pm-trigger-new');
         versionBadge.classList.remove('gv-pm-version-outdated');
+        let shown = false;
         try {
-          await showChangelogModalDirect();
-        } catch {
-          // Ignore
+          shown = await showChangelogModalDirect();
+        } catch (error) {
+          logger.error('Changelog modal failed to open', { error: String(error) });
         }
+        if (!shown) openReleasesFallback();
         if (pmHiddenByUser) {
           trigger.style.display = 'none';
         }
       } else {
+        let shown = false;
         try {
-          await openChangelog();
-        } catch {
-          // Ignore
+          shown = await openChangelog();
+        } catch (error) {
+          logger.error('Changelog modal failed to open', { error: String(error) });
         }
+        if (!shown) openReleasesFallback();
       }
     });
 
@@ -683,6 +835,10 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
     const addBtn = createEl('button', 'gv-pm-add');
     addBtn.textContent = i18n.t('pm_add');
 
+    const viewModeBtn = createEl('button', 'gv-pm-view-mode');
+    viewModeBtn.setAttribute('type', 'button');
+    // Title, aria-label, and data-icon are set in applyViewModeUI() below.
+
     controls.appendChild(langSel);
     controls.appendChild(addBtn);
     controls.appendChild(lockBtn);
@@ -690,11 +846,52 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
     header.appendChild(titleRow);
     header.appendChild(controls);
 
+    // Search wrap hosts the search input and, on its right edge, the
+    // compact/comfortable view-mode toggle. Keeping the toggle here instead of
+    // the header controls row prevents the "Voyager" title from being squeezed
+    // into ellipsis, and keeps it adjacent to the list it governs.
     const searchWrap = createEl('div', 'gv-pm-search');
     const searchInput = createEl('input') as HTMLInputElement;
     searchInput.type = 'search';
     searchInput.placeholder = i18n.t('pm_search_placeholder');
     searchWrap.appendChild(searchInput);
+    searchWrap.appendChild(viewModeBtn);
+
+    const savedToolbar = createEl('div', 'gv-pm-saved-toolbar gv-hidden');
+    const savedFilterGroup = createEl('div', 'gv-pm-saved-filters');
+    savedFilterGroup.setAttribute('role', 'group');
+    const savedFilterButtons = new Map<SavedLibraryFilter, HTMLButtonElement>();
+    for (const value of ['all', 'starred', 'highlights'] as const) {
+      const button = createEl('button', 'gv-pm-saved-filter');
+      button.setAttribute('type', 'button');
+      button.addEventListener('click', () => {
+        savedFilter = value;
+        applySavedFilterUI();
+        renderStarredList();
+      });
+      savedFilterButtons.set(value, button);
+      savedFilterGroup.appendChild(button);
+    }
+    savedToolbar.appendChild(savedFilterGroup);
+
+    const savedActions = createEl('div', 'gv-pm-saved-actions');
+    const exportJsonBtn = createEl('button', 'gv-pm-saved-action');
+    exportJsonBtn.type = 'button';
+    exportJsonBtn.textContent = 'JSON';
+    const exportMarkdownBtn = createEl('button', 'gv-pm-saved-action');
+    exportMarkdownBtn.type = 'button';
+    exportMarkdownBtn.textContent = 'Markdown';
+    const importHighlightsBtn = createEl('button', 'gv-pm-saved-action');
+    importHighlightsBtn.type = 'button';
+    const importHighlightsInput = createEl('input') as HTMLInputElement;
+    importHighlightsInput.type = 'file';
+    importHighlightsInput.accept = 'application/json,.json';
+    importHighlightsInput.className = 'gv-pm-saved-import-input';
+    savedActions.appendChild(exportJsonBtn);
+    savedActions.appendChild(exportMarkdownBtn);
+    savedActions.appendChild(importHighlightsBtn);
+    savedActions.appendChild(importHighlightsInput);
+    savedToolbar.appendChild(savedActions);
 
     const tagsWrapOuter = createEl('div', 'gv-pm-tags-wrap');
     const tagsWrap = createEl('div', 'gv-pm-tags');
@@ -707,67 +904,39 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
     const list = createEl('div', 'gv-pm-list');
 
     const footer = createEl('div', 'gv-pm-footer');
-    const importInput = createEl('input') as HTMLInputElement;
-    importInput.type = 'file';
-    importInput.accept = '.json,application/json';
-    importInput.className = 'gv-pm-import-input';
-
-    // Backup button - primary action
+    // Primary view switch: the previous local backup slot now opens the
+    // starred library, and flips back to Prompt Manager inside that view.
     const backupBtn = createEl('button', 'gv-pm-backup-btn');
-    backupBtn.textContent = '💾 ' + i18n.t('pm_backup');
-    backupBtn.title = i18n.t('pm_backup_tooltip');
-
-    // Official Website button - primary action (right side)
-    const websiteBtn = createEl('a', 'gv-pm-website-btn');
-    websiteBtn.target = '_blank';
-    websiteBtn.rel = 'noreferrer';
-    // Initial text/href will be set in refreshUITexts
+    backupBtn.setAttribute('type', 'button');
 
     // Primary actions container
     const primaryActions = createEl('div', 'gv-pm-footer-actions');
     primaryActions.appendChild(backupBtn);
-    primaryActions.appendChild(websiteBtn);
 
     // Secondary actions container
     const secondaryActions = createEl('div', 'gv-pm-footer-secondary');
-
-    const importBtn = createEl('button', 'gv-pm-import-btn');
-    importBtn.textContent = i18n.t('pm_import');
-
-    const exportBtn = createEl('button', 'gv-pm-export-btn');
-    exportBtn.textContent = i18n.t('pm_export');
 
     const settingsBtn = createEl('button', 'gv-pm-settings');
     settingsBtn.textContent = i18n.t('pm_settings');
     settingsBtn.title = i18n.t('pm_settings_tooltip');
 
-    const gh = document.createElement('a');
-    gh.className = 'gv-pm-gh';
-    gh.href = 'https://github.com/Nagi-ovo/gemini-voyager';
-    gh.target = '_blank';
-    gh.rel = 'noreferrer';
-    gh.title = i18n.t('starProject');
+    const supportLink = document.createElement('a');
+    supportLink.className = 'gv-pm-support';
+    supportLink.target = '_blank';
+    supportLink.rel = 'noreferrer';
+    supportLink.title = i18n.t('sponsorMe');
 
-    // Add icon and text
-    const ghIcon = document.createElement('span');
-    ghIcon.className = 'gv-pm-gh-icon';
-    const ghText = document.createElement('span');
-    ghText.className = 'gv-pm-gh-text';
-    ghText.textContent = i18n.t('starProject');
-    gh.appendChild(ghIcon);
-    gh.appendChild(ghText);
-
-    secondaryActions.appendChild(importBtn);
-    secondaryActions.appendChild(exportBtn);
     secondaryActions.appendChild(settingsBtn);
-    secondaryActions.appendChild(gh);
+    secondaryActions.appendChild(supportLink);
 
     footer.appendChild(primaryActions);
     footer.appendChild(secondaryActions);
-    footer.appendChild(importInput);
 
     const addForm = elFromHTML(
       `<form class="gv-pm-add-form gv-hidden">
+        <input class="gv-pm-input-name" type="text" maxlength="60" placeholder="${escapeHtml(
+          i18n.t('pm_name_placeholder') || 'Name (optional)',
+        )}" />
         <textarea class="gv-pm-input-text" placeholder="${escapeHtml(
           i18n.t('pm_prompt_placeholder') || 'Prompt text',
         )}" rows="3"></textarea>
@@ -789,6 +958,7 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
 
     panel.appendChild(header);
     panel.appendChild(searchWrap);
+    panel.appendChild(savedToolbar);
     panel.appendChild(tagsWrapOuter);
     panel.appendChild(addForm);
     panel.appendChild(list);
@@ -798,7 +968,16 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
     // State
     let items: PromptItem[] = await readStorage<PromptItem[]>(STORAGE_KEYS.items, []);
     let open = false;
-    let selectedTags: Set<string> = new Set<string>();
+    // Restore the tag filter saved in a previous session (#729), reconciled
+    // against the tags that still exist so a deleted/renamed tag can't strand
+    // the list on a chip-less filter. Local-only on purpose — see
+    // STORAGE_KEYS.selectedTags / tagFilterState.ts.
+    let selectedTags: Set<string> = new Set<string>(
+      sanitizeSelectedTags(
+        await readStorage<string[]>(STORAGE_KEYS.selectedTags, []),
+        collectAllTags(items),
+      ),
+    );
     let locked = !!(await readStorage<boolean>(STORAGE_KEYS.locked, false));
     let savedPos = await readStorage<PanelPosition | null>(STORAGE_KEYS.position, null);
     let dragging = false;
@@ -806,6 +985,15 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
     let draggingTrigger = false;
     let editingId: string | null = null;
     let expandedItems: Set<string> = new Set<string>(); // Track expanded prompt items
+    let viewMode: PMViewMode = 'compact';
+    let panelView: PMPanelView = 'prompts';
+    let promptSearchValue = '';
+    let starredSearchValue = '';
+    let starredMessages: StarredMessage[] = [];
+    let highlightRecords: HighlightRecordV1[] = [];
+    let savedFilter: SavedLibraryFilter = 'all';
+    let starredLoading = false;
+    let starredLoadError = false;
 
     function setNotice(text: string, kind: 'ok' | 'err' = 'ok') {
       notice.textContent = text || '';
@@ -836,14 +1024,536 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
       tagsWrapOuter.classList.toggle('gv-pm-tags-scroll-end', !showHint);
     }
 
+    /* Fast, interactive hover tooltip for compact rows.
+     *
+     * Opens ~250 ms after mouseenter. Closes ~150 ms after mouseleave — long
+     * enough for the user to cross the gap onto the tooltip itself, where
+     * they can read the full prompt and scroll long content. Entering the
+     * tooltip cancels any pending hide; leaving the tooltip schedules one.
+     * A singleton element is reused across rows. */
+    const TOOLTIP_OPEN_DELAY_MS = 250;
+    const TOOLTIP_HIDE_GRACE_MS = 150;
+    let tooltipEl: HTMLDivElement | null = null;
+    let tooltipOpenTimer: number | null = null;
+    let tooltipHideTimer: number | null = null;
+    let tooltipTargetHovered = false;
+    let tooltipSelfHovered = false;
+
+    function clearOpenTimer(): void {
+      if (tooltipOpenTimer !== null) {
+        window.clearTimeout(tooltipOpenTimer);
+        tooltipOpenTimer = null;
+      }
+    }
+
+    function clearHideTimer(): void {
+      if (tooltipHideTimer !== null) {
+        window.clearTimeout(tooltipHideTimer);
+        tooltipHideTimer = null;
+      }
+    }
+
+    function actuallyHideTooltip(): void {
+      clearOpenTimer();
+      clearHideTimer();
+      tooltipTargetHovered = false;
+      tooltipSelfHovered = false;
+      if (tooltipEl) {
+        tooltipEl.classList.remove('gv-pm-tooltip-visible');
+      }
+    }
+
+    // External callers (closePanel, destroy, scroll listeners) want a hard
+    // dismiss; row/tooltip mouse handlers use scheduleHide with grace.
+    const hideTooltip = actuallyHideTooltip;
+
+    function scheduleHide(): void {
+      clearHideTimer();
+      tooltipHideTimer = window.setTimeout(() => {
+        tooltipHideTimer = null;
+        if (!tooltipSelfHovered && !tooltipTargetHovered) {
+          actuallyHideTooltip();
+        }
+      }, TOOLTIP_HIDE_GRACE_MS);
+    }
+
+    function ensureTooltipEl(): HTMLDivElement {
+      if (tooltipEl) return tooltipEl;
+      const el = document.createElement('div');
+      el.className = 'gv-pm-tooltip';
+      el.setAttribute('role', 'tooltip');
+      // Entering the tooltip cancels any pending hide; leaving schedules it.
+      // This is what lets the user glide from row → gap → tooltip and scroll.
+      el.addEventListener('mouseenter', () => {
+        tooltipSelfHovered = true;
+        clearHideTimer();
+      });
+      el.addEventListener('mouseleave', () => {
+        tooltipSelfHovered = false;
+        scheduleHide();
+      });
+      document.body.appendChild(el);
+      tooltipEl = el;
+      return el;
+    }
+
+    function showTooltip(target: HTMLElement, fullText: string): void {
+      const el = ensureTooltipEl();
+      // Reset scroll so each open starts at the top of the content.
+      el.scrollTop = 0;
+      el.textContent = fullText;
+      el.setAttribute('data-gv-theme', panel.getAttribute('data-gv-theme') || '');
+
+      // Position: prefer above the target, fall back to below if clipped.
+      // Measurement requires the element to be laid out, so reveal first then
+      // adjust; CSS keeps it invisible until the `-visible` class is applied.
+      el.style.left = '0px';
+      el.style.top = '0px';
+      el.style.visibility = 'hidden';
+      el.classList.add('gv-pm-tooltip-visible');
+      const targetRect = target.getBoundingClientRect();
+      const tipRect = el.getBoundingClientRect();
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const pad = 8;
+
+      let left = targetRect.left;
+      if (left + tipRect.width > vw - pad) left = vw - pad - tipRect.width;
+      if (left < pad) left = pad;
+
+      let top = targetRect.top - tipRect.height - 6;
+      if (top < pad) {
+        top = targetRect.bottom + 6;
+        if (top + tipRect.height > vh - pad) top = Math.max(pad, vh - pad - tipRect.height);
+      }
+
+      el.style.left = `${Math.round(left)}px`;
+      el.style.top = `${Math.round(top)}px`;
+      el.style.visibility = '';
+    }
+
+    function attachPromptTooltip(target: HTMLElement, fullText: string, _host: HTMLElement): void {
+      target.addEventListener('mouseenter', () => {
+        tooltipTargetHovered = true;
+        clearHideTimer();
+        clearOpenTimer();
+        tooltipOpenTimer = window.setTimeout(() => {
+          tooltipOpenTimer = null;
+          if (tooltipTargetHovered) showTooltip(target, fullText);
+        }, TOOLTIP_OPEN_DELAY_MS);
+      });
+      target.addEventListener('mouseleave', () => {
+        tooltipTargetHovered = false;
+        // Cancel a pending open (user left before it showed) — otherwise give
+        // them the grace window to cross onto the tooltip.
+        if (tooltipOpenTimer !== null) {
+          clearOpenTimer();
+          actuallyHideTooltip();
+          return;
+        }
+        scheduleHide();
+      });
+      // A click/press activates the prompt; dismiss the hover preview immediately.
+      target.addEventListener('mousedown', actuallyHideTooltip);
+    }
+
+    // Dismiss on scroll or panel-wide events so the tooltip never ends up
+    // orphaned when the list scrolls under it. Exception: scrolling *inside*
+    // the tooltip itself (long prompts now paginate within max-height) must
+    // keep it open — otherwise the interactive preview is useless.
+    const tooltipScrollTargets: Array<HTMLElement | Window> = [list, window];
+    const onTooltipDismiss = (ev: Event) => {
+      const t = ev.target as Node | null;
+      if (tooltipEl && t && (t === tooltipEl || tooltipEl.contains(t))) return;
+      actuallyHideTooltip();
+    };
+    for (const target of tooltipScrollTargets) {
+      target.addEventListener('scroll', onTooltipDismiss, { passive: true, capture: true });
+    }
+
+    function applyViewModeUI(): void {
+      panel.setAttribute('data-gv-view', viewMode);
+      const isCompact = viewMode === 'compact';
+      viewModeBtn.classList.toggle('gv-pm-view-mode-compact', isCompact);
+      viewModeBtn.setAttribute('data-icon', isCompact ? '▦' : '≡');
+      // Tooltip describes the action the click will perform, not the current state.
+      const nextTip = isCompact
+        ? i18n.t('pm_view_comfortable') || 'Switch to comfortable view'
+        : i18n.t('pm_view_compact') || 'Switch to compact list';
+      viewModeBtn.title = nextTip;
+      viewModeBtn.setAttribute('aria-label', nextTip);
+      viewModeBtn.setAttribute('aria-pressed', isCompact ? 'true' : 'false');
+    }
+
+    applyViewModeUI();
+
+    // Load saved view mode preference. Prefer sync (follows theme pattern),
+    // but fall back to local — keeps symmetry with the write path, which
+    // writes to local when sync is unavailable (Safari, sync-disabled
+    // profiles). Without this fallback, those environments lose the user's
+    // choice on every reload.
+    (async () => {
+      let saved: unknown = null;
+      try {
+        const result = await browser.storage.sync.get(StorageKeys.PROMPT_VIEW_MODE);
+        saved = result[StorageKeys.PROMPT_VIEW_MODE];
+      } catch {
+        // Fall through to local
+      }
+      if (saved !== 'compact' && saved !== 'comfortable') {
+        try {
+          const result = await browser.storage.local.get(StorageKeys.PROMPT_VIEW_MODE);
+          saved = result[StorageKeys.PROMPT_VIEW_MODE];
+        } catch {
+          // Keep default on failure
+        }
+      }
+      if (saved === 'compact' || saved === 'comfortable') {
+        viewMode = saved;
+        applyViewModeUI();
+        renderList();
+      }
+    })();
+
+    viewModeBtn.addEventListener('click', async (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (panelView !== 'prompts') return;
+      viewMode = viewMode === 'compact' ? 'comfortable' : 'compact';
+      applyViewModeUI();
+      renderList();
+      try {
+        await browser.storage.sync.set({ [StorageKeys.PROMPT_VIEW_MODE]: viewMode });
+      } catch {
+        try {
+          await browser.storage.local.set({ [StorageKeys.PROMPT_VIEW_MODE]: viewMode });
+        } catch {
+          // Ignore persistence failures; UI state still updates.
+        }
+      }
+      try {
+        (ev.currentTarget as HTMLButtonElement)?.blur?.();
+      } catch {}
+    });
+
+    function applySavedFilterUI(): void {
+      const labels: Record<SavedLibraryFilter, TranslationKey> = {
+        all: 'savedLibraryAll',
+        starred: 'savedLibraryStars',
+        highlights: 'savedLibraryHighlights',
+      };
+      savedFilterButtons.forEach((button, value) => {
+        button.textContent = i18n.t(labels[value]);
+        button.classList.toggle('active', value === savedFilter);
+        button.setAttribute('aria-pressed', value === savedFilter ? 'true' : 'false');
+      });
+      savedFilterGroup.setAttribute('aria-label', i18n.t('pm_starred_library'));
+      exportJsonBtn.title = `${i18n.t('pm_export')} JSON`;
+      exportJsonBtn.setAttribute('aria-label', exportJsonBtn.title);
+      exportMarkdownBtn.title = `${i18n.t('pm_export')} Markdown`;
+      exportMarkdownBtn.setAttribute('aria-label', exportMarkdownBtn.title);
+      importHighlightsBtn.textContent = i18n.t('pm_import');
+      importHighlightsBtn.title = i18n.t('pm_import');
+      importHighlightsBtn.setAttribute('aria-label', i18n.t('pm_import'));
+    }
+
+    function applyPanelViewUI(): void {
+      const isStarredView = panelView === 'starred';
+      panel.setAttribute('data-gv-panel-view', panelView);
+      titleText.textContent = isStarredView ? i18n.t('pm_starred_library') : 'Voyager';
+      backupBtn.textContent = isStarredView
+        ? '💬 ' + i18n.t('pm_prompt_manager')
+        : '★ ' + i18n.t('pm_starred_library');
+      backupBtn.title = isStarredView ? i18n.t('pm_prompt_manager') : i18n.t('pm_starred_library');
+      backupBtn.setAttribute('aria-label', backupBtn.title);
+      searchInput.placeholder = isStarredView
+        ? i18n.t('savedLibrarySearchPlaceholder')
+        : i18n.t('pm_search_placeholder');
+      addBtn.classList.toggle('gv-hidden', isStarredView);
+      viewModeBtn.classList.toggle('gv-hidden', isStarredView);
+      tagsWrapOuter.classList.toggle('gv-hidden', isStarredView);
+      savedToolbar.classList.toggle('gv-hidden', !isStarredView);
+      secondaryActions.classList.toggle('gv-hidden', isStarredView);
+      if (isStarredView) {
+        addForm.classList.add('gv-hidden');
+        editingId = null;
+        hideTooltip();
+      }
+      applySavedFilterUI();
+    }
+
+    function renderActiveList(): void {
+      if (panelView === 'starred') renderStarredList();
+      else renderList();
+    }
+
+    async function persistPanelView(nextView: PMPanelView): Promise<void> {
+      try {
+        await browser.storage.sync.set({ [StorageKeys.PROMPT_PANEL_VIEW]: nextView });
+      } catch {
+        try {
+          await browser.storage.local.set({ [StorageKeys.PROMPT_PANEL_VIEW]: nextView });
+        } catch {
+          // Ignore persistence failures; the visible panel state still updates.
+        }
+      }
+    }
+
+    async function loadStarredMessages(): Promise<void> {
+      starredLoading = true;
+      starredLoadError = false;
+      renderStarredList();
+      try {
+        [starredMessages, highlightRecords] = await Promise.all([
+          StarredMessagesService.getAllStarredMessagesSorted(),
+          loadCurrentAccountHighlightRecords(),
+        ]);
+      } catch (error) {
+        console.warn('[PromptManager] Failed to load saved library:', error);
+        starredLoadError = true;
+        starredMessages = [];
+        highlightRecords = [];
+        setNotice(i18n.t('pm_starred_load_error'), 'err');
+      } finally {
+        starredLoading = false;
+        renderStarredList();
+      }
+    }
+
+    async function exportHighlights(format: 'json' | 'markdown'): Promise<void> {
+      try {
+        const response = (await browser.runtime.sendMessage({
+          type: 'gv.highlight.export',
+          payload: { format, scope: await resolveCurrentHighlightScope() },
+        })) as { ok?: boolean; data?: string; filename?: string; error?: string } | undefined;
+        if (!response?.ok || typeof response.data !== 'string') {
+          throw new Error(response?.error || 'Highlight export failed');
+        }
+        downloadTextFile(
+          response.data,
+          response.filename || `gemini-voyager-highlights.${format === 'json' ? 'json' : 'md'}`,
+          format === 'json' ? 'application/json' : 'text/markdown',
+        );
+      } catch (error) {
+        logger.warn('[PromptManager] Failed to export highlights', { error: String(error) });
+        setNotice(i18n.t('promptExportError'), 'err');
+      }
+    }
+
+    async function importHighlights(file: File): Promise<void> {
+      try {
+        const response = (await browser.runtime.sendMessage({
+          type: 'gv.highlight.import',
+          payload: { data: await file.text(), scope: await resolveCurrentHighlightScope() },
+        })) as
+          | {
+              ok?: boolean;
+              stats?: { imported: number; updated: number; duplicates: number };
+              error?: string;
+            }
+          | undefined;
+        if (!response?.ok || !response.stats) {
+          throw new Error(response?.error || 'Highlight import failed');
+        }
+        await loadStarredMessages();
+        const changed = response.stats.imported + response.stats.updated;
+        setNotice(i18n.t('highlightImportSuccess').replace('{count}', String(changed)), 'ok');
+      } catch (error) {
+        logger.warn('[PromptManager] Failed to import highlights', { error: String(error) });
+        setNotice(i18n.t('promptImportError'), 'err');
+      } finally {
+        importHighlightsInput.value = '';
+      }
+    }
+
+    function switchPanelView(nextView: PMPanelView): void {
+      if (panelView === nextView) return;
+      if (panelView === 'starred') starredSearchValue = searchInput.value || '';
+      else promptSearchValue = searchInput.value || '';
+      panelView = nextView;
+      void persistPanelView(nextView);
+      searchInput.value = panelView === 'starred' ? starredSearchValue : promptSearchValue;
+      applyPanelViewUI();
+      if (panelView === 'starred') {
+        void loadStarredMessages();
+      } else {
+        renderTags();
+        renderList();
+        requestAnimationFrame(syncTagScrollHint);
+      }
+    }
+
+    function getStarredEmptyText(query: string): string {
+      if (starredLoadError) return i18n.t('pm_starred_load_error');
+      if (query) return i18n.t('pm_starred_no_results');
+      if (savedFilter === 'highlights') return i18n.t('savedLibraryNoHighlights');
+      if (savedFilter === 'starred') return i18n.t('noStarredMessages');
+      return i18n.t('savedLibraryEmpty');
+    }
+
+    function renderStarredList(): void {
+      hideTooltip();
+      const savedScrollTop = list.scrollTop;
+      const query = (searchInput.value || '').trim();
+      const filtered = filterSavedLibraryItems(
+        toSavedLibraryItems(starredMessages, highlightRecords),
+        savedFilter,
+        query,
+      );
+      list.innerHTML = '';
+
+      if (starredLoading) {
+        const loading = createEl('div', 'gv-pm-empty gv-pm-starred-empty');
+        loading.textContent = i18n.t('loading') || 'Loading...';
+        list.appendChild(loading);
+        return;
+      }
+
+      if (starredLoadError || filtered.length === 0) {
+        const empty = createEl('div', 'gv-pm-empty gv-pm-starred-empty');
+        empty.textContent = getStarredEmptyText(query);
+        list.appendChild(empty);
+        return;
+      }
+
+      const frag = document.createDocumentFragment();
+      for (const item of filtered) {
+        const row = createEl('button', 'gv-pm-starred-item');
+        row.setAttribute('type', 'button');
+        row.setAttribute('dir', 'auto');
+        row.title = i18n.t('pm_starred_open');
+        row.addEventListener('click', (event) => {
+          event.preventDefault();
+          void (async () => {
+            await persistPanelView('starred');
+            if (navigateToSavedLibraryItem(item)) closePanel();
+          })();
+        });
+
+        const icon = createEl('span', 'gv-pm-starred-icon');
+        icon.textContent = item.kind === 'starred' ? '★' : '';
+        icon.classList.toggle('gv-pm-highlight-icon', item.kind === 'highlight');
+        if (item.kind === 'highlight') {
+          icon.setAttribute('data-highlight-color', item.color || 'yellow');
+          icon.style.backgroundColor = getHighlightColorHex(item.color || 'yellow');
+        }
+        icon.setAttribute('aria-hidden', 'true');
+
+        const body = createEl('span', 'gv-pm-starred-body');
+        const title = createEl('span', 'gv-pm-starred-title');
+        title.textContent =
+          (item.conversationTitle && item.conversationTitle.trim()) ||
+          i18n.t('pm_starred_untitled');
+        const content = createEl('span', 'gv-pm-starred-content');
+        content.textContent = item.content || '';
+        let note: HTMLSpanElement | null = null;
+        if (item.note) {
+          note = createEl('span', 'gv-pm-highlight-note');
+          note.textContent = item.note;
+        }
+        const meta = createEl('span', 'gv-pm-starred-meta');
+        meta.textContent = `${
+          item.kind === 'starred' ? i18n.t('savedLibraryStars') : i18n.t('savedLibraryHighlights')
+        } · ${formatStarredMessageTime(item.savedAt)}`;
+        body.appendChild(title);
+        body.appendChild(content);
+        if (note) body.appendChild(note);
+        body.appendChild(meta);
+
+        const removeBtn = createEl('button', 'gv-pm-starred-remove');
+        removeBtn.setAttribute('type', 'button');
+        const removeLabel =
+          item.kind === 'starred' ? i18n.t('removeFromStarred') : i18n.t('pm_delete');
+        removeBtn.title = removeLabel;
+        removeBtn.setAttribute('aria-label', removeLabel);
+        removeBtn.addEventListener('click', async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const removed =
+            item.kind === 'starred'
+              ? await StarredMessagesService.removeStarredMessage(
+                  item.conversationId,
+                  item.turnId,
+                ).then(() => true)
+              : await removeStoredHighlight(item);
+          if (!removed) {
+            setNotice(i18n.t('highlightDeleteFailed'), 'err');
+            return;
+          }
+          if (item.kind === 'starred') {
+            starredMessages = starredMessages.filter(
+              (message) =>
+                message.conversationId !== item.conversationId || message.turnId !== item.turnId,
+            );
+          } else {
+            highlightRecords = highlightRecords.filter((record) => record.id !== item.id);
+          }
+          renderStarredList();
+          setNotice(i18n.t('pm_deleted') || 'Deleted', 'ok');
+        });
+
+        row.appendChild(icon);
+        row.appendChild(body);
+        row.appendChild(removeBtn);
+        frag.appendChild(row);
+      }
+      list.appendChild(frag);
+      const maxScroll = Math.max(0, list.scrollHeight - list.clientHeight);
+      list.scrollTop = Math.min(savedScrollTop, maxScroll);
+    }
+
+    // Restore the last Prompt Manager sub-view. This mirrors the compact /
+    // comfortable preference so a starred-message navigation does not drop the
+    // user back into the prompt list after the Gemini route changes.
+    (async () => {
+      let saved: unknown = null;
+      try {
+        const result = await browser.storage.sync.get(StorageKeys.PROMPT_PANEL_VIEW);
+        saved = result[StorageKeys.PROMPT_PANEL_VIEW];
+      } catch {
+        // Fall through to local
+      }
+      if (!isPMPanelView(saved)) {
+        try {
+          const result = await browser.storage.local.get(StorageKeys.PROMPT_PANEL_VIEW);
+          saved = result[StorageKeys.PROMPT_PANEL_VIEW];
+        } catch {
+          // Keep default on failure
+        }
+      }
+      if (isPMPanelView(saved) && saved !== panelView) {
+        panelView = saved;
+        searchInput.value = panelView === 'starred' ? starredSearchValue : promptSearchValue;
+        applyPanelViewUI();
+        if (panelView === 'starred' && open) void loadStarredMessages();
+        else renderActiveList();
+      }
+    })();
+
+    // Fire-and-forget: the in-memory Set drives the UI; a failed write just
+    // means the filter isn't restored next session. Never blocks a click.
+    function persistSelectedTags(): void {
+      void writeStorage(STORAGE_KEYS.selectedTags, Array.from(selectedTags));
+    }
+
     function renderTags(): void {
       const all = collectAllTags(items);
+      // Self-heal: if a previously selected tag's prompts were all deleted or
+      // retagged this session, drop it so the filter can't get stuck on a
+      // chip-less ghost tag that hides every prompt. Persist only on a real
+      // change to avoid redundant writes on every render.
+      const valid = sanitizeSelectedTags(Array.from(selectedTags), all);
+      if (valid.length !== selectedTags.size) {
+        selectedTags = new Set(valid);
+        persistSelectedTags();
+      }
       tagsWrap.innerHTML = '';
       const allBtn = createEl('button', 'gv-pm-tag');
       allBtn.textContent = i18n.t('pm_all_tags') || 'All';
       allBtn.classList.toggle('active', selectedTags.size === 0);
       allBtn.addEventListener('click', () => {
         selectedTags = new Set();
+        persistSelectedTags();
         renderTags();
         renderList();
       });
@@ -855,6 +1565,7 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
         btn.addEventListener('click', () => {
           if (selectedTags.has(tag)) selectedTags.delete(tag);
           else selectedTags.add(tag);
+          persistSelectedTags();
           renderTags();
           renderList();
         });
@@ -864,6 +1575,24 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
     }
 
     function renderList(): void {
+      if (panelView !== 'prompts') {
+        renderStarredList();
+        return;
+      }
+      // Rebuilding the list destroys every row's DOM. Any pending hover-open
+      // timer would fire against a detached target (getBoundingClientRect()
+      // returns zeros → tooltip mispositioned) and any visible tooltip would
+      // display stale content. Close it up front so every re-render starts
+      // from a clean state.
+      hideTooltip();
+
+      // Preserve the user's scroll position across the wipe-and-rebuild.
+      // Without this, actions like expand/collapse, search, tag filter,
+      // view-mode toggle, and cloud-sync updates all snap the list back to
+      // the top — most painful on the expand button, which fires a re-render
+      // right as the user is reading further down the list.
+      const savedScrollTop = list.scrollTop;
+
       const q = (searchInput.value || '').trim().toLowerCase();
       const selectedTagList = Array.from(selectedTags);
       const filtered = items.filter((it) => {
@@ -871,13 +1600,21 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
           selectedTagList.length === 0 || selectedTagList.every((t) => it.tags.includes(t));
         if (!okTag) return false;
         if (!q) return true;
-        return it.text.toLowerCase().includes(q) || it.tags.some((t) => t.includes(q));
+        // Include the user-authored name so searching for the label shown in
+        // compact mode always finds the prompt even when the Markdown body
+        // doesn't contain that string.
+        return (
+          it.text.toLowerCase().includes(q) ||
+          it.tags.some((t) => t.includes(q)) ||
+          (it.name ? it.name.toLowerCase().includes(q) : false)
+        );
       });
       list.innerHTML = '';
       if (filtered.length === 0) {
         const empty = createEl('div', 'gv-pm-empty');
         empty.textContent = i18n.t('pm_empty') || 'No prompts yet';
         list.appendChild(empty);
+        // Nothing to scroll back to; avoid setting scrollTop on an empty list.
         return;
       }
       const frag = document.createDocumentFragment();
@@ -888,38 +1625,55 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
         const textContainer = createEl('div', 'gv-pm-item-text-container');
         const textBtn = createEl('button', 'gv-pm-item-text');
 
+        // Compact mode collapses each prompt to a single-line plaintext title
+        // to maximize density; expanding promotes the row back to the rich
+        // Markdown preview used in comfortable mode.
+        const isExpanded = expandedItems.has(it.id);
+        const compactCollapsed = viewMode === 'compact' && !isExpanded;
+        if (compactCollapsed) {
+          row.classList.add('gv-pm-item-compact');
+        }
+
         // Render Markdown + KaTeX preview (sanitized)
         const md = document.createElement('div');
         md.className = 'gv-md';
 
-        // Apply collapsed class if not expanded
-        const isExpanded = expandedItems.has(it.id);
-        if (!isExpanded) {
-          md.classList.add('gv-md-collapsed');
+        if (compactCollapsed) {
+          md.classList.add('gv-pm-compact-title');
+          // User-authored `name` takes precedence so prompts can be labeled
+          // independently of their Markdown body.
+          md.textContent = (it.name && it.name.trim()) || extractPlainTitle(it.text);
+          // Attach a lightweight, fast-opening hover tooltip for peek.
+          attachPromptTooltip(textBtn, it.text, panel);
+        } else {
+          // Apply collapsed class if not expanded (comfortable mode: 5-line clamp)
+          if (!isExpanded) {
+            md.classList.add('gv-md-collapsed');
+          }
         }
 
         // Insert element into DOM first, then render to ensure KaTeX can detect document mode correctly
         textBtn.appendChild(md);
 
-        // Defer rendering to next frame to ensure element is fully attached
-        requestAnimationFrame(() => {
-          try {
-            const out = marked.parse(it.text as string);
-            if (typeof out === 'string') {
-              md.innerHTML = DOMPurify.sanitize(out);
-            } else {
-              out
-                .then((html: string) => {
-                  md.innerHTML = DOMPurify.sanitize(html);
-                })
-                .catch(() => {
-                  md.textContent = it.text;
-                });
-            }
-          } catch {
-            md.textContent = it.text;
-          }
-        });
+        if (!compactCollapsed) {
+          // Defer rendering to next frame to ensure element is fully attached
+          requestAnimationFrame(() => {
+            void ensureMarkdown()
+              .then(() => {
+                const out = marked.parse(it.text as string);
+                if (typeof out === 'string') {
+                  md.innerHTML = DOMPurify.sanitize(out);
+                } else {
+                  return out.then((html: string) => {
+                    md.innerHTML = DOMPurify.sanitize(html);
+                  });
+                }
+              })
+              .catch(() => {
+                md.textContent = it.text;
+              });
+          });
+        }
 
         textBtn.addEventListener('mousedown', (e) => {
           if (e.button !== 0) return;
@@ -973,7 +1727,13 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
         });
 
         textContainer.appendChild(textBtn);
-        textContainer.appendChild(expandBtn);
+        // In compact mode the expand button is moved into the right-side
+        // actions cluster (see below) so all right-aligned controls form a
+        // single group and can't overlap each other. In comfortable mode
+        // it stays inline with the text for progressive disclosure.
+        if (!compactCollapsed) {
+          textContainer.appendChild(expandBtn);
+        }
 
         // Edit button
         const editBtn = createEl('button', 'gv-pm-edit');
@@ -982,12 +1742,13 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
         editBtn.addEventListener('click', async (e) => {
           e.stopPropagation();
           // Start inline edit using the add form fields
+          (addForm.querySelector('.gv-pm-input-name') as HTMLInputElement).value = it.name ?? '';
           (addForm.querySelector('.gv-pm-input-text') as HTMLTextAreaElement).value = it.text;
           (addForm.querySelector('.gv-pm-input-tags') as HTMLInputElement).value = (
             it.tags || []
           ).join(', ');
           addForm.classList.remove('gv-hidden');
-          (addForm.querySelector('.gv-pm-input-text') as HTMLTextAreaElement).focus();
+          (addForm.querySelector('.gv-pm-input-name') as HTMLInputElement).focus();
           editingId = it.id;
         });
         const bottom = createEl('div', 'gv-pm-bottom');
@@ -1070,6 +1831,11 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
         // Append text container instead of textBtn
         row.appendChild(textContainer);
 
+        // In compact mode, expand sits at the left of edit/del so the cluster
+        // reads [chip] [▼] [✎] [🗑] from left to right — one cohesive group.
+        if (compactCollapsed) {
+          actions.appendChild(expandBtn);
+        }
         actions.appendChild(editBtn);
         actions.appendChild(del);
         bottom.appendChild(meta);
@@ -1078,6 +1844,11 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
         frag.appendChild(row);
       }
       list.appendChild(frag);
+      // Restore scroll position after the DOM is laid out. Clamped to the
+      // new scrollHeight so a re-filter that shrinks the list doesn't leave
+      // us at an impossible offset.
+      const maxScroll = Math.max(0, list.scrollHeight - list.clientHeight);
+      list.scrollTop = Math.min(savedScrollTop, maxScroll);
       // KaTeX rendered during Markdown step, no post-typeset needed
     }
 
@@ -1085,8 +1856,18 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
       open = true;
       panel.classList.remove('gv-hidden');
       if (locked && savedPos) {
-        panel.style.left = `${Math.round(savedPos.left)}px`;
-        panel.style.top = `${Math.round(savedPos.top)}px`;
+        // Clamp the saved position to the current viewport. Without this, a
+        // panel pinned on a wider screen renders past the edge after the user
+        // narrows the window — and since dragging/the unlock button are gated
+        // on `!locked`, the user gets stuck. See #635.
+        const pad = 8;
+        const rect = panel.getBoundingClientRect();
+        const panelW = rect.width || 320;
+        const panelH = rect.height || 360;
+        const left = Math.max(pad, Math.min(savedPos.left, window.innerWidth - panelW - pad));
+        const top = Math.max(pad, Math.min(savedPos.top, window.innerHeight - panelH - pad));
+        panel.style.left = `${Math.round(left)}px`;
+        panel.style.top = `${Math.round(top)}px`;
       } else {
         // measure after making visible
         const pos = computeAnchoredPosition(trigger, panel);
@@ -1099,6 +1880,7 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
     function closePanel(): void {
       open = false;
       panel.classList.add('gv-hidden');
+      hideTooltip();
     }
 
     function applyLockUI(): void {
@@ -1112,18 +1894,11 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
 
     function refreshUITexts(): void {
       // Keep custom icon + label
-      titleText.textContent = 'Voyager';
       addBtn.textContent = i18n.t('pm_add');
-      searchInput.placeholder = i18n.t('pm_search_placeholder');
-      importBtn.textContent = i18n.t('pm_import');
-      exportBtn.textContent = i18n.t('pm_export');
-      backupBtn.textContent = '💾 ' + i18n.t('pm_backup');
-      backupBtn.title = i18n.t('pm_backup_tooltip');
-
-      // Update website button
-      websiteBtn.textContent = '🌐 ' + i18n.t('officialDocs');
+      renderSupportLinkLabel(supportLink, i18n.t('sponsorMe'));
+      supportLink.title = i18n.t('sponsorMe');
       i18n.get().then((lang) => {
-        websiteBtn.href =
+        supportLink.href =
           lang === 'zh'
             ? 'https://voyager.nagi.fun/guide/sponsor.html'
             : `https://voyager.nagi.fun/${lang}/guide/sponsor.html`;
@@ -1131,9 +1906,8 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
 
       settingsBtn.textContent = i18n.t('pm_settings');
       settingsBtn.title = i18n.t('pm_settings_tooltip');
-      gh.title = i18n.t('starProject');
-      const ghTextEl = gh.querySelector('.gv-pm-gh-text');
-      if (ghTextEl) ghTextEl.textContent = i18n.t('starProject');
+      (addForm.querySelector('.gv-pm-input-name') as HTMLInputElement).placeholder =
+        i18n.t('pm_name_placeholder');
       (addForm.querySelector('.gv-pm-input-text') as HTMLTextAreaElement).placeholder =
         i18n.t('pm_prompt_placeholder');
       (addForm.querySelector('.gv-pm-input-tags') as HTMLInputElement).placeholder =
@@ -1142,13 +1916,27 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
       (addForm.querySelector('.gv-pm-cancel') as HTMLButtonElement).textContent =
         i18n.t('pm_cancel');
       applyLockUI();
+      applyViewModeUI();
+      applyPanelViewUI();
       renderTags();
-      renderList();
+      renderActiveList();
     }
 
     function onReposition(): void {
       if (!open) return;
-      if (locked) return;
+      if (locked) {
+        // Don't re-anchor when locked, but do keep the panel inside the viewport
+        // so a window resize can't strand the unlock button off-screen (#635).
+        const pad = 8;
+        const rect = panel.getBoundingClientRect();
+        const left = Math.max(pad, Math.min(rect.left, window.innerWidth - rect.width - pad));
+        const top = Math.max(pad, Math.min(rect.top, window.innerHeight - rect.height - pad));
+        if (left !== rect.left || top !== rect.top) {
+          panel.style.left = `${Math.round(left)}px`;
+          panel.style.top = `${Math.round(top)}px`;
+        }
+        return;
+      }
       const pos = computeAnchoredPosition(trigger, panel);
       panel.style.left = `${pos.left}px`;
       panel.style.top = `${pos.top}px`;
@@ -1219,8 +2007,11 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
       if (open) closePanel();
       else {
         openPanel();
-        renderTags();
-        renderList();
+        if (panelView === 'starred') void loadStarredMessages();
+        else {
+          renderTags();
+          renderList();
+        }
       }
     });
 
@@ -1244,6 +2035,11 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
       if (target.closest(`#${ID.panel}`)) return;
       if (target.closest(`#${ID.trigger}`)) return;
       if (target.closest('.gv-pm-confirm')) return;
+      // The hover-preview tooltip lives on document.body so users can
+      // interact with it (scroll long prompts, select text). Without this
+      // exclusion, clicking its scrollbar would be treated as an outside
+      // click and close the whole panel.
+      if (target.closest('.gv-pm-tooltip')) return;
       closePanel();
     };
     window.addEventListener('pointerdown', onWindowPointerDown, { capture: true });
@@ -1351,6 +2147,26 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
       if (area === 'sync' && changes[StorageKeys.PROMPT_INSERT_ON_CLICK]) {
         promptInsertOnClick = changes[StorageKeys.PROMPT_INSERT_ON_CLICK].newValue === true;
       }
+      if ((area === 'sync' || area === 'local') && changes[StorageKeys.PROMPT_VIEW_MODE]) {
+        const nextMode = changes[StorageKeys.PROMPT_VIEW_MODE].newValue;
+        if ((nextMode === 'compact' || nextMode === 'comfortable') && nextMode !== viewMode) {
+          viewMode = nextMode;
+          applyViewModeUI();
+          renderActiveList();
+        }
+      }
+      if ((area === 'sync' || area === 'local') && changes[StorageKeys.PROMPT_PANEL_VIEW]) {
+        const nextView = changes[StorageKeys.PROMPT_PANEL_VIEW].newValue;
+        if (isPMPanelView(nextView) && nextView !== panelView) {
+          if (panelView === 'starred') starredSearchValue = searchInput.value || '';
+          else promptSearchValue = searchInput.value || '';
+          panelView = nextView;
+          searchInput.value = panelView === 'starred' ? starredSearchValue : promptSearchValue;
+          applyPanelViewUI();
+          if (panelView === 'starred' && open) void loadStarredMessages();
+          else renderActiveList();
+        }
+      }
       // Handle changelog notify mode changes (dynamic badge update)
       if (
         area === 'local' &&
@@ -1391,9 +2207,17 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
         if (Array.isArray(newItems)) {
           items = newItems;
           renderTags();
-          renderList();
+          renderActiveList();
           setNotice(i18n.t('syncSuccess') || 'Synced', 'ok');
         }
+      }
+      if (
+        area === 'local' &&
+        (changes[StorageKeys.TIMELINE_STARRED_MESSAGES] ||
+          Object.keys(changes).some((key) => key.startsWith('gvAnnotation:'))) &&
+        panelView === 'starred'
+      ) {
+        void loadStarredMessages();
       }
     };
 
@@ -1405,6 +2229,13 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
       ev.preventDefault();
       ev.stopPropagation();
       editingId = null;
+      // Reset every field before opening. Without this, state from a cancelled
+      // edit (especially the optional name, which sits at the top and is easy
+      // to overlook) would leak into the new prompt.
+      (addForm.querySelector('.gv-pm-input-name') as HTMLInputElement).value = '';
+      (addForm.querySelector('.gv-pm-input-text') as HTMLTextAreaElement).value = '';
+      (addForm.querySelector('.gv-pm-input-tags') as HTMLInputElement).value = '';
+      setInlineHint('');
       addForm.classList.remove('gv-hidden');
       (addForm.querySelector('.gv-pm-input-text') as HTMLTextAreaElement)?.focus();
     });
@@ -1462,6 +2293,8 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
     );
     addForm.addEventListener('submit', async (e) => {
       e.preventDefault();
+      const nameRaw = (addForm.querySelector('.gv-pm-input-name') as HTMLInputElement).value;
+      const name = nameRaw.trim();
       const text = (addForm.querySelector('.gv-pm-input-text') as HTMLTextAreaElement).value;
       const tagsRaw = (addForm.querySelector('.gv-pm-input-tags') as HTMLInputElement).value;
       const tags = dedupeTags((tagsRaw || '').split(',').map((s) => s.trim()));
@@ -1478,6 +2311,8 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
         if (target) {
           target.text = text;
           target.tags = tags;
+          if (name) target.name = name;
+          else delete target.name;
           target.updatedAt = Date.now();
           await writeStorage(STORAGE_KEYS.items, items);
           setNotice(i18n.t('pm_saved') || 'Saved', 'ok');
@@ -1491,9 +2326,11 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
           return;
         }
         const it: PromptItem = { id: uid(), text, tags, createdAt: Date.now() };
+        if (name) it.name = name;
         items = [it, ...items];
         await writeStorage(STORAGE_KEYS.items, items);
       }
+      (addForm.querySelector('.gv-pm-input-name') as HTMLInputElement).value = '';
       (addForm.querySelector('.gv-pm-input-text') as HTMLTextAreaElement).value = '';
       (addForm.querySelector('.gv-pm-input-tags') as HTMLInputElement).value = '';
       setInlineHint('');
@@ -1502,268 +2339,21 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
       renderList();
     });
 
-    searchInput.addEventListener('input', () => renderList());
-
-    exportBtn.addEventListener('click', async () => {
-      try {
-        const data = await readStorage<PromptItem[]>(STORAGE_KEYS.items, []);
-        const payload = {
-          format: 'gemini-voyager.prompts.v1',
-          exportedAt: new Date().toISOString(),
-          items: data,
-        };
-        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `prompts-${Date.now()}.json`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-      } catch {
-        setNotice('Export failed', 'err');
-      }
+    searchInput.addEventListener('input', () => {
+      if (panelView === 'starred') starredSearchValue = searchInput.value || '';
+      else promptSearchValue = searchInput.value || '';
+      renderActiveList();
     });
 
-    // Backup button handler - creates timestamp folder with all data
-    backupBtn.addEventListener('click', async () => {
-      try {
-        // Read prompts
-        const prompts = await readStorage<PromptItem[]>(STORAGE_KEYS.items, []);
-        const promptPayload = {
-          format: 'gemini-voyager.prompts.v1',
-          exportedAt: new Date().toISOString(),
-          version: EXTENSION_VERSION,
-          items: prompts,
-        };
-
-        // Read folders (Safari-compatible: uses storage adapter)
-        const folderStorage = createFolderStorageAdapter();
-        const folderData = (await folderStorage.loadData('gvFolderData')) || {
-          folders: [],
-          folderContents: {},
-        };
-
-        // Create folder export payload with correct format
-        const folderPayload = {
-          format: 'gemini-voyager.folders.v1',
-          exportedAt: new Date().toISOString(),
-          version: EXTENSION_VERSION,
-          data: {
-            folders: folderData.folders || [],
-            folderContents: folderData.folderContents || {},
-          },
-        };
-
-        const settingsPayload = await exportBackupableSyncSettings();
-        const settingsCount = Object.keys(settingsPayload.data).length;
-
-        // Count conversations
-        const conversationCount = Object.values(folderData.folderContents || {}).reduce(
-          (sum: number, convs: unknown) => sum + (Array.isArray(convs) ? convs.length : 0),
-          0,
-        );
-
-        let timelineHierarchyData = normalizeTimelineHierarchyData(null);
-        try {
-          const context = detectAccountContextFromDocument(window.location.href, document);
-          const scope =
-            context.routeUserId || context.email
-              ? await accountIsolationService.resolveAccountScope({
-                  pageUrl: window.location.href,
-                  routeUserId: context.routeUserId,
-                  email: context.email,
-                })
-              : null;
-          const timelineHierarchyStorage = (await chrome.storage.local.get(
-            getTimelineHierarchyStorageKeysToRead(scope?.accountKey),
-          )) as Record<string, unknown>;
-          timelineHierarchyData = resolveTimelineHierarchyDataForStorageScope(
-            timelineHierarchyStorage,
-            scope?.accountKey,
-            scope?.routeUserId ?? null,
-          );
-        } catch (error) {
-          console.warn(
-            '[PromptManager] Failed to load scoped timeline hierarchy backup data:',
-            error,
-          );
-        }
-        const timelineHierarchyPayload = {
-          format: 'gemini-voyager.timeline-hierarchy.v1' as const,
-          exportedAt: new Date().toISOString(),
-          version: EXTENSION_VERSION,
-          data: timelineHierarchyData,
-        };
-
-        // Create metadata
-        const metadata = {
-          version: EXTENSION_VERSION,
-          timestamp: new Date().toISOString(),
-          includesSettings: true,
-          includesPrompts: true,
-          includesFolders: true,
-          settingsCount,
-          promptCount: prompts.length,
-          folderCount: folderData.folders?.length || 0,
-          conversationCount,
-          timelineHierarchyConversationCount: Object.keys(timelineHierarchyData.conversations || {})
-            .length,
-        };
-
-        // Generate timestamp for folder/file name
-        const pad = (n: number) => String(n).padStart(2, '0');
-        const d = new Date();
-        const timestamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-        const folderName = `backup-${timestamp}`;
-
-        // Check File System Access API support
-        if ('showDirectoryPicker' in window) {
-          // Modern browsers (Chrome, Edge) - use File System Access API
-          const dirHandle = await (
-            window as Window & {
-              showDirectoryPicker: (opts?: { mode?: string }) => Promise<FileSystemDirectoryHandle>;
-            }
-          ).showDirectoryPicker({ mode: 'readwrite' });
-          if (!dirHandle) {
-            setNotice(i18n.t('pm_backup_cancelled') || 'Backup cancelled', 'err');
-            return;
-          }
-
-          const backupDir = await dirHandle.getDirectoryHandle(folderName, { create: true });
-
-          // Write files
-          const promptsFile = await backupDir.getFileHandle('prompts.json', { create: true });
-          const promptsWritable = await promptsFile.createWritable();
-          await promptsWritable.write(JSON.stringify(promptPayload, null, 2));
-          await promptsWritable.close();
-
-          const foldersFile = await backupDir.getFileHandle('folders.json', { create: true });
-          const foldersWritable = await foldersFile.createWritable();
-          await foldersWritable.write(JSON.stringify(folderPayload, null, 2));
-          await foldersWritable.close();
-
-          const settingsFile = await backupDir.getFileHandle('settings.json', { create: true });
-          const settingsWritable = await settingsFile.createWritable();
-          await settingsWritable.write(JSON.stringify(settingsPayload, null, 2));
-          await settingsWritable.close();
-
-          const metaFile = await backupDir.getFileHandle('metadata.json', { create: true });
-          const metaWritable = await metaFile.createWritable();
-          await metaWritable.write(JSON.stringify(metadata, null, 2));
-          await metaWritable.close();
-
-          const timelineHierarchyFile = await backupDir.getFileHandle('timeline-hierarchy.json', {
-            create: true,
-          });
-          const timelineHierarchyWritable = await timelineHierarchyFile.createWritable();
-          await timelineHierarchyWritable.write(JSON.stringify(timelineHierarchyPayload, null, 2));
-          await timelineHierarchyWritable.close();
-
-          setNotice(
-            `✓ Backed up ${prompts.length} prompts, ${folderData.folders?.length || 0} folders`,
-            'ok',
-          );
-        } else {
-          // Fallback for Firefox, Safari - download as ZIP file
-          const zip = new JSZip();
-
-          // Add files to ZIP
-          zip.file('prompts.json', JSON.stringify(promptPayload, null, 2));
-          zip.file('folders.json', JSON.stringify(folderPayload, null, 2));
-          zip.file('settings.json', JSON.stringify(settingsPayload, null, 2));
-          zip.file('metadata.json', JSON.stringify(metadata, null, 2));
-          zip.file('timeline-hierarchy.json', JSON.stringify(timelineHierarchyPayload, null, 2));
-
-          // Generate ZIP file
-          const zipBlob = await zip.generateAsync({ type: 'blob' });
-
-          // Download ZIP file
-          const url = URL.createObjectURL(zipBlob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = `${folderName}.zip`;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          URL.revokeObjectURL(url);
-
-          setNotice(
-            `✓ Downloaded ${folderName}.zip (${prompts.length} prompts, ${folderData.folders?.length || 0} folders)`,
-            'ok',
-          );
-        }
-      } catch (err) {
-        if (err instanceof Error && err.name === 'AbortError') {
-          setNotice(i18n.t('pm_backup_cancelled') || 'Backup cancelled', 'err');
-        } else {
-          console.error('[PromptManager] Backup failed:', err);
-          setNotice(i18n.t('pm_backup_error') || '✗ Backup failed', 'err');
-        }
-      }
+    backupBtn.addEventListener('click', () => {
+      switchPanelView(panelView === 'starred' ? 'prompts' : 'starred');
     });
-
-    importBtn.addEventListener('click', () => importInput.click());
-    importInput.addEventListener('change', async () => {
-      const file = importInput.files && importInput.files[0];
-      if (!file) return;
-      try {
-        const text = await file.text();
-        const json = safeParseJSON<Record<string, unknown> | null>(text, null);
-        if (!json || (json.format !== 'gemini-voyager.prompts.v1' && !Array.isArray(json.items))) {
-          setNotice(i18n.t('pm_import_invalid') || 'Invalid file format', 'err');
-          return;
-        }
-        const arr: PromptItem[] = Array.isArray(json)
-          ? json
-          : Array.isArray(json.items)
-            ? json.items
-            : [];
-        const valid: PromptItem[] = [];
-        const seen = new Set<string>();
-        for (const it of arr) {
-          const itObj = it as Record<string, unknown>;
-          const text = String((itObj && itObj.text) || '').trim();
-          if (!text) continue;
-          const tags = Array.isArray(itObj.tags) ? itObj.tags.map((t: unknown) => String(t)) : [];
-          const key = `${text.toLowerCase()}|${tags.sort().join(',')}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          valid.push({ id: uid(), text, tags: dedupeTags(tags), createdAt: Date.now() });
-        }
-        if (valid.length) {
-          // Merge by text equality (case-insensitive)
-          const map = new Map<string, PromptItem>();
-          for (const it of items) map.set(it.text.toLowerCase(), it);
-          for (const it of valid) {
-            const k = it.text.toLowerCase();
-            if (map.has(k)) {
-              const prev = map.get(k)!;
-              const mergedTags = dedupeTags([...(prev.tags || []), ...(it.tags || [])]);
-              prev.tags = mergedTags;
-              prev.updatedAt = Date.now();
-              map.set(k, prev);
-            } else {
-              map.set(k, it);
-            }
-          }
-          items = Array.from(map.values()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-          await writeStorage(STORAGE_KEYS.items, items);
-          setNotice(
-            (i18n.t('pm_import_success') || 'Imported').replace('{count}', String(valid.length)),
-            'ok',
-          );
-          renderTags();
-          renderList();
-        } else {
-          setNotice(i18n.t('pm_import_invalid') || 'Invalid file format', 'err');
-        }
-      } catch {
-        setNotice(i18n.t('pm_import_invalid') || 'Invalid file format', 'err');
-      } finally {
-        importInput.value = '';
-      }
+    exportJsonBtn.addEventListener('click', () => void exportHighlights('json'));
+    exportMarkdownBtn.addEventListener('click', () => void exportHighlights('markdown'));
+    importHighlightsBtn.addEventListener('click', () => importHighlightsInput.click());
+    importHighlightsInput.addEventListener('change', () => {
+      const file = importHighlightsInput.files?.[0];
+      if (file) void importHighlights(file);
     });
 
     // Initialize
@@ -1783,6 +2373,23 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
           tagsWrap.removeEventListener('scroll', syncTagScrollHint);
 
           chrome.storage?.onChanged?.removeListener(storageChangeHandler);
+
+          // Tear down the fast-tooltip singleton: cancel pending timer, remove
+          // the DOM element, and detach the capture-phase scroll listeners
+          // attached to `list` and `window`. Without this, every re-init (SPA
+          // nav / extension reload) would leak an orphan tooltip + listener.
+          hideTooltip();
+          if (tooltipEl) {
+            try {
+              tooltipEl.remove();
+            } catch {}
+            tooltipEl = null;
+          }
+          for (const target of tooltipScrollTargets) {
+            try {
+              target.removeEventListener('scroll', onTooltipDismiss, { capture: true });
+            } catch {}
+          }
 
           trigger.remove();
           panel.remove();

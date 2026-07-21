@@ -7,13 +7,19 @@
  * Stores folders, prompts, and other sync data as separate files:
  * - gemini-voyager-folders.json
  * - gemini-voyager-prompts.json
+ * - gemini-voyager-settings.json
+ * - gemini-voyager-plugins.json
  * - gemini-voyager-starred.json
+ * - gemini-voyager-highlights.json (account-scoped; independent from legacy sync data)
  */
 import type { FolderData } from '@/core/types/folder';
+import { isHighlightExportPayloadV1 } from '@/core/types/highlight';
 import type {
   FolderExportPayload,
   ForkExportPayload,
   ForkNodesDataSync,
+  HighlightExportPayload,
+  PluginStateExportPayload,
   PromptExportPayload,
   PromptItem,
   SettingsExportPayload,
@@ -22,23 +28,56 @@ import type {
   SyncAccountScope,
   SyncMode,
   SyncPlatform,
+  SyncProvider,
   SyncState,
   TimelineHierarchyDataSync,
   TimelineHierarchyExportPayload,
 } from '@/core/types/sync';
 import { DEFAULT_SYNC_STATE } from '@/core/types/sync';
-import { isBrave } from '@/core/utils/browser';
+import { getVoyagerBuildTarget, isBrave, isSafari } from '@/core/utils/browser';
 import { hashString } from '@/core/utils/hash';
+import {
+  downloadSafariGoogleDriveFile,
+  ensureSafariGoogleDriveFile,
+  findSafariGoogleDriveFile,
+  getSafariGoogleDriveRetryDelay,
+  isSafariGoogleDriveAuthError,
+  requestSafariGoogleDriveSession,
+  signOutSafariGoogleDrive,
+  uploadSafariGoogleDriveFile,
+} from '@/core/utils/safariGoogleDrive';
+import {
+  checkSafariICloudAccount,
+  getSafariICloudRetryDelay,
+  isSafariICloudConflictError,
+  readSafariICloudFile,
+  writeSafariICloudFile,
+} from '@/core/utils/safariICloudSync';
 import { EXTENSION_VERSION } from '@/core/utils/version';
+import type { PluginStateMap } from '@/features/plugins/storage/pluginState';
 
 const FOLDERS_FILE_NAME = 'gemini-voyager-folders.json';
 const AISTUDIO_FOLDERS_FILE_NAME = 'gemini-voyager-aistudio-folders.json';
 const PROMPTS_FILE_NAME = 'gemini-voyager-prompts.json';
 const SETTINGS_FILE_NAME = 'gemini-voyager-settings.json';
+const PLUGINS_FILE_NAME = 'gemini-voyager-plugins.json';
 const STARRED_FILE_NAME = 'gemini-voyager-starred.json';
 const FORKS_FILE_NAME = 'gemini-voyager-forks.json';
 const TIMELINE_HIERARCHY_FILE_NAME = 'gemini-voyager-timeline-hierarchy.json';
-const BACKUP_FOLDER_NAME = 'Gemini Voyager Data';
+const HIGHLIGHTS_FILE_NAME = 'gemini-voyager-highlights.json';
+const BACKUP_FOLDER_NAME = 'Voyager Data';
+const LEGACY_BACKUP_FOLDER_NAME = 'Gemini Voyager Data';
+const BACKUP_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
+const BACKUP_FOLDER_MARKER_KEY = 'voyagerDataFolder';
+const BACKUP_FOLDER_MARKER_VALUE = '1';
+const BACKUP_FOLDER_RECOVERY_FILE_NAMES = [
+  FOLDERS_FILE_NAME,
+  AISTUDIO_FOLDERS_FILE_NAME,
+  PROMPTS_FILE_NAME,
+  SETTINGS_FILE_NAME,
+  PLUGINS_FILE_NAME,
+  STARRED_FILE_NAME,
+] as const;
 const DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3';
 const DRIVE_UPLOAD_BASE = 'https://www.googleapis.com/upload/drive/v3';
 
@@ -55,6 +94,25 @@ function getNumberValue(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+function isSafariRuntime(): boolean {
+  return getVoyagerBuildTarget() === 'safari' || isSafari();
+}
+
+interface DriveFolderMetadata {
+  id: string;
+  name: string;
+  mimeType?: string;
+  parents?: string[];
+  appProperties?: Record<string, string>;
+  trashed?: boolean;
+}
+
+interface DriveSyncFileMetadata {
+  id: string;
+  name: string;
+  parents?: string[];
+}
+
 /**
  * Google Drive Sync Service
  * Handles authentication, upload, and download of sync data as separate files
@@ -65,10 +123,13 @@ export class GoogleDriveSyncService {
   private aistudioFoldersFileId: string | null = null;
   private promptsFileId: string | null = null;
   private settingsFileId: string | null = null;
+  private pluginsFileId: string | null = null;
   private starredFileId: string | null = null;
   private forksFileId: string | null = null;
   private timelineHierarchyFileId: string | null = null;
+  private highlightsFileId: string | null = null;
   private backupFolderId: string | null = null;
+  private backupFolderResolutionPromise: Promise<string | null> | null = null;
   private fileIdByName: Record<string, string> = {};
   private stateChangeCallback: ((state: SyncState) => void) | null = null;
   private accessToken: string | null = null;
@@ -99,6 +160,21 @@ export class GoogleDriveSyncService {
     this.notifyStateChange();
   }
 
+  async setProvider(provider: SyncProvider): Promise<void> {
+    if (provider === 'icloud' && !isSafariRuntime()) {
+      throw new Error('iCloud sync is available only in Safari');
+    }
+    if (provider === this.state.provider) return;
+
+    await this.clearToken();
+    this.state.provider = provider;
+    this.state.isAuthenticated = false;
+    this.state.error = null;
+    this.resetDriveFileCache();
+    await this.saveState();
+    this.notifyStateChange();
+  }
+
   async authenticate(interactive: boolean = true): Promise<boolean> {
     try {
       this.updateState({ isSyncing: true, error: null });
@@ -122,8 +198,16 @@ export class GoogleDriveSyncService {
   }
 
   async signOut(): Promise<void> {
+    if (this.state.provider === 'icloud') {
+      this.updateState({ isAuthenticated: false, error: null });
+      await this.saveState();
+      return;
+    }
+
     try {
-      if (this.accessToken) {
+      if (isSafariRuntime()) {
+        await signOutSafariGoogleDrive();
+      } else if (this.accessToken) {
         await this.removeCachedAuthToken(this.accessToken);
         await fetch(`https://accounts.google.com/o/oauth2/revoke?token=${this.accessToken}`);
       }
@@ -131,15 +215,7 @@ export class GoogleDriveSyncService {
       console.warn('[GoogleDriveSyncService] Sign out warning:', error);
     }
     await this.clearToken();
-    this.foldersFileId = null;
-    this.aistudioFoldersFileId = null;
-    this.promptsFileId = null;
-    this.settingsFileId = null;
-    this.starredFileId = null;
-    this.forksFileId = null;
-    this.timelineHierarchyFileId = null;
-    this.backupFolderId = null;
-    this.fileIdByName = {};
+    this.resetDriveFileCache();
     this.updateState({ isAuthenticated: false, lastSyncTime: null, error: null });
     await this.saveState();
   }
@@ -163,6 +239,7 @@ export class GoogleDriveSyncService {
     accountScope: SyncAccountScope | null = null,
     timelineHierarchyAccountScope: SyncAccountScope | null = null,
     settings: Record<string, unknown> | null = null,
+    plugins: PluginStateMap | null = null,
   ): Promise<boolean> {
     try {
       this.updateState({ isSyncing: true, error: null });
@@ -206,6 +283,15 @@ export class GoogleDriveSyncService {
           }
         : null;
 
+      const pluginsPayload: PluginStateExportPayload | null = plugins
+        ? {
+            format: 'gemini-voyager.plugins.v1',
+            exportedAt: now.toISOString(),
+            version: EXTENSION_VERSION,
+            data: plugins,
+          }
+        : null;
+
       // Upload folders file (platform-specific)
       const foldersBaseFileName =
         platform === 'aistudio' ? AISTUDIO_FOLDERS_FILE_NAME : FOLDERS_FILE_NAME;
@@ -227,6 +313,11 @@ export class GoogleDriveSyncService {
         const settingsFileId = await this.ensureFileId(token, SETTINGS_FILE_NAME, 'settings');
         await this.uploadFileWithRetry(token, settingsFileId, settingsPayload);
         console.log('[GoogleDriveSyncService] Settings uploaded successfully');
+      }
+
+      if (pluginsPayload) {
+        const pluginsFileId = await this.ensureFileId(token, PLUGINS_FILE_NAME, 'plugins');
+        await this.uploadFileWithRetry(token, pluginsFileId, pluginsPayload);
       }
 
       // Upload starred messages file (only for Gemini platform)
@@ -309,6 +400,7 @@ export class GoogleDriveSyncService {
         1 +
         (prompts.length > 0 ? 1 : 0) +
         (settingsPayload ? 1 : 0) +
+        (pluginsPayload ? 1 : 0) +
         (platform === 'gemini' && starred ? 1 : 0) +
         (platform === 'gemini' && forks ? 1 : 0) +
         (platform === 'gemini' && timelineHierarchy ? 1 : 0);
@@ -321,6 +413,178 @@ export class GoogleDriveSyncService {
       console.error('[GoogleDriveSyncService] Upload failed:', error);
       this.updateState({ isSyncing: false, error: errorMessage });
       return false;
+    }
+  }
+
+  /**
+   * Upload ONLY the account-scoped prompts file, leaving folders / settings /
+   * starred untouched. Used by the popup "cloud merge" buttons, which merge
+   * cloud + local locally first and upload the union so both sides converge
+   * without data loss.
+   */
+  async uploadPromptsOnly(
+    prompts: PromptItem[],
+    accountScope: SyncAccountScope | null = null,
+    interactive: boolean = true,
+  ): Promise<boolean> {
+    try {
+      this.updateState({ isSyncing: true, error: null });
+
+      const token = await this.getAuthToken(interactive);
+      if (!token) {
+        if (!interactive) {
+          this.updateState({ isSyncing: false, isAuthenticated: false });
+          return false;
+        }
+        throw new Error('Not authenticated');
+      }
+
+      const promptPayload: PromptExportPayload = {
+        format: 'gemini-voyager.prompts.v1',
+        exportedAt: new Date().toISOString(),
+        version: EXTENSION_VERSION,
+        items: prompts,
+      };
+      const promptsFileName = this.getFileNameForScope(PROMPTS_FILE_NAME, accountScope);
+      const promptsFileId = await this.ensureFileId(token, promptsFileName, 'prompts');
+      await this.uploadFileWithRetry(token, promptsFileId, promptPayload);
+
+      this.updateState({ isSyncing: false, error: null });
+      await this.saveState();
+      console.log('[GoogleDriveSyncService] Prompts-only upload successful');
+      return true;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Upload failed';
+      console.error('[GoogleDriveSyncService] Prompts-only upload failed:', error);
+      this.updateState({ isSyncing: false, error: errorMessage });
+      return false;
+    }
+  }
+
+  /**
+   * Download ONLY the account-scoped prompts file. Returns the payload, or null
+   * when no file exists or the user is not authenticated. The caller is
+   * responsible for merging the result into local data.
+   */
+  async downloadPromptsOnly(
+    accountScope: SyncAccountScope | null = null,
+    interactive: boolean = true,
+  ): Promise<PromptExportPayload | null> {
+    try {
+      this.updateState({ isSyncing: true, error: null });
+
+      const token = await this.getAuthToken(interactive);
+      if (!token) {
+        if (!interactive) {
+          this.updateState({ isSyncing: false, isAuthenticated: false });
+          return null;
+        }
+        throw new Error('Not authenticated');
+      }
+
+      await this.migrateBackupFolderIfPresent(token);
+
+      const promptsFileId = await this.findFileForScope(token, PROMPTS_FILE_NAME, accountScope);
+      const prompts = promptsFileId
+        ? await this.downloadFileWithRetry<PromptExportPayload>(token, promptsFileId)
+        : null;
+
+      this.updateState({ isSyncing: false, error: null });
+      return prompts;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Download failed';
+      console.error('[GoogleDriveSyncService] Prompts-only download failed:', error);
+      this.updateState({ isSyncing: false, error: errorMessage });
+      return null;
+    }
+  }
+
+  /**
+   * Upload only the account-scoped highlight payload. Highlights intentionally
+   * live in their own file and are never added to the legacy SyncData aggregate.
+   *
+   * This primitive is last-write-wins. Drive v3's documented media-update API
+   * does not expose a reliable compare-and-swap revision contract here, so
+   * callers must download/merge before uploading when concurrent edits matter.
+   */
+  async uploadHighlightsOnly(
+    payload: HighlightExportPayload,
+    accountScope: SyncAccountScope,
+    interactive: boolean = true,
+  ): Promise<boolean> {
+    try {
+      this.updateState({ isSyncing: true, error: null });
+      this.assertHighlightPayloadForScope(payload, accountScope);
+
+      const token = await this.getAuthToken(interactive);
+      if (!token) {
+        if (!interactive) {
+          this.updateState({ isSyncing: false, isAuthenticated: false });
+          return false;
+        }
+        throw new Error('Not authenticated');
+      }
+
+      const fileName = this.getFileNameForScope(HIGHLIGHTS_FILE_NAME, accountScope);
+      const fileId = await this.ensureFileId(token, fileName, 'highlights');
+      // Upload the canonical payload verbatim. In particular, quote.exact must
+      // never be shortened as the exact text is required for anchor recovery.
+      await this.uploadFileWithRetry(token, fileId, payload);
+
+      this.updateState({ isSyncing: false, error: null });
+      await this.saveState();
+      return true;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Upload failed';
+      console.error('[GoogleDriveSyncService] Highlights-only upload failed:', error);
+      this.updateState({ isSyncing: false, error: errorMessage });
+      return false;
+    }
+  }
+
+  /**
+   * Download only the exact account-scoped highlight file. Unlike older sync
+   * payloads, there is deliberately no fallback to an unscoped legacy file:
+   * highlights have been account-isolated since their first Drive format.
+   */
+  async downloadHighlightsOnly(
+    accountScope: SyncAccountScope,
+    interactive: boolean = true,
+  ): Promise<HighlightExportPayload | null> {
+    try {
+      this.updateState({ isSyncing: true, error: null });
+
+      const token = await this.getAuthToken(interactive);
+      if (!token) {
+        if (!interactive) {
+          this.updateState({ isSyncing: false, isAuthenticated: false });
+          return null;
+        }
+        throw new Error('Not authenticated');
+      }
+
+      await this.migrateBackupFolderIfPresent(token);
+
+      const fileName = this.getFileNameForScope(HIGHLIGHTS_FILE_NAME, accountScope);
+      const fileId = await this.findFile(token, fileName);
+      if (!fileId) {
+        this.updateState({ isSyncing: false, error: null });
+        return null;
+      }
+
+      const downloaded = await this.downloadFileWithRetry<unknown>(token, fileId);
+      if (downloaded === null) {
+        this.updateState({ isSyncing: false, error: null });
+        return null;
+      }
+      this.assertHighlightPayloadForScope(downloaded, accountScope);
+      this.updateState({ isSyncing: false, error: null });
+      return downloaded;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Download failed';
+      console.error('[GoogleDriveSyncService] Highlights-only download failed:', error);
+      this.updateState({ isSyncing: false, error: errorMessage });
+      return null;
     }
   }
 
@@ -339,6 +603,7 @@ export class GoogleDriveSyncService {
     folders: FolderExportPayload | null;
     prompts: PromptExportPayload | null;
     settings: SettingsExportPayload | null;
+    plugins: PluginStateExportPayload | null;
     starred: StarredExportPayload | null;
     forks: ForkExportPayload | null;
     timelineHierarchy: TimelineHierarchyExportPayload | null;
@@ -357,6 +622,8 @@ export class GoogleDriveSyncService {
         }
         throw new Error('Not authenticated');
       }
+
+      await this.migrateBackupFolderIfPresent(token);
 
       // Download folders file (platform-specific)
       const foldersBaseFileName =
@@ -381,6 +648,12 @@ export class GoogleDriveSyncService {
       if (settingsFileId) {
         settings = await this.downloadFileWithRetry(token, settingsFileId);
         console.log('[GoogleDriveSyncService] Settings downloaded');
+      }
+
+      let plugins: PluginStateExportPayload | null = null;
+      const pluginsFileId = await this.findFile(token, PLUGINS_FILE_NAME);
+      if (pluginsFileId) {
+        plugins = await this.downloadFileWithRetry(token, pluginsFileId);
       }
 
       // Download starred messages file (only for Gemini platform)
@@ -418,7 +691,15 @@ export class GoogleDriveSyncService {
         }
       }
 
-      if (!folders && !prompts && !settings && !starred && !forks && !timelineHierarchy) {
+      if (
+        !folders &&
+        !prompts &&
+        !settings &&
+        !plugins &&
+        !starred &&
+        !forks &&
+        !timelineHierarchy
+      ) {
         console.log(`[GoogleDriveSyncService] No sync files found for ${platform}`);
         this.updateState({ isSyncing: false });
         return null;
@@ -433,7 +714,7 @@ export class GoogleDriveSyncService {
       }
       await this.saveState();
 
-      return { folders, prompts, settings, starred, forks, timelineHierarchy };
+      return { folders, prompts, settings, plugins, starred, forks, timelineHierarchy };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Download failed';
       console.error('[GoogleDriveSyncService] Download failed:', error);
@@ -445,6 +726,8 @@ export class GoogleDriveSyncService {
   // ============== Private Methods ==============
 
   private async loadCachedToken(): Promise<void> {
+    if (isSafariRuntime()) return;
+
     try {
       const result = await chrome.storage.local.get(['gvAccessToken', 'gvTokenExpiry']);
       const cachedAccessToken = getStringValue(result.gvAccessToken);
@@ -462,6 +745,8 @@ export class GoogleDriveSyncService {
   private async saveToken(token: string, expiresIn: number): Promise<void> {
     this.accessToken = token;
     this.tokenExpiry = Date.now() + expiresIn * 1000 - 60000;
+    if (isSafariRuntime()) return;
+
     try {
       await chrome.storage.local.set({ gvAccessToken: token, gvTokenExpiry: this.tokenExpiry });
     } catch (error) {
@@ -621,6 +906,22 @@ export class GoogleDriveSyncService {
   }
 
   private async getAuthToken(interactive: boolean): Promise<string | null> {
+    if (this.state.provider === 'icloud') {
+      await checkSafariICloudAccount();
+      return 'icloud';
+    }
+
+    if (isSafariRuntime()) {
+      const nativeSession = await requestSafariGoogleDriveSession(interactive);
+      if (nativeSession.signedIn) {
+        return 'safari-native';
+      }
+      if (nativeSession.requiresAppLaunch) {
+        throw new Error('Open Voyager to connect Google Drive, then try again.');
+      }
+      return null;
+    }
+
     if (this.accessToken && this.tokenExpiry > Date.now()) {
       return this.accessToken;
     }
@@ -664,7 +965,36 @@ export class GoogleDriveSyncService {
   }
 
   private async findFile(token: string, fileName: string): Promise<string | null> {
-    const query = encodeURIComponent(`name='${fileName}' and trashed=false`);
+    if (this.state.provider === 'icloud') {
+      return fileName;
+    }
+
+    if (isSafariRuntime()) {
+      return findSafariGoogleDriveFile(fileName);
+    }
+
+    if (this.backupFolderId) {
+      const folderFileId = await this.searchDriveFile(token, fileName, this.backupFolderId);
+      if (folderFileId) return folderFileId;
+    }
+
+    // Backward compatibility: files created by older versions may still live
+    // outside the resolved folder. Uploads move this fallback result into the
+    // stable folder; downloads can still recover it before that happens.
+    return this.searchDriveFile(token, fileName, null);
+  }
+
+  private async searchDriveFile(
+    token: string,
+    fileName: string,
+    parentId: string | null,
+  ): Promise<string | null> {
+    const parentClause = parentId
+      ? ` and '${this.escapeDriveQueryValue(parentId)}' in parents`
+      : '';
+    const query = encodeURIComponent(
+      `name='${this.escapeDriveQueryValue(fileName)}' and trashed=false${parentClause}`,
+    );
     const url = `${DRIVE_API_BASE}/files?q=${query}&fields=files(id,name)`;
     const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
     if (!response.ok) {
@@ -683,6 +1013,26 @@ export class GoogleDriveSyncService {
       return `${baseFileName}.${suffix}`;
     }
     return `${baseFileName.slice(0, dotIndex)}.${suffix}${baseFileName.slice(dotIndex)}`;
+  }
+
+  private assertHighlightPayloadForScope(
+    value: unknown,
+    accountScope: SyncAccountScope,
+  ): asserts value is HighlightExportPayload {
+    if (!isHighlightExportPayloadV1(value)) {
+      throw new Error('Invalid highlight sync payload');
+    }
+
+    const expectedAccountHash = hashString(accountScope.accountKey);
+    if (
+      value.accountScope.accountHash !== expectedAccountHash ||
+      value.items.some(
+        (item) =>
+          item.accountHash !== expectedAccountHash || item.platform !== value.accountScope.platform,
+      )
+    ) {
+      throw new Error('Highlight sync payload does not match the requested account scope');
+    }
   }
 
   private async findFileForScope(
@@ -710,10 +1060,26 @@ export class GoogleDriveSyncService {
       | 'aistudio-folders'
       | 'prompts'
       | 'settings'
+      | 'plugins'
       | 'starred'
       | 'forks'
-      | 'timeline-hierarchy',
+      | 'timeline-hierarchy'
+      | 'highlights',
   ): Promise<string> {
+    if (this.state.provider === 'icloud') {
+      return fileName;
+    }
+
+    if (isSafariRuntime()) {
+      const fileId = await ensureSafariGoogleDriveFile(
+        fileName,
+        this.fileIdByName[fileName] ?? null,
+      );
+      this.setFileIdForType(type, fileId);
+      this.fileIdByName[fileName] = fileId;
+      return fileId;
+    }
+
     // 1. Ensure backup folder exists
     const folderId = await this.ensureBackupFolder(token);
 
@@ -764,9 +1130,11 @@ export class GoogleDriveSyncService {
       | 'aistudio-folders'
       | 'prompts'
       | 'settings'
+      | 'plugins'
       | 'starred'
       | 'forks'
-      | 'timeline-hierarchy',
+      | 'timeline-hierarchy'
+      | 'highlights',
     fileId: string,
   ): void {
     switch (type) {
@@ -782,6 +1150,9 @@ export class GoogleDriveSyncService {
       case 'settings':
         this.settingsFileId = fileId;
         break;
+      case 'plugins':
+        this.pluginsFileId = fileId;
+        break;
       case 'starred':
         this.starredFileId = fileId;
         break;
@@ -791,36 +1162,116 @@ export class GoogleDriveSyncService {
       case 'timeline-hierarchy':
         this.timelineHierarchyFileId = fileId;
         break;
+      case 'highlights':
+        this.highlightsFileId = fileId;
+        break;
     }
   }
 
   private async ensureBackupFolder(token: string): Promise<string> {
+    const folderId = await this.resolveBackupFolder(token, true);
+    if (!folderId) throw new Error('Failed to create backup folder');
+    return folderId;
+  }
+
+  /**
+   * Resolve the app-owned Drive folder without relying on its display name.
+   *
+   * Resolution order is deliberately conservative:
+   * 1. A folder carrying Voyager's private appProperties marker.
+   * 2. The folder containing the largest set of known Voyager sync files.
+   * 3. A folder with the canonical or legacy display name.
+   *
+   * The legacy folder is renamed in place only when no canonical-name conflict
+   * exists. We never delete or merge ambiguous folders automatically.
+   */
+  private async resolveBackupFolder(
+    token: string,
+    createIfMissing: boolean,
+  ): Promise<string | null> {
+    if (this.backupFolderResolutionPromise) {
+      const activeResult = await this.backupFolderResolutionPromise;
+      if (activeResult || !createIfMissing) return activeResult;
+    }
+
+    const resolution = this.resolveBackupFolderUncached(token, createIfMissing);
+    this.backupFolderResolutionPromise = resolution;
+    try {
+      return await resolution;
+    } finally {
+      if (this.backupFolderResolutionPromise === resolution) {
+        this.backupFolderResolutionPromise = null;
+      }
+    }
+  }
+
+  private async resolveBackupFolderUncached(
+    token: string,
+    createIfMissing: boolean,
+  ): Promise<string | null> {
     if (this.backupFolderId) {
-      // Verify it still exists
-      const exists = await this.checkFileExists(token, this.backupFolderId);
-      if (exists) return this.backupFolderId;
+      const cachedFolder = await this.getDriveFolderMetadata(token, this.backupFolderId);
+      if (cachedFolder) return cachedFolder.id;
+      this.backupFolderId = null;
     }
 
-    // Search for folder
-    const query = encodeURIComponent(
-      `name='${BACKUP_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+    const [markedFolders, namedFolders, syncFileParentScores] = await Promise.all([
+      this.listDriveFolders(
+        token,
+        `appProperties has { key='${BACKUP_FOLDER_MARKER_KEY}' and value='${BACKUP_FOLDER_MARKER_VALUE}' }`,
+      ),
+      this.listDriveFolders(
+        token,
+        `(name='${this.escapeDriveQueryValue(BACKUP_FOLDER_NAME)}' or name='${this.escapeDriveQueryValue(LEGACY_BACKUP_FOLDER_NAME)}')`,
+      ),
+      this.getSyncFileParentScores(token).catch((error) => {
+        // Content-parent recovery is only a fallback for folders renamed before
+        // this marker existed. A transient failure here must not block normal
+        // name/marker discovery or create a duplicate folder.
+        console.warn('[GoogleDriveSyncService] Could not inspect sync-file parents:', error);
+        return new Map<string, number>();
+      }),
+    ]);
+
+    const candidatesById = new Map<string, DriveFolderMetadata>();
+    [...markedFolders, ...namedFolders].forEach((folder) => candidatesById.set(folder.id, folder));
+
+    const recoveredParentIds = [...syncFileParentScores.entries()]
+      .sort(([, leftScore], [, rightScore]) => rightScore - leftScore)
+      .slice(0, 5)
+      .map(([parentId]) => parentId)
+      .filter((parentId) => !candidatesById.has(parentId));
+
+    const recoveredFolders = await Promise.all(
+      recoveredParentIds.map((parentId) => this.getDriveFolderMetadata(token, parentId)),
     );
-    const url = `${DRIVE_API_BASE}/files?q=${query}&fields=files(id)`;
-    const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-    if (!response.ok) throw new Error('Failed to search for backup folder');
+    recoveredFolders.forEach((folder) => {
+      if (folder) candidatesById.set(folder.id, folder);
+    });
 
-    const data = await response.json();
-    const existingId = data.files?.[0]?.id;
-
-    if (existingId) {
-      this.backupFolderId = existingId;
-      return existingId;
+    const candidates = [...candidatesById.values()];
+    const selected = this.selectBackupFolderCandidate(candidates, syncFileParentScores);
+    if (selected) {
+      const hasCanonicalConflict = candidates.some(
+        (folder) => folder.id !== selected.id && folder.name === BACKUP_FOLDER_NAME,
+      );
+      const prepared = await this.prepareBackupFolder(
+        token,
+        selected,
+        selected.name === LEGACY_BACKUP_FOLDER_NAME && !hasCanonicalConflict,
+      );
+      this.backupFolderId = prepared.id;
+      return prepared.id;
     }
 
-    // Create folder
+    if (!createIfMissing) return null;
+
     const metadata = {
       name: BACKUP_FOLDER_NAME,
-      mimeType: 'application/vnd.google-apps.folder',
+      mimeType: BACKUP_FOLDER_MIME_TYPE,
+      appProperties: {
+        [BACKUP_FOLDER_MARKER_KEY]: BACKUP_FOLDER_MARKER_VALUE,
+      },
     };
     const createResponse = await fetch(`${DRIVE_API_BASE}/files`, {
       method: 'POST',
@@ -832,10 +1283,186 @@ export class GoogleDriveSyncService {
     });
 
     if (!createResponse.ok) throw new Error('Failed to create backup folder');
-    const folderData = await createResponse.json();
+    const folderData = (await createResponse.json()) as { id?: unknown };
+    if (typeof folderData.id !== 'string' || !folderData.id) {
+      throw new Error('Drive returned an invalid backup folder');
+    }
     this.backupFolderId = folderData.id;
     console.log('[GoogleDriveSyncService] Created backup folder:', this.backupFolderId);
     return folderData.id;
+  }
+
+  private async migrateBackupFolderIfPresent(token: string): Promise<void> {
+    if (this.state.provider === 'icloud' || isSafariRuntime()) return;
+
+    try {
+      await this.resolveBackupFolder(token, false);
+    } catch (error) {
+      // Folder metadata migration must never block a read-only download. Any
+      // subsequent upload will retry the same migration before writing files.
+      console.warn('[GoogleDriveSyncService] Backup folder migration deferred:', error);
+    }
+  }
+
+  private async listDriveFolders(
+    token: string,
+    identityClause: string,
+  ): Promise<DriveFolderMetadata[]> {
+    const query = `${identityClause} and mimeType='${BACKUP_FOLDER_MIME_TYPE}' and trashed=false`;
+    const url = new URL(`${DRIVE_API_BASE}/files`);
+    url.searchParams.set('q', query);
+    url.searchParams.set('fields', 'files(id,name,mimeType,parents,appProperties,trashed)');
+    url.searchParams.set('pageSize', '100');
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) throw new Error('Failed to search for backup folder');
+    const data = (await response.json()) as { files?: unknown };
+    return this.parseDriveFolders(data.files);
+  }
+
+  private async getSyncFileParentScores(token: string): Promise<Map<string, number>> {
+    const nameClauses = BACKUP_FOLDER_RECOVERY_FILE_NAMES.map(
+      (name) => `name='${this.escapeDriveQueryValue(name)}'`,
+    );
+    const query = `(${nameClauses.join(' or ')}) and trashed=false`;
+    const url = new URL(`${DRIVE_API_BASE}/files`);
+    url.searchParams.set('q', query);
+    url.searchParams.set('fields', 'files(id,name,parents)');
+    url.searchParams.set('pageSize', '1000');
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) throw new Error('Failed to inspect backup files');
+    const data = (await response.json()) as { files?: unknown };
+    const files = Array.isArray(data.files)
+      ? data.files.filter((file): file is DriveSyncFileMetadata =>
+          this.isDriveSyncFileMetadata(file),
+        )
+      : [];
+    const namesByParent = new Map<string, Set<string>>();
+    files.forEach((file) => {
+      file.parents?.forEach((parentId) => {
+        const names = namesByParent.get(parentId) ?? new Set<string>();
+        names.add(file.name);
+        namesByParent.set(parentId, names);
+      });
+    });
+    return new Map([...namesByParent.entries()].map(([parentId, names]) => [parentId, names.size]));
+  }
+
+  private selectBackupFolderCandidate(
+    candidates: DriveFolderMetadata[],
+    syncFileParentScores: Map<string, number>,
+  ): DriveFolderMetadata | null {
+    const rank = (folder: DriveFolderMetadata): [number, number, number, string] => [
+      folder.appProperties?.[BACKUP_FOLDER_MARKER_KEY] === BACKUP_FOLDER_MARKER_VALUE ? 1 : 0,
+      syncFileParentScores.get(folder.id) ?? 0,
+      folder.name === BACKUP_FOLDER_NAME ? 2 : folder.name === LEGACY_BACKUP_FOLDER_NAME ? 1 : 0,
+      folder.id,
+    ];
+
+    return (
+      [...candidates].sort((left, right) => {
+        const leftRank = rank(left);
+        const rightRank = rank(right);
+        return (
+          rightRank[0] - leftRank[0] ||
+          rightRank[1] - leftRank[1] ||
+          rightRank[2] - leftRank[2] ||
+          leftRank[3].localeCompare(rightRank[3])
+        );
+      })[0] ?? null
+    );
+  }
+
+  private async prepareBackupFolder(
+    token: string,
+    folder: DriveFolderMetadata,
+    renameLegacyFolder: boolean,
+  ): Promise<DriveFolderMetadata> {
+    const needsMarker =
+      folder.appProperties?.[BACKUP_FOLDER_MARKER_KEY] !== BACKUP_FOLDER_MARKER_VALUE;
+    if (!needsMarker && !renameLegacyFolder) return folder;
+
+    const metadata: {
+      name?: string;
+      appProperties?: Record<string, string>;
+    } = {};
+    if (renameLegacyFolder) metadata.name = BACKUP_FOLDER_NAME;
+    if (needsMarker) {
+      metadata.appProperties = {
+        ...folder.appProperties,
+        [BACKUP_FOLDER_MARKER_KEY]: BACKUP_FOLDER_MARKER_VALUE,
+      };
+    }
+
+    const url = new URL(`${DRIVE_API_BASE}/files/${folder.id}`);
+    url.searchParams.set('fields', 'id,name,mimeType,parents,appProperties,trashed');
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(metadata),
+    });
+    if (!response.ok) {
+      console.warn(
+        '[GoogleDriveSyncService] Could not rename or mark the existing backup folder; continuing with its stable Drive ID',
+      );
+      return folder;
+    }
+
+    const updated = (await response.json()) as unknown;
+    return this.isDriveFolderMetadata(updated)
+      ? updated
+      : {
+          ...folder,
+          ...metadata,
+        };
+  }
+
+  private async getDriveFolderMetadata(
+    token: string,
+    folderId: string,
+  ): Promise<DriveFolderMetadata | null> {
+    const url = new URL(`${DRIVE_API_BASE}/files/${folderId}`);
+    url.searchParams.set('fields', 'id,name,mimeType,parents,appProperties,trashed');
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(`Failed to inspect backup folder: ${response.status}`);
+    const data = (await response.json()) as unknown;
+    if (!this.isDriveFolderMetadata(data) || data.trashed) return null;
+    if (data.mimeType && data.mimeType !== BACKUP_FOLDER_MIME_TYPE) return null;
+    return data;
+  }
+
+  private parseDriveFolders(value: unknown): DriveFolderMetadata[] {
+    return Array.isArray(value)
+      ? value.filter(
+          (folder): folder is DriveFolderMetadata =>
+            this.isDriveFolderMetadata(folder) && !folder.trashed,
+        )
+      : [];
+  }
+
+  private isDriveFolderMetadata(value: unknown): value is DriveFolderMetadata {
+    if (typeof value !== 'object' || value === null) return false;
+    const candidate = value as Partial<DriveFolderMetadata>;
+    return typeof candidate.id === 'string' && typeof candidate.name === 'string';
+  }
+
+  private isDriveSyncFileMetadata(value: unknown): value is DriveSyncFileMetadata {
+    if (typeof value !== 'object' || value === null) return false;
+    const candidate = value as Partial<DriveSyncFileMetadata>;
+    return (
+      typeof candidate.id === 'string' &&
+      typeof candidate.name === 'string' &&
+      (candidate.parents === undefined ||
+        (Array.isArray(candidate.parents) &&
+          candidate.parents.every((parent) => typeof parent === 'string')))
+    );
+  }
+
+  private escapeDriveQueryValue(value: string): string {
+    return value.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
   }
 
   private async getFileParents(token: string, fileId: string): Promise<string[] | null> {
@@ -912,6 +1539,16 @@ export class GoogleDriveSyncService {
     let delay = INITIAL_RETRY_DELAY_MS;
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
+        if (this.state.provider === 'icloud') {
+          await writeSafariICloudFile(fileId, data);
+          return;
+        }
+
+        if (isSafariRuntime()) {
+          await uploadSafariGoogleDriveFile(fileId, data);
+          return;
+        }
+
         const url = `${DRIVE_UPLOAD_BASE}/files/${fileId}?uploadType=media`;
         const response = await fetch(url, {
           method: 'PATCH',
@@ -923,8 +1560,16 @@ export class GoogleDriveSyncService {
         }
         return;
       } catch (error) {
+        if (isSafariICloudConflictError(error)) throw error;
+        if (this.markAuthLostIfNeeded(error)) throw error;
         if (attempt === MAX_RETRIES) throw error;
-        await this.sleep(delay);
+        await this.sleep(
+          Math.max(
+            delay,
+            getSafariICloudRetryDelay(error) ?? 0,
+            getSafariGoogleDriveRetryDelay(error) ?? 0,
+          ),
+        );
         delay *= 2;
       }
     }
@@ -934,6 +1579,14 @@ export class GoogleDriveSyncService {
     let delay = INITIAL_RETRY_DELAY_MS;
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
+        if (this.state.provider === 'icloud') {
+          return await readSafariICloudFile<T>(fileId);
+        }
+
+        if (isSafariRuntime()) {
+          return await downloadSafariGoogleDriveFile<T>(fileId);
+        }
+
         const url = `${DRIVE_API_BASE}/files/${fileId}?alt=media`;
         const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
         if (!response.ok) {
@@ -942,18 +1595,31 @@ export class GoogleDriveSyncService {
         }
         return await response.json();
       } catch (error) {
+        if (this.markAuthLostIfNeeded(error)) throw error;
         if (attempt === MAX_RETRIES) throw error;
-        await this.sleep(delay);
+        await this.sleep(Math.max(delay, getSafariGoogleDriveRetryDelay(error) ?? 0));
         delay *= 2;
       }
     }
     return null;
   }
 
+  /**
+   * Safari native bridge signals a permanently revoked/expired Google session
+   * with a structured code; retrying it is pointless, so surface it at once
+   * and flip the authenticated flag so the UI offers reconnecting.
+   */
+  private markAuthLostIfNeeded(error: unknown): boolean {
+    if (!isSafariGoogleDriveAuthError(error)) return false;
+    this.updateState({ isAuthenticated: false });
+    return true;
+  }
+
   private async loadState(): Promise<void> {
     try {
       const result = await chrome.storage.local.get([
         'gvSyncMode',
+        'gvSyncProvider',
         'gvLastSyncTime',
         'gvLastUploadTime',
         'gvLastSyncTimeAIStudio',
@@ -961,6 +1627,8 @@ export class GoogleDriveSyncService {
         'gvSyncError',
       ]);
       this.state = {
+        provider:
+          result.gvSyncProvider === 'icloud' && isSafariRuntime() ? 'icloud' : 'googleDrive',
         mode: (result.gvSyncMode as SyncMode) || 'disabled',
         lastSyncTime: getNumberValue(result.gvLastSyncTime),
         lastUploadTime: getNumberValue(result.gvLastUploadTime),
@@ -983,6 +1651,7 @@ export class GoogleDriveSyncService {
     try {
       await chrome.storage.local.set({
         gvSyncMode: this.state.mode,
+        gvSyncProvider: this.state.provider,
         gvLastSyncTime: this.state.lastSyncTime,
         gvLastUploadTime: this.state.lastUploadTime,
         gvLastSyncTimeAIStudio: this.state.lastSyncTimeAIStudio,
@@ -1003,6 +1672,21 @@ export class GoogleDriveSyncService {
     if (this.stateChangeCallback) {
       this.stateChangeCallback({ ...this.state });
     }
+  }
+
+  private resetDriveFileCache(): void {
+    this.foldersFileId = null;
+    this.aistudioFoldersFileId = null;
+    this.promptsFileId = null;
+    this.settingsFileId = null;
+    this.pluginsFileId = null;
+    this.starredFileId = null;
+    this.forksFileId = null;
+    this.timelineHierarchyFileId = null;
+    this.highlightsFileId = null;
+    this.backupFolderId = null;
+    this.backupFolderResolutionPromise = null;
+    this.fileIdByName = {};
   }
 
   private sleep(ms: number): Promise<void> {

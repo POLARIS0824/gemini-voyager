@@ -31,12 +31,15 @@ describe('sortConversationsByPriority', () => {
     ]);
   });
 
-  it('sorts by lastOpenedAt (newest first) within the same starred state', () => {
-    const sorted = sortConversationsByPriority([
-      createConversation('opened-earlier', { addedAt: 999, lastOpenedAt: 100 }),
-      createConversation('opened-latest', { addedAt: 1, lastOpenedAt: 200 }),
-      createConversation('never-opened', { addedAt: 150 }),
-    ]);
+  it('sorts by lastOpenedAt in recently-opened mode', () => {
+    const sorted = sortConversationsByPriority(
+      [
+        createConversation('opened-earlier', { addedAt: 999, lastOpenedAt: 100 }),
+        createConversation('opened-latest', { addedAt: 1, lastOpenedAt: 200 }),
+        createConversation('never-opened', { addedAt: 150 }),
+      ],
+      'recent',
+    );
 
     expect(sorted.map((item) => item.conversationId)).toEqual([
       'opened-latest',
@@ -55,45 +58,48 @@ describe('sortConversationsByPriority', () => {
     expect(sorted.map((item) => item.conversationId)).toEqual(['newest', 'newer', 'older']);
   });
 
-  it('sorts by sortIndex when both items have one (within same starred group)', () => {
+  it('uses persisted sortIndex by default', () => {
     const sorted = sortConversationsByPriority([
-      createConversation('c', { sortIndex: 2, addedAt: 300 }),
-      createConversation('a', { sortIndex: 0, addedAt: 100 }),
-      createConversation('b', { sortIndex: 1, addedAt: 200 }),
-    ]);
-
-    expect(sorted.map((item) => item.conversationId)).toEqual(['a', 'b', 'c']);
-  });
-
-  it('uses sortIndex within starred group independently', () => {
-    const sorted = sortConversationsByPriority([
-      createConversation('normal-last', { sortIndex: 1, addedAt: 300 }),
-      createConversation('normal-first', { sortIndex: 0, addedAt: 100 }),
-      createConversation('starred-last', { starred: true, sortIndex: 1, addedAt: 200 }),
-      createConversation('starred-first', { starred: true, sortIndex: 0, addedAt: 300 }),
+      createConversation('manual-first-old', { sortIndex: 0, addedAt: 100 }),
+      createConversation('manual-last-new', { sortIndex: 2, addedAt: 300 }),
+      createConversation('manual-middle', { sortIndex: 1, addedAt: 200 }),
     ]);
 
     expect(sorted.map((item) => item.conversationId)).toEqual([
-      'starred-first',
-      'starred-last',
-      'normal-first',
-      'normal-last',
+      'manual-first-old',
+      'manual-middle',
+      'manual-last-new',
     ]);
   });
 
-  it('falls back to time-based sort when sortIndex is missing on either item', () => {
+  it('keeps starred conversations first while respecting manual order within each group', () => {
     const sorted = sortConversationsByPriority([
-      createConversation('with-index', { sortIndex: 0, addedAt: 100 }),
-      createConversation('no-index-newer', { addedAt: 300 }),
-      createConversation('no-index-older', { addedAt: 200 }),
+      createConversation('normal-manual-first-old', { sortIndex: 0, addedAt: 100 }),
+      createConversation('normal-manual-last-new', { sortIndex: 1, addedAt: 300 }),
+      createConversation('starred-manual-first-old', { starred: true, sortIndex: 0, addedAt: 200 }),
+      createConversation('starred-manual-last-new', { starred: true, sortIndex: 1, addedAt: 400 }),
     ]);
 
-    // When comparing items where one lacks sortIndex, time-based sort applies
-    // no-index-newer (addedAt=300) > no-index-older (addedAt=200) > with-index (addedAt=100)
     expect(sorted.map((item) => item.conversationId)).toEqual([
-      'no-index-newer',
-      'no-index-older',
-      'with-index',
+      'starred-manual-first-old',
+      'starred-manual-last-new',
+      'normal-manual-first-old',
+      'normal-manual-last-new',
+    ]);
+  });
+
+  it('ignores sortIndex in recently-opened mode', () => {
+    const sorted = sortConversationsByPriority(
+      [
+        createConversation('manual-first-old', { sortIndex: 0, lastOpenedAt: 100 }),
+        createConversation('manual-last-new', { sortIndex: 1, lastOpenedAt: 300 }),
+      ],
+      'recent',
+    );
+
+    expect(sorted.map((item) => item.conversationId)).toEqual([
+      'manual-last-new',
+      'manual-first-old',
     ]);
   });
 });

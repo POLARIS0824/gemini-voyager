@@ -1,7 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { StorageKeys } from '@/core/types/common';
 
 import {
   extractLocalizedContent,
+  hasUnreadChangelog,
   resolveChangelogImageUrl,
   rewriteChangelogImageUrls,
 } from '../index';
@@ -94,12 +99,38 @@ images:
     expect(result).not.toMatch(/^\s/);
     expect(result).not.toMatch(/\s$/);
   });
+
+  it('keeps the 1.6.0 quote at the start of each localized section', () => {
+    const notes = readFileSync(
+      resolve(process.cwd(), 'src/pages/content/changelog/notes/1.6.0.md'),
+      'utf8',
+    );
+
+    expect(extractLocalizedContent(notes, 'en')).toMatch(
+      /^> \*"Not all those who wander are lost\."/,
+    );
+    expect(extractLocalizedContent(notes, 'zh')).toMatch(/^> \*「并非所有流浪者都迷失了方向。/);
+  });
+});
+
+describe('changelog quote styles', () => {
+  it('gives the leading quote an explicit cross-browser presentation', () => {
+    const source = readFileSync(
+      resolve(process.cwd(), 'src/pages/content/changelog/index.ts'),
+      'utf8',
+    );
+    const css = readFileSync(resolve(process.cwd(), 'public/contentStyle.css'), 'utf8');
+
+    expect(source).toContain("'gv-changelog-quote'");
+    expect(source).toContain("leadingElement?.tagName === 'BLOCKQUOTE'");
+    expect(css).toMatch(/\.gv-changelog-body > \.gv-changelog-quote\s*\{[^}]*display:\s*block;/s);
+  });
 });
 
 describe('resolveChangelogImageUrl', () => {
   it('rewrites github raw promotion image URLs to runtime URLs', () => {
     const source =
-      'https://github.com/Nagi-ovo/gemini-voyager/raw/main/docs/public/assets/promotion/Promo-Banner.png';
+      'https://github.com/Nagi-ovo/voyager/raw/main/docs/public/assets/promotion/Promo-Banner.png';
 
     const result = resolveChangelogImageUrl(source, (path) => `moz-extension://test-id/${path}`);
 
@@ -108,7 +139,7 @@ describe('resolveChangelogImageUrl', () => {
 
   it('rewrites raw.githubusercontent.com promotion image URLs to runtime URLs', () => {
     const source =
-      'https://raw.githubusercontent.com/Nagi-ovo/gemini-voyager/main/docs/public/assets/promotion/Promo-Banner-jp.png';
+      'https://raw.githubusercontent.com/Nagi-ovo/voyager/main/docs/public/assets/promotion/Promo-Banner-jp.png';
 
     const result = resolveChangelogImageUrl(source, (path) => `moz-extension://test-id/${path}`);
 
@@ -117,7 +148,7 @@ describe('resolveChangelogImageUrl', () => {
 
   it('keeps unsupported image URLs unchanged', () => {
     const source =
-      'https://github.com/Nagi-ovo/gemini-voyager/raw/main/docs/public/assets/promotion/Promo-Unknown.png';
+      'https://github.com/Nagi-ovo/voyager/raw/main/docs/public/assets/promotion/Promo-Unknown.png';
 
     const result = resolveChangelogImageUrl(source, (path) => `moz-extension://test-id/${path}`);
 
@@ -128,7 +159,7 @@ describe('resolveChangelogImageUrl', () => {
 describe('rewriteChangelogImageUrls', () => {
   it('rewrites supported markdown image URLs and preserves others', () => {
     const source = [
-      '![banner](https://github.com/Nagi-ovo/gemini-voyager/raw/main/docs/public/assets/promotion/Promo-Banner-cn.png)',
+      '![banner](https://github.com/Nagi-ovo/voyager/raw/main/docs/public/assets/promotion/Promo-Banner-cn.png)',
       '![external](https://example.com/banner.png)',
     ].join('\n');
 
@@ -140,7 +171,7 @@ describe('rewriteChangelogImageUrls', () => {
 
   it('falls back to original URL when runtime URL resolution fails', () => {
     const source =
-      '![banner](https://github.com/Nagi-ovo/gemini-voyager/raw/main/docs/public/assets/promotion/Promo-Banner.png)';
+      '![banner](https://github.com/Nagi-ovo/voyager/raw/main/docs/public/assets/promotion/Promo-Banner.png)';
 
     const result = rewriteChangelogImageUrls(source, () => null);
 
@@ -149,7 +180,7 @@ describe('rewriteChangelogImageUrls', () => {
 
   it('skips rewriting when rewrite flag is disabled', () => {
     const source =
-      '![banner](https://github.com/Nagi-ovo/gemini-voyager/raw/main/docs/public/assets/promotion/Promo-Banner.png)';
+      '![banner](https://github.com/Nagi-ovo/voyager/raw/main/docs/public/assets/promotion/Promo-Banner.png)';
 
     const result = rewriteChangelogImageUrls(
       source,
@@ -158,5 +189,31 @@ describe('rewriteChangelogImageUrls', () => {
     );
 
     expect(result).toBe(source);
+  });
+});
+
+describe('hasUnreadChangelog', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('returns false on first install (no dismissed version stored)', async () => {
+    (chrome.storage.local.get as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    expect(await hasUnreadChangelog()).toBe(false);
+  });
+
+  it('returns true when dismissed version differs from current', async () => {
+    (chrome.storage.local.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+      [StorageKeys.CHANGELOG_DISMISSED_VERSION]: '0.0.1',
+    });
+    expect(await hasUnreadChangelog()).toBe(true);
+  });
+
+  it('returns false when dismissed version matches current', async () => {
+    const { EXTENSION_VERSION } = await import('@/core/utils/version');
+    (chrome.storage.local.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+      [StorageKeys.CHANGELOG_DISMISSED_VERSION]: EXTENSION_VERSION,
+    });
+    expect(await hasUnreadChangelog()).toBe(false);
   });
 });

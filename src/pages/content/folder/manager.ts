@@ -1,4 +1,4 @@
-import browser from 'webextension-polyfill';
+import browser, { type Runtime } from 'webextension-polyfill';
 
 import {
   type AccountScope,
@@ -8,7 +8,6 @@ import {
   extractRouteUserIdFromPath,
 } from '@/core/services/AccountIsolationService';
 import { DataBackupService } from '@/core/services/DataBackupService';
-import { getStorageMonitor } from '@/core/services/StorageMonitor';
 import { StorageKeys } from '@/core/types/common';
 import type { PromptItem, SyncAccountScope } from '@/core/types/sync';
 import { isSafari } from '@/core/utils/browser';
@@ -16,18 +15,38 @@ import { isExtensionContextInvalidatedError } from '@/core/utils/extensionContex
 import { FolderImportExportService } from '@/features/folder/services/FolderImportExportService';
 import type { ImportStrategy } from '@/features/folder/types/import-export';
 import { getTranslationSync, getTranslationSyncUnsafe, initI18n } from '@/utils/i18n';
-import { mergeTimelineHierarchy } from '@/utils/merge';
+import { mergeFolderData, mergeTimelineHierarchy } from '@/utils/merge';
 
+import { hasSeenCoachmark, markCoachmarkSeen } from '../coachmark';
+import {
+  MENU_PANEL_SELECTOR as CONVERSATION_MENU_PANEL_SELECTOR,
+  type ConversationMenuContext,
+  getConversationMenuContext,
+  injectConversationMenuMoveToFolderButton,
+} from '../export/conversationMenuInjection';
 import {
   getTimelineHierarchyStorageKey,
   getTimelineHierarchyStorageKeysToRead,
   resolveTimelineHierarchyDataForStorageScope,
 } from '../timeline/hierarchyStorage';
 import type { TimelineHierarchyData } from '../timeline/hierarchyTypes';
-import { sortConversationsByPriority } from './conversationSort';
+import { watchRouteChanges } from '../utils/routeWatcher';
+import { type ConversationSortMode, sortConversationsByPriority } from './conversationSort';
+import { type FloatingFabPos, mountFloatingFab, unmountFloatingFab } from './floatingModeFab';
+import { unmountFloatingModeNudge } from './floatingModeNudge';
+import {
+  type FloatingPanelHandle,
+  type FloatingPanelPos,
+  type FloatingPanelSize,
+  mountFloatingPanel,
+} from './floatingPanel';
 import { FOLDER_COLORS, getFolderColor, isDarkMode } from './folderColors';
 import { DEFAULT_CONVERSATION_ICON, GEM_CONFIG, getGemIcon } from './gemConfig';
-import { createMoveToFolderMenuItem } from './moveToFolderMenuItem';
+import {
+  mountHideArchivedNudge,
+  shouldShowHideArchivedNudge,
+  unmountHideArchivedNudge,
+} from './hideArchivedNudge';
 import {
   type IFolderStorageAdapter,
   createFolderStorageAdapter,
@@ -36,13 +55,55 @@ import type { ConversationReference, DragData, Folder, FolderData } from './type
 
 const STORAGE_KEY = 'gvFolderData';
 const IS_DEBUG = false; // Set to true to enable debug logging
+// Native ⋮ menu content (the action items) renders asynchronously after the
+// panel element appears, so injection is retried a few times before giving up.
+const MOVE_MENU_INJECTION_RETRY_LIMIT = 8;
+const MOVE_MENU_INJECTION_RETRY_DELAY_MS = 80;
+const CONVERSATION_MENU_TRIGGER_SELECTOR =
+  '[data-test-id="actions-menu-button"], [data-test-id="conversation-actions-menu-icon-button"]';
+// AI Organize: the lr26 sidebar populates conversation rows lazily, so wait
+// briefly for at least one row to gain its link before collecting (see #725).
+const AI_ORG_COLLECT_TIMEOUT_MS = 3000;
+const AI_ORG_COLLECT_POLL_MS = 150;
 const ROOT_CONVERSATIONS_ID = '__root_conversations__'; // Special ID for root-level conversations
 const NOTIFICATION_TIMEOUT_MS = 10000; // Duration to show data loss notification
 const FOLDER_TREE_INDENT_MIN = -8;
 const FOLDER_TREE_INDENT_MAX = 32;
 const FOLDER_TREE_INDENT_DEFAULT = -8;
+const NATIVE_TITLE_SYNC_DEBOUNCE_MS = 300;
+const ARCHIVED_CONVERSATION_ACTIONS_CLASS = 'gv-conversation-archived-actions';
+// Issue #753: idle-slice budget for draining queued per-row enhancement work,
+// and how long the legacy actions-container layout probe stays cached.
+const ENHANCEMENT_IDLE_BUDGET_MS = 8;
+const ENHANCEMENT_IDLE_TIMEOUT_MS = 500;
+const LEGACY_ACTIONS_PROBE_TTL_MS = 1000;
+const SIDEBAR_ANCHOR_FALLBACK_GRACE_MS = 6000;
+// Grace before treating an attached-but-invisible folder as broken. Long enough
+// that the sidebar's open/close width animation (momentary zero height) can't
+// flicker the floating fallback, short enough to recover quickly from a real
+// fault (e.g. Gemini moving DOM so our hide logic mis-fires).
+const FOLDER_HIDDEN_ANOMALY_GRACE_MS = 1500;
+// Max folder nesting depth — matches the floating panel's MAX_FOLDER_DEPTH.
+// root = 0, subfolder = 1, and that's the limit. Pre-existing data deeper
+// than this stays intact (we never destroy user data); the cap only gates
+// *new* creation. Moves remain unconstrained for the same reason.
+const MAX_FOLDER_DEPTH = 1;
 const FOLDER_NAME_SINGLE_CLICK_DELAY_MS = 220;
-const FOLDER_NAVIGATION_CONFIRM_DELAY_MS = 300;
+const FOLDER_NAVIGATION_CONFIRM_DELAY_MS = 1200;
+// A native delete menu can remain open while the user reads the confirmation
+// dialog. Keep only the conversation ID (never the title/content), and expire
+// it so an abandoned dialog cannot affect a later unrelated action.
+const NATIVE_DELETE_CANDIDATE_TIMEOUT_MS = 60_000;
+// Trailing debounce for persisting pure-UI state changes (expand/collapse,
+// recently-opened marks). Data mutations still save immediately.
+const SAVE_DEBOUNCE_MS = 300;
+// How long an armed self-write echo stays valid. If the mirror write's
+// onChanged echo never arrives (e.g. the chrome.storage mirror failed), the
+// stale counter expires so external writes can't be swallowed forever.
+const STORAGE_ECHO_SUPPRESS_WINDOW_MS = 2000;
+// Debounce for the folder search box so each keystroke doesn't rebuild the tree.
+const FOLDER_SEARCH_DEBOUNCE_MS = 200;
+export const FOLDER_ONLY_SEARCH_HINT_ID = 'folder-only-search-prefix-hint';
 
 // Export session backup keys for use by FolderImportExportService (deprecated, kept for compatibility)
 export const SESSION_BACKUP_KEY = 'gvFolderBackup';
@@ -62,8 +123,53 @@ export function calculateFolderConversationPaddingLeft(level: number, indent: nu
   return Math.max(0, level * indent + 24);
 }
 
-export function calculateFolderDialogPaddingLeft(level: number, indent: number): number {
-  return Math.max(0, level * indent + 12);
+// Move-to-folder dialog renders a flat list (no DOM nesting), so it needs its
+// own positive per-level indent. The sidebar's `folderTreeIndent` (which can
+// be negative to compact the nested tree view) doesn't apply here — using it
+// directly inverts the hierarchy in the dialog.
+const FOLDER_DIALOG_INDENT_PER_LEVEL = 16;
+export function calculateFolderDialogPaddingLeft(level: number): number {
+  return level * FOLDER_DIALOG_INDENT_PER_LEVEL + 12;
+}
+
+interface FolderDialogOption {
+  folder: Folder;
+  level: number;
+  path: string;
+}
+
+type ConversationReorderPlacement = 'above' | 'below';
+
+interface ConversationReorderTarget {
+  element: HTMLElement;
+  placement: ConversationReorderPlacement;
+}
+
+function normalizeFolderDialogSearchText(value: string): string {
+  return value
+    .trim()
+    .toLocaleLowerCase()
+    .replace(/\s*\/\s*/g, '/');
+}
+
+function normalizeFolderSearchText(value: string): string {
+  return value.trim().toLocaleLowerCase();
+}
+
+type FolderSearchMode = 'all' | 'folder';
+
+interface FolderSearchCriteria {
+  mode: FolderSearchMode;
+  query: string;
+}
+
+function parseFolderSearchCriteria(value: string): FolderSearchCriteria {
+  const normalized = normalizeFolderSearchText(value);
+  const folderOnlyMatch = normalized.match(/^(?:f|folder)\s*:\s*(.*)$/);
+
+  return folderOnlyMatch
+    ? { mode: 'folder', query: folderOnlyMatch[1] ?? '' }
+    : { mode: 'all', query: normalized };
 }
 
 /**
@@ -100,40 +206,116 @@ export class FolderManager {
   private backupService: DataBackupService<FolderData>; // Multi-layer backup system
   private data: FolderData = { folders: [], folderContents: {} };
   private containerElement: HTMLElement | null = null;
+  private multiSelectHostElement: HTMLElement | null = null;
   private sidebarContainer: HTMLElement | null = null;
   private recentSection: HTMLElement | null = null;
   private tooltipElement: HTMLElement | null = null;
   private tooltipTimeout: number | null = null;
   private sideNavObserver: MutationObserver | null = null;
   private conversationObserver: MutationObserver | null = null; // Observer for conversation additions/removals
+  // Watches the sidebar for re-renders that would leave the folder container in
+  // the wrong slot relative to the Recents section. Gemini occasionally replaces
+  // the `expandable-section[data-test-id="chats-expandable-section"]` element
+  // wholesale, which leaves our folder container stranded below the new section
+  // even though it was inserted above the old one. The position enforcer below
+  // (`enforceFolderAboveRecents`) watches the anchor section's direct parent,
+  // batched via requestAnimationFrame, and is a no-op once the container is
+  // already correctly placed.
+  private positionObserver: MutationObserver | null = null;
+  private positionEnforceRafId: number | null = null;
+  // User-controlled placement of the folder panel within Gemini's sidebar.
+  // 'above-recents' (default) keeps the historical behavior of anchoring just
+  // above the Recents expandable-section. 'above-notebooks' anchors above the
+  // Notebooks section instead, which collapses the visual gap when the user
+  // wants Folders to be the topmost section. Persisted via
+  // `StorageKeys.FOLDERS_ANCHOR` in chrome.storage.local.
+  private folderAnchor: 'above-recents' | 'above-notebooks' = 'above-recents';
+  private foldersCollapsed: boolean = false;
+  // The small hover-reveal swap button we paint over Notebooks' top-right
+  // corner (the same spot the section-hider's "eye" button used to live in).
+  // Click flips `folderAnchor`. Tracked so we can detect a stale element when
+  // Gemini swaps the Notebooks section wholesale and re-paint on the new one.
+  private notebooksAnchorButton: HTMLElement | null = null;
   private importInProgress: boolean = false; // Lock to prevent concurrent imports
   private exportInProgress: boolean = false; // Lock to prevent concurrent exports
   private selectedConversations: Set<string> = new Set(); // For multi-select support
+  private activeFolderConversationKey: string | null = null; // Last clicked folder row for duplicate conversation IDs
   private isMultiSelectMode: boolean = false; // Multi-select mode state
   private multiSelectSource: 'folder' | 'native' | null = null; // Track where multi-select was initiated
   private multiSelectFolderId: string | null = null; // Track which folder multi-select was initiated from
   private longPressTimeout: number | null = null; // For long-press detection
   private folderNameClickTimeout: number | null = null; // Distinguish single-click toggle from double-click rename
+  private folderNavigationConfirmTimer: number | null = null;
   private longPressThreshold: number = 500; // Long-press duration in ms
   private folderEnabled: boolean = true; // Whether folder feature is enabled
   private folderProjectEnabled: boolean = false; // Whether Folder-as-Project feature is enabled
   private hideArchivedConversations: boolean = false; // Whether to hide conversations in folders
+  private hideArchivedNudgeShown: boolean = false; // Whether the first-archive nudge has been shown/dismissed
   private folderTreeIndent: number = FOLDER_TREE_INDENT_DEFAULT; // Tree indentation width (px)
   private filterCurrentUserOnly: boolean = false; // Whether to show only current user's conversations
+  private folderSearchEnabled: boolean = true; // Whether to show the folder title search box
+  private folderSearchQuery: string = ''; // Filter the folder tree by folder/conversation title
+  private folderOnlySearchHintSeen: boolean = false;
+  private conversationSortMode: ConversationSortMode = 'manual';
   private accountIsolationEnabled: boolean = false; // Whether hard account isolation is enabled
   private accountScope: AccountScope | null = null; // Resolved account scope for current page
   private activeStorageKey: string = STORAGE_KEY; // Storage key currently used for folder data
-  private navPoller: number | null = null;
   private lastPathname: string | null = null;
   private saveInProgress: boolean = false; // Lock to prevent concurrent saves
+  private savePending: boolean = false; // Run one trailing save when data changes mid-write
+  private nativeTitleSyncTimer: number | null = null;
+  private nativeTitleSyncInProgress: boolean = false;
   private pendingTitleUpdates: Map<string, string> = new Map(); // Buffer title updates during render
   private pendingRemovals: Map<string, number> = new Map(); // Pending conversation removals with timer IDs
   private removalCheckDelay: number = 300; // Delay (ms) before confirming conversation deletion
+  // Batched mutation processing for the sidebar observer. Gemini emits a
+  // burst of mutations every time the user clicks a conversation row (it
+  // re-renders rows to update active state). Doing per-element setup work
+  // synchronously inside the observer callback caused noticeable click
+  // jank — issue #678. We now coalesce mutations to the next animation frame
+  // and dedupe by element/conversationId before doing any work.
+  private mutationBatchQueue: MutationRecord[] = [];
+  private mutationFlushScheduled: boolean = false;
+  private mutationFlushRafId: number | null = null;
+  // Per-row enhancement work (drag listeners, hide-archived state) for added
+  // conversations is drained from this queue during idle time instead of the
+  // sidebar-open animation frame — a burst can add every Recents row at once
+  // and this work is allowed to lag behind paint (issue #753). Removal
+  // *cancellation* stays synchronous in `flushMutationBatch`: it must beat
+  // the `removalCheckDelay` timer.
+  private enhancementQueue: Set<HTMLElement> = new Set();
+  private enhancementDrainIdleId: number | null = null;
+  // Cached result of the legacy `.conversation-actions-container` layout
+  // probe — see `hasLegacyActionsContainer` (issue #753).
+  private legacyActionsProbe: { present: boolean; at: number } | null = null;
   private isDestroyed: boolean = false; // Flag to prevent callbacks after destruction
   private reinitializePromise: Promise<void> | null = null; // Prevent duplicate reinitialization cascades
   private activeColorPicker: HTMLElement | null = null; // Currently open color picker dialog
   private activeColorPickerFolderId: string | null = null; // Folder ID of currently open color picker
   private activeColorPickerCloseHandler: ((e: MouseEvent) => void) | null = null; // Event handler for closing color picker
+  private pendingConversationReorderTarget: ConversationReorderTarget | null = null;
+  private activeConversationReorderTarget: ConversationReorderTarget | null = null;
+  private conversationReorderRafId: number | null = null;
+  // Echo suppression for our own chrome.storage.local mirror writes.
+  // FolderStorageAdapter.saveData mirrors folder data into chrome.storage.local
+  // and chrome fires storage.onChanged in the SAME context that initiated the
+  // write. Without suppression every local save triggered a redundant full
+  // reload + re-render (and a slightly stale snapshot could briefly overwrite
+  // this.data). A counter bounds concurrent saves; the time window prevents a
+  // stale counter (echo lost, e.g. mirror write failed) from swallowing a
+  // genuine external change forever.
+  private pendingStorageEchoes = 0;
+  private lastStorageEchoArmedAt = 0;
+  // Debounced persistence for high-frequency pure-UI state changes
+  // (expand/collapse, recently-opened marks). Data-shape mutations
+  // (create/delete/rename/import/move) still save immediately.
+  private saveDebounceTimer: number | null = null;
+  private beforeUnloadFlushHandler: (() => void) | null = null;
+  // Debounce for the folder search box so each keystroke doesn't rebuild the tree.
+  private folderSearchDebounceTimer: number | null = null;
+  // Per-render native-title lookup table (built once per createFoldersList pass
+  // instead of scanning the whole sidebar for every stored conversation).
+  private nativeTitleLookup: Map<string, string> | null = null;
 
   // Track active UI elements to prevent duplicate creation
   private activeFolderInput: HTMLElement | null = null; // Currently open folder name input
@@ -146,6 +328,16 @@ export class FolderManager {
   private routeChangeCleanup: (() => void) | null = null;
   private sidebarClickListener: ((e: Event) => void) | null = null;
   private nativeMenuObserver: MutationObserver | null = null;
+  // Capture-phase listener that injects "Move to folder" when a conversation ⋮
+  // menu trigger is clicked (belt-and-suspenders alongside nativeMenuObserver).
+  private moveMenuTriggerHandler: ((event: Event) => void) | null = null;
+  private moveMenuKeydownHandler: ((event: Event) => void) | null = null;
+  private activeNativeMenuConversationId: string | null = null;
+  private nativeDeleteCandidateId: string | null = null;
+  private nativeDeleteCandidateTimer: number | null = null;
+  // Tracks the last input modality so menu-close focus handling stays a11y-safe:
+  // pointer dismissals drop trigger focus, keyboard dismissals preserve it.
+  private lastInputModality: 'pointer' | 'keyboard' = 'pointer';
   private outsideClickHandler: ((e: MouseEvent) => void) | null = null; // For exiting multi-select on outside click
 
   // Batch delete related properties
@@ -165,6 +357,38 @@ export class FolderManager {
   } as const;
 
   private cleanupTasks: (() => void)[] = [];
+
+  // Floating-mode state — an opt-in "always use a floating window for folders"
+  // switch exposed in the popup. When on, we never attempt to inject the
+  // folder panel into Gemini's sidebar; we mount the body-level floating
+  // panel (or its FAB) + native ⋮ menu observer and call it a day. When off, normal
+  // sidebar injection; a failure is a silent no-op.
+  private floatingPanelHandle: FloatingPanelHandle | null = null;
+  private floatingModeEnabled: boolean = false;
+  private floatingOpenOnStart: boolean = true;
+  private floatingModeActive: boolean = false;
+  // When Gemini swaps its sidebar DOM for an unsupported layout (e.g. mobile
+  // breakpoint at narrow viewport widths), our sidebar folder is removed and
+  // we can't reinject. Instead of leaving the user stranded, we mount the
+  // floating panel as a *temporary* fallback. This flag tracks that mode so
+  // the recovery loop knows to retire the floating panel once the sidebar
+  // anchor returns. It is distinct from `floatingModeActive`, which reflects
+  // the user's *explicit* floating-mode toggle in the popup.
+  private floatingFallbackActive: boolean = false;
+  private sidebarAnchorMissingSince: number | null = null;
+  // When the sidebar folder is attached but not actually usable (hidden while
+  // the sidebar is open and not user-collapsed). Drives the visibility-aware
+  // safety net so a broken-but-present folder still falls back to floating.
+  private folderHiddenAnomalySince: number | null = null;
+  private folderRecoveryTimer: number | null = null;
+  private folderRecoveryInFlight: boolean = false;
+  // Long-lived DOM-recovery watchers. Deliberately NOT registered via
+  // `addCleanupTask`, so `reinitializeFolderUI`'s `runCleanupTasks()` cannot tear
+  // them down: a reinit that bails mid-transition (sidebar/anchor not present yet)
+  // must still leave the self-heal machinery running. Cleared only on full
+  // teardown (`destroy` / `teardownMountedFolderRuntime`).
+  private domRecoveryHandler: (() => void) | null = null;
+  private domRecoveryDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     // Create storage adapter based on browser (Factory Pattern)
@@ -192,18 +416,11 @@ export class FolderManager {
       // Setup automatic backup before page unload
       this.backupService.setupBeforeUnloadBackup(() => this.data);
 
-      // Initialize storage quota monitor
-      const storageMonitor = getStorageMonitor({
-        checkIntervalMs: 60000, // Check every minute for Gemini (more active)
-      });
-
-      // Use custom notification callback to match our style
-      storageMonitor.setNotificationCallback((message, level) => {
-        this.showNotificationByLevel(message, level);
-      });
-
-      // Start monitoring
-      storageMonitor.startMonitoring();
+      // Flush any pending debounced save on unload. The localStorage half of
+      // the save is synchronous, so the data itself is safe; the
+      // chrome.storage mirror is best-effort during unload.
+      this.beforeUnloadFlushHandler = () => this.flushPendingSaveData();
+      window.addEventListener('beforeunload', this.beforeUnloadFlushHandler);
 
       // Load account isolation setting/scope before reading folder data.
       await this.loadAccountIsolationSetting();
@@ -215,13 +432,29 @@ export class FolderManager {
       // Load folder enabled setting
       await this.loadFolderEnabledSetting();
 
+      // Load the opt-in "always use floating window" mode. Off by default —
+      // users flip it from the popup when they want to skip sidebar injection
+      // entirely and work with folders in a floating panel.
+      await this.loadFloatingModeSetting();
+
+      // Load hide-archived onboarding nudge flag first, so loadHideArchivedSetting
+      // can mark it "shown" if the user already has the feature enabled.
+      await this.loadHideArchivedNudgeShownSetting();
+
       // Load hide archived setting
       await this.loadHideArchivedSetting();
 
+      // Load folder anchor preference (which native section to sit above)
+      await this.loadFolderAnchorSetting();
+      await this.loadFoldersCollapsedSetting();
+
       // Load filter user setting
       await this.loadFilterUserSetting();
+      await this.loadFolderSearchEnabledSetting();
+      await this.loadFolderOnlySearchHintState();
       await this.loadFolderTreeIndentSetting();
       await this.loadFolderProjectEnabledSetting();
+      await this.loadConversationSortModeSetting();
 
       // Set up storage change listener (always needed to respond to setting changes)
       this.setupStorageListener();
@@ -235,8 +468,14 @@ export class FolderManager {
         return;
       }
 
-      // Initialize folder UI
-      await this.initializeFolderUI();
+      // Two mounting strategies:
+      //  - Floating mode (opt-in): body-level floating panel, skip sidebar.
+      //  - Default: inject the folder panel into Gemini's sidebar.
+      if (this.floatingModeEnabled) {
+        await this.startFloatingMode();
+      } else {
+        await this.initializeFolderUI();
+      }
 
       this.debug('Initialized successfully');
     } catch (error) {
@@ -279,15 +518,27 @@ export class FolderManager {
       this.folderNameClickTimeout = null;
     }
 
+    this.clearFolderNavigationConfirmation();
+
     if (this.tooltipTimeout) {
       clearTimeout(this.tooltipTimeout);
       this.tooltipTimeout = null;
     }
 
-    if (this.navPoller) {
-      clearInterval(this.navPoller);
-      this.navPoller = null;
+    this.clearNativeTitleSyncTimer();
+    this.clearConversationReorderIndicator();
+
+    this.teardownDomRecoveryWatchers();
+    this.folderRecoveryInFlight = false;
+
+    // Flush a pending debounced save so a recent expand/collapse isn't lost,
+    // then drop the unload flush hook.
+    this.flushPendingSaveData();
+    if (this.beforeUnloadFlushHandler) {
+      window.removeEventListener('beforeunload', this.beforeUnloadFlushHandler);
+      this.beforeUnloadFlushHandler = null;
     }
+    this.clearFolderSearchDebounceTimer();
 
     // Disconnect mutation observers
     if (this.sideNavObserver) {
@@ -299,10 +550,25 @@ export class FolderManager {
       this.conversationObserver.disconnect();
       this.conversationObserver = null;
     }
+    this.cancelMutationBatchFlush();
+    this.mutationBatchQueue.length = 0;
+    this.cancelEnhancementDrain();
 
     if (this.nativeMenuObserver) {
       this.nativeMenuObserver.disconnect();
       this.nativeMenuObserver = null;
+    }
+    this.teardownMoveMenuTriggerListener();
+
+    this.teardownPositionEnforcer();
+    this.cleanupNotebooksAnchorButton();
+
+    // Tear down floating-mode UI if it was surfaced.
+    unmountFloatingModeNudge();
+    unmountFloatingFab();
+    if (this.floatingPanelHandle) {
+      this.floatingPanelHandle.destroy();
+      this.floatingPanelHandle = null;
     }
 
     // Remove event listeners
@@ -342,6 +608,7 @@ export class FolderManager {
 
     this.closeActiveImportExportMenu();
     this.closeActiveImportDialog();
+    this.closeFolderConversationMenus();
     this.clearActiveFolderInput();
 
     // Remove container
@@ -349,16 +616,131 @@ export class FolderManager {
       this.containerElement.remove();
       this.containerElement = null;
     }
+    if (this.multiSelectHostElement) {
+      this.multiSelectHostElement.remove();
+      this.multiSelectHostElement = null;
+    }
 
     // Execute custom cleanup tasks
-    this.cleanupTasks.forEach((task) => task());
-    this.cleanupTasks = [];
+    this.runCleanupTasks();
 
     this.debug('Cleanup complete');
   }
 
   private addCleanupTask(task: () => void): void {
     this.cleanupTasks.push(task);
+  }
+
+  private runCleanupTasks(): void {
+    const tasks = this.cleanupTasks;
+    this.cleanupTasks = [];
+
+    tasks.forEach((task) => {
+      try {
+        task();
+      } catch (error) {
+        this.debugWarn('Folder runtime cleanup task failed:', error);
+      }
+    });
+  }
+
+  private teardownMountedFolderRuntime(): void {
+    this.runCleanupTasks();
+
+    this.pendingRemovals.forEach((timerId) => clearTimeout(timerId));
+    this.pendingRemovals.clear();
+
+    if (this.longPressTimeout) {
+      clearTimeout(this.longPressTimeout);
+      this.longPressTimeout = null;
+    }
+
+    if (this.folderNameClickTimeout !== null) {
+      clearTimeout(this.folderNameClickTimeout);
+      this.folderNameClickTimeout = null;
+    }
+
+    this.clearNativeTitleSyncTimer();
+
+    this.teardownDomRecoveryWatchers();
+    this.folderRecoveryInFlight = false;
+    this.floatingFallbackActive = false;
+
+    if (this.sideNavObserver) {
+      this.sideNavObserver.disconnect();
+      this.sideNavObserver = null;
+    }
+
+    if (this.conversationObserver) {
+      this.conversationObserver.disconnect();
+      this.conversationObserver = null;
+    }
+    this.cancelMutationBatchFlush();
+    this.mutationBatchQueue.length = 0;
+    this.cancelEnhancementDrain();
+
+    if (this.nativeMenuObserver) {
+      this.nativeMenuObserver.disconnect();
+      this.nativeMenuObserver = null;
+    }
+    this.teardownMoveMenuTriggerListener();
+
+    this.teardownPositionEnforcer();
+    this.cleanupNotebooksAnchorButton();
+    this.clearConversationReorderIndicator();
+    this.flushPendingSaveData();
+    this.clearFolderSearchDebounceTimer();
+    this.stopFloatingMode();
+
+    if (this.routeChangeCleanup) {
+      try {
+        this.routeChangeCleanup();
+      } catch (error) {
+        this.debugWarn('Route change cleanup failed:', error);
+      }
+      this.routeChangeCleanup = null;
+    }
+
+    if (this.sidebarClickListener && this.sidebarContainer) {
+      try {
+        this.sidebarContainer.removeEventListener('click', this.sidebarClickListener, true);
+      } catch (error) {
+        this.debugWarn('Sidebar click listener cleanup failed:', error);
+      }
+      this.sidebarClickListener = null;
+    }
+
+    this.removeOutsideClickHandler();
+    this.closeActiveImportExportMenu();
+    this.closeActiveImportDialog();
+    this.closeFolderConversationMenus();
+    this.clearActiveFolderInput();
+
+    if (this.activeColorPicker) {
+      this.activeColorPicker.remove();
+      if (this.activeColorPickerCloseHandler) {
+        document.removeEventListener('click', this.activeColorPickerCloseHandler);
+        this.activeColorPickerCloseHandler = null;
+      }
+      this.activeColorPicker = null;
+      this.activeColorPickerFolderId = null;
+    }
+
+    if (this.containerElement) {
+      this.containerElement.remove();
+      this.containerElement = null;
+    }
+    if (this.multiSelectHostElement) {
+      this.multiSelectHostElement.remove();
+      this.multiSelectHostElement = null;
+    }
+
+    this.selectedConversations.clear();
+    this.isMultiSelectMode = false;
+    this.multiSelectSource = null;
+    this.multiSelectFolderId = null;
+    this.sidebarContainer = null;
+    this.recentSection = null;
   }
 
   private clearActiveFolderInput(): void {
@@ -394,142 +776,829 @@ export class FolderManager {
   }
 
   private async initializeFolderUI(): Promise<void> {
-    // Wait for sidebar to be available
-    await this.waitForSidebar();
+    // Recovery and native-menu tracking must exist before waiting for Gemini's
+    // lazily rendered sidebar. If that initial wait times out, these lifetime
+    // watchers are what notice the sidebar later and finish initialization.
+    this.ensureDomRecoveryWatchers();
+    this.setupConversationClickTracking();
+    this.setupNativeConversationMenuObserver();
 
-    // Find the Recent section
-    this.findRecentSection();
+    // Wait for sidebar to be available (with a hard timeout so a DOM change on
+    // Gemini's side doesn't silently hang the folder feature forever).
+    const sidebarFound = await this.waitForSidebar();
+    if (!sidebarFound) {
+      this.debugWarn('Sidebar anchor never appeared — folder panel unavailable');
+      return;
+    }
 
-    if (!this.recentSection) {
-      this.debugWarn('Could not find Recent section');
+    if (!this.findRecentSection()) {
+      this.debugWarn('Could not find Recent section — folder panel unavailable');
       return;
     }
 
     // Create and inject folder UI
     this.createFolderUI();
 
-    // Make conversations draggable
-    this.makeConversationsDraggable();
-
-    // Set up mutation observer to handle dynamically added conversations
-    this.setupMutationObserver();
+    this.setupNativeSidebarConversationEnhancements();
 
     // Set up sidebar visibility observer
     this.setupSideNavObserver();
 
     // Initial visibility check
     this.updateVisibilityBasedOnSideNav();
-
-    // Set up native conversation menu injection
-    this.setupConversationClickTracking();
-    this.setupNativeConversationMenuObserver();
-
-    // ─── DOM recovery (resize / print) ─────────────────────────────────────
-    // Gemini may re-render the sidebar DOM during window resize or
-    // window.print(), detaching the folder container.  The sideNavObserver
-    // (watching `side-nav-open` on #app-root) CANNOT catch all cases because
-    // when the sidebar closes AND the DOM is rebuilt simultaneously, the
-    // observer fires with isSideNavOpen=false and skips reinitialization.
-    // A debounced resize listener provides a reliable fallback.
-    let domRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
-
-    const domRecoveryCheck = () => {
-      if (domRecoveryTimer !== null) clearTimeout(domRecoveryTimer);
-      domRecoveryTimer = setTimeout(() => {
-        domRecoveryTimer = null;
-        if (this.isDestroyed) return;
-        if (
-          this.containerElement &&
-          document.body.contains(this.containerElement) &&
-          this.sidebarContainer &&
-          document.body.contains(this.sidebarContainer)
-        ) {
-          return; // Everything still attached – nothing to do.
-        }
-        // Only reinitialize if the sidebar is currently visible (open).
-        // If it is closed, the sideNavObserver will trigger reinitialization
-        // when it reopens.
-        const appRoot = document.querySelector('#app-root');
-        if (appRoot && !appRoot.classList.contains('side-nav-open')) {
-          this.debug('DOM recovery: container lost but sidebar closed, deferring');
-          return;
-        }
-        this.debug('DOM recovery: folder UI lost from DOM, reinitializing');
-        this.reinitializeFolderUI();
-      }, 800);
-    };
-
-    window.addEventListener('resize', domRecoveryCheck);
-    window.addEventListener('gv-print-cleanup', domRecoveryCheck);
-    window.addEventListener('afterprint', domRecoveryCheck);
-
-    this.addCleanupTask(() => {
-      if (domRecoveryTimer !== null) clearTimeout(domRecoveryTimer);
-      window.removeEventListener('resize', domRecoveryCheck);
-      window.removeEventListener('gv-print-cleanup', domRecoveryCheck);
-      window.removeEventListener('afterprint', domRecoveryCheck);
-    });
   }
 
-  private async waitForSidebar(): Promise<void> {
+  /**
+   * Arm the long-lived DOM-recovery watchers: a debounced resize/print listener
+   * plus the watchdog interval.
+   *
+   * Why these are lifetime-scoped and idempotent (NOT per-init cleanup tasks):
+   * Gemini re-renders the sidebar DOM during window resize / window.print() /
+   * the narrow-viewport mobile breakpoint, detaching the folder container. The
+   * `sideNavObserver` (watching `side-nav-open` on #app-root) can't catch every
+   * case — when the sidebar closes AND the DOM is rebuilt at once it fires with
+   * isSideNavOpen=false and skips reinit.
+   *
+   *  - The debounced resize/print listener is a single-shot fallback for the
+   *    common resize / split-screen / print cases.
+   *  - The 2s watchdog interval *pulls*: it inspects what Gemini currently
+   *    offers and decides whether the sidebar folder is recoverable now, or
+   *    whether to surface the floating panel as a temporary fallback.
+   *
+   * Both are re-armed at the TOP of `initializeFolderUI` so that a reinit which
+   * bails mid-transition (anchor not present yet) still leaves self-heal alive.
+   * If they were torn down by `reinitializeFolderUI`'s `runCleanupTasks()` and
+   * not re-armed before the bail, the folder would stay gone until a full page
+   * reload.
+   */
+  private ensureDomRecoveryWatchers(): void {
+    if (!this.domRecoveryHandler) {
+      const domRecoveryCheck = () => {
+        if (this.domRecoveryDebounceTimer !== null) clearTimeout(this.domRecoveryDebounceTimer);
+        this.domRecoveryDebounceTimer = setTimeout(() => {
+          this.domRecoveryDebounceTimer = null;
+          if (this.isDestroyed) return;
+          if (this.isSidebarFolderMountedInCurrentSidebar()) {
+            return; // Everything still attached – nothing to do.
+          }
+          // Only reinitialize if the sidebar is currently visible (open).
+          // If it is closed, the sideNavObserver will trigger reinitialization
+          // when it reopens.
+          if (!this.isSideNavOpen()) {
+            this.debug('DOM recovery: container lost but sidebar closed, deferring');
+            return;
+          }
+          this.debug('DOM recovery: folder UI lost from DOM, reinitializing');
+          this.reinitializeFolderUI();
+        }, 800);
+      };
+      this.domRecoveryHandler = domRecoveryCheck;
+      window.addEventListener('resize', domRecoveryCheck);
+      window.addEventListener('gv-print-cleanup', domRecoveryCheck);
+      window.addEventListener('afterprint', domRecoveryCheck);
+    }
+
+    if (this.folderRecoveryTimer === null) {
+      this.folderRecoveryTimer = window.setInterval(() => {
+        void this.runFolderRecoveryTick();
+      }, 2000);
+    }
+  }
+
+  /**
+   * Tear down the lifetime-scoped DOM-recovery watchers. Called only from full
+   * teardown paths (`destroy`, `teardownMountedFolderRuntime`) — never from
+   * `reinitializeFolderUI`, which relies on these surviving.
+   */
+  private teardownDomRecoveryWatchers(): void {
+    if (this.domRecoveryDebounceTimer !== null) {
+      clearTimeout(this.domRecoveryDebounceTimer);
+      this.domRecoveryDebounceTimer = null;
+    }
+    if (this.domRecoveryHandler) {
+      window.removeEventListener('resize', this.domRecoveryHandler);
+      window.removeEventListener('gv-print-cleanup', this.domRecoveryHandler);
+      window.removeEventListener('afterprint', this.domRecoveryHandler);
+      this.domRecoveryHandler = null;
+    }
+    if (this.folderRecoveryTimer !== null) {
+      clearInterval(this.folderRecoveryTimer);
+      this.folderRecoveryTimer = null;
+    }
+  }
+
+  /**
+   * Decide each tick whether the folder UI is in the right place for what
+   * Gemini's sidebar currently looks like. Three states matter:
+   *
+   *   1. Sidebar folder is alive in DOM → if a floating fallback is up from a
+   *      previous narrow-viewport detour, tear it down. The sidebar is the
+   *      preferred home.
+   *   2. Folder is missing AND Gemini's sidebar anchor (overflow-container +
+   *      chats-expandable-section) is present → reinject the sidebar folder.
+   *      `reinitializeFolderUI` already handles the teardown / re-find dance.
+   *   3. Folder is missing AND the anchor is also missing → Gemini probably
+   *      swapped to a layout we can't host in (e.g. mobile). Mount the
+   *      floating panel so the user doesn't lose access to their folders.
+   *
+   * We skip the whole loop when the user has explicitly opted into floating
+   * mode (then the popup-controlled `floatingModeActive` owns the panel) or
+   * when a reinit is already mid-flight. The `folderRecoveryInFlight` flag
+   * guards against overlapping ticks while we await the async openFloatingPanel.
+   */
+  private async runFolderRecoveryTick(): Promise<void> {
+    if (this.isDestroyed) return;
+    if (!this.folderEnabled) return;
+    // User explicitly picked floating in the popup — don't mess with their UI.
+    if (this.floatingModeEnabled || this.floatingModeActive) return;
+    if (this.reinitializePromise) return;
+    if (this.folderRecoveryInFlight) return;
+
+    const currentSidebar = this.findCurrentSidebarContainer();
+    const sidebarAnchor = currentSidebar ? this.findFolderAnchorCandidateIn(currentSidebar) : null;
+    const sidebarFolderAlive = this.isSidebarFolderMountedInCurrentSidebar(currentSidebar);
+
+    if (sidebarFolderAlive) {
+      this.sidebarAnchorMissingSince = null;
+      if (currentSidebar && this.sidebarContainer !== currentSidebar) {
+        this.sidebarContainer = currentSidebar;
+        this.setupNativeSidebarConversationEnhancements();
+        this.setupPositionEnforcer();
+      }
+
+      // Visibility-aware safety net: "attached" ≠ "usable". A folder that is
+      // mounted but invisible while the sidebar is open (and not user-collapsed)
+      // is broken — historically this slipped through because recovery only
+      // checked presence, so a stale display:none made folders vanish with no
+      // floating fallback. Treat it as a fault, after a short grace so sidebar
+      // open/close animations don't flicker the fallback.
+      if (!this.isSidebarFolderUsable()) {
+        const now = Date.now();
+        if (this.folderHiddenAnomalySince === null) this.folderHiddenAnomalySince = now;
+        if (now - this.folderHiddenAnomalySince < FOLDER_HIDDEN_ANOMALY_GRACE_MS) {
+          this.debug('Recovery: folder attached but hidden while sidebar open — within grace');
+          return;
+        }
+        this.folderHiddenAnomalySince = null;
+        // Cheap repair first: drop a stale inline hide and re-evaluate. Covers
+        // the common case (a detection miss left display:none on the container).
+        this.containerElement?.style.removeProperty('display');
+        this.updateVisibilityBasedOnSideNav();
+        if (this.isSidebarFolderUsable()) {
+          this.debug('Recovery: cleared stale hide — sidebar folder usable again');
+          return;
+        }
+        // Still hidden by something outside our control → surface the floating
+        // panel so folders stay reachable (the whole reason floating mode exists).
+        if (this.floatingFallbackActive || this.floatingPanelHandle) return;
+        this.debug('Recovery: sidebar folder unusable — surfacing floating fallback');
+        this.folderRecoveryInFlight = true;
+        try {
+          this.floatingFallbackActive = true;
+          await this.openFloatingPanel();
+        } catch (error) {
+          this.floatingFallbackActive = false;
+          this.debugWarn('Recovery: failed to mount floating fallback (hidden folder):', error);
+        } finally {
+          this.folderRecoveryInFlight = false;
+        }
+        return;
+      }
+      this.folderHiddenAnomalySince = null;
+
+      // The sidebar is hosting the folder right now. If we left a floating
+      // fallback up from a previous transition, retire it.
+      if (this.floatingFallbackActive) {
+        this.debug('Recovery: sidebar folder restored — retiring floating fallback');
+        this.floatingFallbackActive = false;
+        if (this.floatingPanelHandle) {
+          this.floatingPanelHandle.destroy();
+          this.floatingPanelHandle = null;
+        }
+      }
+      // Belt-and-suspenders: if the position observer ever misses a mutation
+      // (e.g. it was torn down across a reinit and not yet re-attached), the
+      // recovery tick repairs the ordering here. No-op when already correct.
+      this.enforceFolderAboveRecents();
+      return;
+    }
+    this.folderHiddenAnomalySince = null;
+
+    if (sidebarAnchor) {
+      this.sidebarAnchorMissingSince = null;
+      // The sidebar is back to a layout we can inject into but the folder
+      // isn't there. This usually means a previous reinit ran mid-transition
+      // and lost the race against Gemini's render. Retry now.
+      this.debug('Recovery: sidebar anchor present but folder missing — reinit');
+      // If a floating fallback is up, retire it before reinjecting the sidebar
+      // version so we don't briefly have both visible.
+      if (this.floatingFallbackActive) {
+        this.floatingFallbackActive = false;
+        if (this.floatingPanelHandle) {
+          this.floatingPanelHandle.destroy();
+          this.floatingPanelHandle = null;
+        }
+      }
+      this.reinitializeFolderUI();
+      return;
+    }
+
+    if (currentSidebar) {
+      const now = Date.now();
+      if (this.sidebarAnchorMissingSince === null) {
+        this.sidebarAnchorMissingSince = now;
+      }
+      const missingDuration = now - this.sidebarAnchorMissingSince;
+      if (missingDuration < SIDEBAR_ANCHOR_FALLBACK_GRACE_MS) {
+        this.debug('Recovery: sidebar anchor missing temporarily — waiting');
+        return;
+      }
+    } else {
+      this.sidebarAnchorMissingSince = null;
+    }
+
+    // Anchor is gone — Gemini moved the goalposts. Surface the floating panel
+    // so folders stay reachable, but mark it as a fallback so we can tear it
+    // back down once the sidebar returns. Only mount once per detour.
+    if (this.floatingFallbackActive || this.floatingPanelHandle) return;
+    this.debug('Recovery: sidebar anchor missing — mounting floating fallback');
+    this.folderRecoveryInFlight = true;
+    try {
+      this.floatingFallbackActive = true;
+      await this.openFloatingPanel();
+    } catch (error) {
+      this.floatingFallbackActive = false;
+      this.debugWarn('Recovery: failed to mount floating fallback:', error);
+    } finally {
+      this.folderRecoveryInFlight = false;
+    }
+  }
+
+  /**
+   * Polls for the Gemini sidebar anchor. Resolves true when found, false if the
+   * configurable timeout elapses first. The timeout path lets the caller surface
+   * a floating-mode fallback UI instead of spinning forever when Google changes
+   * the sidebar DOM.
+   *
+   * Users can force the failure path for testing by setting
+   * `localStorage['gv-force-folder-fail'] = '1'` in the Gemini page and
+   * reloading.
+   */
+  private async waitForSidebar(timeoutMs: number = 10000): Promise<boolean> {
+    try {
+      if (localStorage.getItem('gv-force-folder-fail') === '1') {
+        console.warn('[FolderManager] gv-force-folder-fail is set — simulating sidebar failure');
+        return false;
+      }
+    } catch {}
     return new Promise((resolve) => {
+      const deadline = Date.now() + timeoutMs;
       const checkSidebar = () => {
-        // Look for the overflow-container which holds the sidebar content
-        const container = document.querySelector('[data-test-id="overflow-container"]');
+        const container = this.findCurrentSidebarContainer();
         if (container) {
           this.sidebarContainer = container as HTMLElement;
-          resolve();
-        } else {
-          setTimeout(checkSidebar, 500);
+          resolve(true);
+          return;
         }
+        if (Date.now() >= deadline) {
+          resolve(false);
+          return;
+        }
+        setTimeout(checkSidebar, 500);
       };
       checkSidebar();
     });
   }
 
-  private findRecentSection(): void {
-    if (!this.sidebarContainer) return;
+  private setupNativeSidebarConversationEnhancements(): void {
+    this.makeConversationsDraggable();
+    this.setupMutationObserver();
+  }
 
-    // Find conversations-list (Recent section) by looking for the conversations container
-    // Try multiple selectors to find the Recent section
-    let conversationsList = this.sidebarContainer.querySelector(
-      '[data-test-id="all-conversations"]',
+  private setupFloatingModeSidebarInteractions(): void {
+    const existingSidebar = this.findCurrentSidebarContainer();
+    if (existingSidebar instanceof HTMLElement) {
+      this.sidebarContainer = existingSidebar;
+      this.setupNativeSidebarConversationEnhancements();
+      return;
+    }
+
+    void this.waitForSidebar()
+      .then((sidebarFound) => {
+        if (!sidebarFound) {
+          this.debugWarn('Sidebar anchor never appeared — native batch actions unavailable');
+          return;
+        }
+        if (this.isDestroyed || !this.folderEnabled || !this.floatingModeActive) return;
+        this.setupNativeSidebarConversationEnhancements();
+      })
+      .catch((error) => {
+        this.debugWarn('Failed to initialize native sidebar interactions in floating mode:', error);
+      });
+  }
+
+  /**
+   * Sidebar injection failed — surface a one-time nudge letting the user pop
+   * the folder panel out as a floating window. If they've already dismissed the
+   * nudge or already have the floating panel open, skip straight to mounting it.
+   *
+   * @param reason free-form debug label (anchor-missing, recent-section-missing, etc.)
+   */
+  /**
+   * Enter "always floating" mode. User has explicitly flipped the popup
+   * toggle, so we skip the onboarding nudge entirely and drop the panel
+   * or the persistent FAB onto the page based on their startup preference.
+   * The native ⋮ → "Move to folder" observers are wired up here too so users
+   * can file conversations without the panel being open.
+   */
+  private async startFloatingMode(openPanel = this.floatingOpenOnStart): Promise<void> {
+    if (this.isDestroyed || !this.folderEnabled) return;
+    if (this.floatingModeActive) return;
+    this.floatingModeActive = true;
+    this.debug('Entering floating mode');
+
+    this.setupConversationClickTracking();
+    this.setupNativeConversationMenuObserver();
+    this.setupFloatingModeSidebarInteractions();
+
+    if (openPanel) {
+      await this.openFloatingPanel();
+    } else {
+      this.showFloatingFab();
+    }
+  }
+
+  /**
+   * Leave floating mode — tear down the body-level UI. Safe to call when
+   * floating mode was never entered.
+   */
+  private stopFloatingMode(): void {
+    this.floatingModeActive = false;
+    unmountFloatingModeNudge();
+    unmountFloatingFab();
+    if (this.floatingPanelHandle) {
+      this.floatingPanelHandle.destroy();
+      this.floatingPanelHandle = null;
+    }
+    if (this.multiSelectHostElement) {
+      this.multiSelectHostElement.remove();
+      this.multiSelectHostElement = null;
+    }
+  }
+
+  /**
+   * Mounts the small persistent FAB button in the corner. Safe to call multiple
+   * times — the module is idempotent. Hydrates and persists position via
+   * chrome.storage.sync so the user's chosen spot sticks across reloads.
+   */
+  private showFloatingFab(): void {
+    // Fire-and-forget position read — worst case the FAB lands in its default
+    // bottom-right spot for a frame before we re-place it.
+    void browser.storage.sync
+      .get({ [StorageKeys.FOLDER_FLOATING_FAB_POS]: null })
+      .then((raw) => {
+        const candidate = raw[StorageKeys.FOLDER_FLOATING_FAB_POS] as unknown;
+        let storedPos: FloatingFabPos | null = null;
+        if (
+          candidate &&
+          typeof candidate === 'object' &&
+          typeof (candidate as FloatingFabPos).x === 'number' &&
+          typeof (candidate as FloatingFabPos).y === 'number'
+        ) {
+          storedPos = candidate as FloatingFabPos;
+        }
+        mountFloatingFab({
+          storedPos,
+          onClick: () => {
+            void this.openFloatingPanel();
+          },
+          onPosChange: (pos) => {
+            void browser.storage.sync
+              .set({ [StorageKeys.FOLDER_FLOATING_FAB_POS]: pos })
+              .catch((error) => {
+                if (!isExtensionContextInvalidatedError(error)) {
+                  this.debugWarn('Failed to persist floating FAB position:', error);
+                }
+              });
+          },
+        });
+      })
+      .catch((error) => {
+        if (isExtensionContextInvalidatedError(error)) return;
+        this.debugWarn('Failed to read floating FAB position:', error);
+        // Still mount at default position so feature degrades gracefully.
+        mountFloatingFab({
+          onClick: () => {
+            void this.openFloatingPanel();
+          },
+        });
+      });
+  }
+
+  private async openFloatingPanel(): Promise<void> {
+    if (this.isDestroyed || !this.folderEnabled) return;
+    if (this.floatingPanelHandle) return;
+    unmountFloatingModeNudge();
+    // Only one entry point visible at a time — FAB hides when the panel is up.
+    unmountFloatingFab();
+
+    let storedPos: FloatingPanelPos | null = null;
+    let storedSize: FloatingPanelSize | null = null;
+    try {
+      const raw = await browser.storage.sync.get({
+        [StorageKeys.FOLDER_FLOATING_POS]: null,
+        [StorageKeys.FOLDER_FLOATING_SIZE]: null,
+      });
+      const posCandidate = raw[StorageKeys.FOLDER_FLOATING_POS] as unknown;
+      if (
+        posCandidate &&
+        typeof posCandidate === 'object' &&
+        typeof (posCandidate as FloatingPanelPos).x === 'number' &&
+        typeof (posCandidate as FloatingPanelPos).y === 'number'
+      ) {
+        storedPos = posCandidate as FloatingPanelPos;
+      }
+      const sizeCandidate = raw[StorageKeys.FOLDER_FLOATING_SIZE] as unknown;
+      if (
+        sizeCandidate &&
+        typeof sizeCandidate === 'object' &&
+        typeof (sizeCandidate as FloatingPanelSize).w === 'number' &&
+        typeof (sizeCandidate as FloatingPanelSize).h === 'number'
+      ) {
+        storedSize = sizeCandidate as FloatingPanelSize;
+      }
+    } catch (error) {
+      if (isExtensionContextInvalidatedError(error)) return;
+      this.debugWarn('Failed to read floating-mode position/size:', error);
+    }
+
+    if (this.isDestroyed || !this.folderEnabled) return;
+
+    // All mutation callbacks share the same tail: persist to storage, which
+    // itself pushes a fresh snapshot into the floating panel (saveData's
+    // centralised `floatingPanelHandle?.update` hook). Calling update here
+    // too rendered the panel twice per mutation.
+    const afterMutation = (): void => {
+      void this.saveData();
+    };
+
+    this.floatingPanelHandle = mountFloatingPanel({
+      data: this.data,
+      conversationSortMode: this.conversationSortMode,
+      storedPos,
+      storedSize,
+      onPosChange: (pos) => {
+        void browser.storage.sync.set({ [StorageKeys.FOLDER_FLOATING_POS]: pos }).catch((error) => {
+          if (!isExtensionContextInvalidatedError(error)) {
+            this.debugWarn('Failed to persist floating-mode position:', error);
+          }
+        });
+      },
+      // Fires once, 300ms after the last resize observed by the panel, so
+      // storage.sync isn't spammed with every intermediate size during a drag.
+      onSizeChange: (size) => {
+        void browser.storage.sync
+          .set({ [StorageKeys.FOLDER_FLOATING_SIZE]: size })
+          .catch((error) => {
+            if (!isExtensionContextInvalidatedError(error)) {
+              this.debugWarn('Failed to persist floating-mode size:', error);
+            }
+          });
+      },
+      onClose: () => {
+        this.floatingPanelHandle = null;
+        // Panel is gone — bring the FAB back so the user can re-open later.
+        this.showFloatingFab();
+      },
+      onNavigate: (conv) => {
+        if (conv.url) {
+          this.navigateToConversation(conv.url, conv);
+        }
+      },
+      onCreateFolder: (name, parentId) => {
+        const maxSortIndex = this.data.folders
+          .filter((f) => f.parentId === parentId)
+          .reduce((max, f) => Math.max(max, f.sortIndex ?? -1), -1);
+        const folder: Folder = {
+          id: this.generateId(),
+          name,
+          parentId,
+          isExpanded: true,
+          sortIndex: maxSortIndex + 1,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+        this.data.folders.push(folder);
+        this.data.folderContents[folder.id] = [];
+        afterMutation();
+      },
+      onRenameFolder: (folderId, newName) => {
+        const folder = this.data.folders.find((f) => f.id === folderId);
+        if (!folder) return;
+        folder.name = newName;
+        folder.updatedAt = Date.now();
+        afterMutation();
+      },
+      onDeleteFolder: (folderId) => {
+        const foldersToDelete = this.getFolderAndDescendants(folderId);
+        this.data.folders = this.data.folders.filter((f) => !foldersToDelete.includes(f.id));
+        foldersToDelete.forEach((id) => {
+          delete this.data.folderContents[id];
+        });
+        afterMutation();
+      },
+      // These delegate to the shared data paths, which persist via saveData —
+      // and saveData's centralised hook already pushes the fresh snapshot into
+      // the floating panel, so no explicit update calls are needed here.
+      onRemoveConversation: (folderId, conversationId) => {
+        // Reuse the existing data-only removal path; it already calls saveData
+        // + refresh (sidebar refresh is a no-op when the sidebar isn't mounted).
+        this.removeConversationFromFolder(folderId, conversationId);
+      },
+      onToggleStar: (folderId, conversationId) => {
+        this.toggleConversationStar(folderId, conversationId);
+      },
+      onToggleFolderPinned: (folderId) => {
+        this.togglePinFolder(folderId);
+      },
+      // Intra-panel conversation move: user dragged a conversation row from
+      // folder A to folder B inside the floating panel. Cross-document drag
+      // (native Gemini row → panel) is intentionally NOT wired — that path
+      // proved unreliable; the user files new conversations via the native
+      // ⋮ → "Move to folder" menu instead.
+      onMoveConversation: (conversationId, fromFolderId, toFolderId) => {
+        const conv = this.data.folderContents[fromFolderId]?.find(
+          (c) => c.conversationId === conversationId,
+        );
+        if (!conv) return;
+        this.moveConversationToFolder(fromFolderId, toFolderId, conv);
+      },
+      onSetFolderColor: (folderId, color) => {
+        this.changeFolderColor(folderId, color);
+      },
+      // Cloud sync / upload — mirror what the sidebar's header buttons do.
+      // Only wire on non-Safari; the floating panel hides these buttons on
+      // Safari because our Drive OAuth2 flow is not supported there yet. The
+      // panel reads `isSafari()` itself, but we still guard here so callbacks
+      // stay undefined on Safari and nothing fires by accident.
+      //
+      // onCloudSync can mutate this.data (merges Drive payload locally); it
+      // persists via saveData, whose centralised hook pushes the merged
+      // snapshot into the floating panel. onCloudUpload is read-only locally.
+      ...(isSafari()
+        ? {}
+        : {
+            onCloudUpload: () => {
+              void this.handleCloudUpload();
+            },
+            onCloudSync: () => {
+              void this.handleCloudSync();
+            },
+            getCloudUploadTooltip: () => this.getCloudUploadTooltip(),
+            getCloudSyncTooltip: () => this.getCloudSyncTooltip(),
+          }),
+    });
+  }
+
+  /**
+   * Re-query the current Notebooks section element. Only the 2026 layout
+   * exposes this — older layouts return null and the caller falls back to the
+   * Recents anchor. Pure (no instance state touched).
+   */
+  private findNotebooksSectionCandidate(): HTMLElement | null {
+    if (!this.sidebarContainer) return null;
+    return this.findNotebooksSectionCandidateIn(this.sidebarContainer);
+  }
+
+  private findNotebooksSectionCandidateIn(sidebar: HTMLElement): HTMLElement | null {
+    const notebooks = sidebar.querySelector(
+      'expandable-section[data-test-id="notebooks-expandable-section"]',
+    );
+    return notebooks instanceof HTMLElement ? notebooks : null;
+  }
+
+  /**
+   * Resolve the section element the folder panel should anchor immediately
+   * above, honoring the user's `folderAnchor` preference. Falls back to the
+   * Recents section when 'above-notebooks' is requested but the Notebooks
+   * section isn't present (e.g. legacy layout, not signed in to Notebooks).
+   */
+  private findFolderAnchorCandidate(): HTMLElement | null {
+    if (!this.sidebarContainer) return null;
+    return this.findFolderAnchorCandidateIn(this.sidebarContainer);
+  }
+
+  private findFolderAnchorCandidateIn(sidebar: HTMLElement): HTMLElement | null {
+    if (this.folderAnchor === 'above-notebooks') {
+      const notebooks = this.findNotebooksSectionCandidateIn(sidebar);
+      if (notebooks) return notebooks;
+    }
+    return this.findRecentSectionCandidateIn(sidebar);
+  }
+
+  /**
+   * Pure re-query for the current Recents section element. Returns the
+   * `expandable-section[data-test-id="chats-expandable-section"]` wrapper when
+   * Gemini's new layout is in effect, or one of the legacy containers as a
+   * fallback. Does NOT touch instance state — callers decide whether to update
+   * `this.recentSection`. This is the single place the lookup logic lives so
+   * `findRecentSection` and `enforceFolderAboveRecents` can't drift apart.
+   */
+  private findRecentSectionCandidate(): HTMLElement | null {
+    if (!this.sidebarContainer) return null;
+    return this.findRecentSectionCandidateIn(this.sidebarContainer);
+  }
+
+  private findRecentSectionCandidateIn(sidebar: HTMLElement): HTMLElement | null {
+    const promoteToSection = (el: Element | null): Element | null =>
+      el ? (el.closest('expandable-section') ?? el) : null;
+
+    let conversationsList: Element | null = sidebar.querySelector(
+      'expandable-section[data-test-id="chats-expandable-section"]',
     );
 
     if (!conversationsList) {
-      // Fallback: find by class name
-      conversationsList = this.sidebarContainer.querySelector('.chat-history');
+      conversationsList = promoteToSection(
+        sidebar.querySelector('[data-test-id="all-conversations"]'),
+      );
     }
 
     if (!conversationsList) {
-      // Fallback: find the element that contains conversation items
-      const conversationItems = this.sidebarContainer.querySelectorAll(
-        '[data-test-id="conversation"]',
-      );
+      conversationsList = promoteToSection(sidebar.querySelector('.chat-history'));
+    }
+
+    if (!conversationsList) {
+      const conversationItems = sidebar.querySelectorAll('[data-test-id="conversation"]');
       if (conversationItems.length > 0) {
-        // Find the parent that contains these conversations
-        conversationsList = conversationItems[0].closest('.chat-history, [class*="conversation"]');
+        conversationsList =
+          conversationItems[0].closest('expandable-section') ??
+          conversationItems[0].closest('.chat-history, [class*="conversation"]');
       }
     }
 
-    if (conversationsList) {
-      this.recentSection = conversationsList as HTMLElement;
-    } else {
-      this.debugWarn('Could not find Recent section - will retry');
-      // Retry after a delay
-      setTimeout(() => {
-        this.findRecentSection();
-        if (this.recentSection && !this.containerElement) {
-          this.createFolderUI();
-          this.makeConversationsDraggable();
-          this.setupMutationObserver();
-        }
-      }, 2000);
+    return conversationsList instanceof HTMLElement ? conversationsList : null;
+  }
+
+  private findCurrentSidebarContainer(): HTMLElement | null {
+    const candidates = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-test-id="overflow-container"]'),
+    );
+    if (candidates.length === 0) return null;
+
+    const visible = candidates.find((candidate) => {
+      const rect = candidate.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    });
+
+    return visible ?? candidates[0];
+  }
+
+  private isSidebarFolderMountedInCurrentSidebar(
+    currentSidebar: HTMLElement | null = this.findCurrentSidebarContainer(),
+  ): boolean {
+    if (!this.containerElement || !document.body.contains(this.containerElement)) return false;
+    if (!currentSidebar || !document.body.contains(currentSidebar)) return false;
+    if (!currentSidebar.contains(this.containerElement)) return false;
+    return !!this.findFolderAnchorCandidateIn(currentSidebar);
+  }
+
+  private findRecentSection(): boolean {
+    if (!this.sidebarContainer) return false;
+
+    // Honor folderAnchor on first injection so the panel lands in the right
+    // slot without needing a follow-up enforcer pass. Falls through to the
+    // Recents candidate when the requested anchor isn't present.
+    const candidate = this.findFolderAnchorCandidate();
+    if (candidate) {
+      this.recentSection = candidate;
+      return true;
+    }
+
+    this.recentSection = null;
+    this.debugWarn('Could not find Recent section - waiting for recovery tick');
+    return false;
+  }
+
+  /**
+   * Ensure the folder container is positioned immediately before whichever
+   * section element matches the current `folderAnchor` preference. Gemini
+   * periodically replaces section elements wholesale during the 2026 redesign,
+   * which would leave our folder container stranded below the new anchor.
+   * This is the recovery hook.
+   *
+   * Returns `true` when a move occurred. No-ops (and returns `false`) once the
+   * container is already correctly placed, so it's safe to call from
+   * MutationObserver callbacks without creating an infinite reorder loop.
+   *
+   * Kept under the old name (`...AboveRecents`) because Recents is the default
+   * anchor; semantically it now means "above the current anchor section".
+   */
+  private enforceFolderAboveRecents(): boolean {
+    if (this.isDestroyed) return false;
+    if (!this.folderEnabled || this.floatingModeActive) return false;
+    if (!this.containerElement || !document.body.contains(this.containerElement)) {
+      return false;
+    }
+
+    const anchorSection = this.findFolderAnchorCandidate();
+    if (!anchorSection || !anchorSection.parentElement) return false;
+
+    // Refresh stale reference whenever Gemini replaced the section element.
+    if (this.recentSection !== anchorSection) {
+      this.recentSection = anchorSection;
+    }
+
+    // Piggyback on every enforcer tick to re-attach the Notebooks corner
+    // toggle if Gemini swapped the Notebooks section element. Cheap no-op
+    // when it's already correctly mounted.
+    this.ensureNotebooksAnchorButton();
+
+    const parent = anchorSection.parentElement;
+    const inRightParent = this.containerElement.parentElement === parent;
+    const immediatelyBefore = this.containerElement.nextElementSibling === anchorSection;
+
+    if (inRightParent && immediatelyBefore) return false;
+
+    this.debug('Re-anchoring folder container above', this.folderAnchor);
+    parent.insertBefore(this.containerElement, anchorSection);
+    return true;
+  }
+
+  private scheduleEnforceFolderAboveRecents(): void {
+    if (this.positionEnforceRafId !== null) return;
+    this.positionEnforceRafId = window.requestAnimationFrame(() => {
+      this.positionEnforceRafId = null;
+      this.enforceFolderAboveRecents();
+    });
+  }
+
+  private getPositionObserverTarget(): HTMLElement | null {
+    const anchorSection = this.findFolderAnchorCandidate();
+    if (anchorSection?.parentElement instanceof HTMLElement) {
+      return anchorSection.parentElement;
+    }
+    return this.sidebarContainer;
+  }
+
+  /**
+   * Watch the section list for anchor swaps and re-enforce position on the next
+   * animation frame. Keep this scoped to the anchor's direct parent: Gemini can
+   * add hundreds of nested nodes while expanding Recents, and those should not
+   * wake the position enforcer.
+   */
+  private setupPositionEnforcer(): void {
+    if (!this.sidebarContainer) return;
+    if (this.positionObserver) {
+      this.positionObserver.disconnect();
+      this.positionObserver = null;
+    }
+    const observeTarget = this.getPositionObserverTarget();
+    if (!observeTarget) return;
+
+    this.positionObserver = new MutationObserver(() => {
+      this.scheduleEnforceFolderAboveRecents();
+    });
+    this.positionObserver.observe(observeTarget, {
+      childList: true,
+    });
+  }
+
+  private teardownPositionEnforcer(): void {
+    if (this.positionObserver) {
+      this.positionObserver.disconnect();
+      this.positionObserver = null;
+    }
+    if (this.positionEnforceRafId !== null) {
+      window.cancelAnimationFrame(this.positionEnforceRafId);
+      this.positionEnforceRafId = null;
     }
   }
 
   private createFolderUI(): void {
     if (!this.recentSection) return;
+
+    // Idempotency guard. Gemini can clone the sidebar subtree during
+    // virtualization, leaving behind a folder container that this manager did
+    // not create (and therefore does not track via `containerElement`). Remove
+    // both the tracked container and any untracked direct sibling before
+    // mounting the current panel.
+    if (this.containerElement) {
+      this.containerElement.remove();
+      this.containerElement = null;
+    }
+    const sectionParent = this.recentSection.parentElement;
+    if (sectionParent) {
+      Array.from(sectionParent.children).forEach((child) => {
+        if (
+          child instanceof HTMLElement &&
+          child.classList.contains('gv-folder-container') &&
+          !child.classList.contains('gv-aistudio') &&
+          !child.classList.contains('gv-multi-select-floating-host')
+        ) {
+          child.remove();
+        }
+      });
+    }
 
     // Create folder container
     this.containerElement = document.createElement('div');
@@ -543,9 +1612,15 @@ export class FolderManager {
     const header = this.createHeader();
     this.containerElement.appendChild(header);
 
+    if (this.folderSearchEnabled) {
+      const search = this.createFolderSearch();
+      this.containerElement.appendChild(search);
+    }
+
     // Create folders list
     const foldersList = this.createFoldersList();
     this.containerElement.appendChild(foldersList);
+    this.applyFoldersCollapsedState();
 
     // Insert before Recent section
     this.recentSection.parentElement?.insertBefore(this.containerElement, this.recentSection);
@@ -557,6 +1632,15 @@ export class FolderManager {
 
     // Apply initial folder enabled setting
     this.applyFolderEnabledSetting();
+
+    // Wire up the position enforcer so future Gemini re-renders that swap the
+    // Recents section element can't strand our folder container below it.
+    this.setupPositionEnforcer();
+
+    // Paint the Notebooks corner swap toggle in its initial state (mounts on
+    // the current Notebooks section, syncs tooltip + active class). The
+    // enforcer keeps it up to date when Gemini re-renders that section.
+    this.ensureNotebooksAnchorButton();
   }
 
   private createMultiSelectIndicator(): HTMLElement {
@@ -594,24 +1678,10 @@ export class FolderManager {
     let xOffset = 0;
     let yOffset = 0;
 
-    const dragStart = (e: MouseEvent) => {
-      // Ignore if clicking buttons inside the indicator
-      if ((e.target as HTMLElement).closest('button')) return;
-
-      initialX = e.clientX - xOffset;
-      initialY = e.clientY - yOffset;
-
-      if (e.target === indicator || indicator.contains(e.target as Node)) {
-        isDragging = true;
-        indicator.style.cursor = 'grabbing';
-      }
-    };
-
-    const dragEnd = () => {
-      isDragging = false;
-      indicator.style.cursor = 'move';
-    };
-
+    // Document-level mousemove/mouseup are attached only while a drag is in
+    // progress (mousedown → mouseup). Attaching them permanently leaked one
+    // listener pair per floating-mode/sidebar-mode switch, because that switch
+    // path rebuilds the indicator without running the cleanup task list.
     const drag = (e: MouseEvent) => {
       if (isDragging) {
         e.preventDefault();
@@ -625,17 +1695,37 @@ export class FolderManager {
       }
     };
 
+    const dragEnd = () => {
+      isDragging = false;
+      indicator.style.cursor = 'move';
+      document.removeEventListener('mousemove', drag);
+      document.removeEventListener('mouseup', dragEnd);
+    };
+
+    const dragStart = (e: MouseEvent) => {
+      // Ignore if clicking buttons inside the indicator
+      if ((e.target as HTMLElement).closest('button')) return;
+
+      initialX = e.clientX - xOffset;
+      initialY = e.clientY - yOffset;
+
+      if (e.target === indicator || indicator.contains(e.target as Node)) {
+        isDragging = true;
+        indicator.style.cursor = 'grabbing';
+        document.addEventListener('mousemove', drag);
+        document.addEventListener('mouseup', dragEnd);
+      }
+    };
+
     const setTranslate = (xPos: number, yPos: number, el: HTMLElement) => {
       el.style.transform = `translate3d(calc(-50% + ${xPos}px), ${yPos}px, 0)`;
     };
 
     indicator.addEventListener('mousedown', dragStart);
-    document.addEventListener('mousemove', drag);
-    document.addEventListener('mouseup', dragEnd);
 
-    // Cleanup listeners when destroyed (adding to a cleanup list if possible, or attaching to element)
-    // Since we attach to document, we MUST clean this up in destroy()
-    // We'll wrap these in a cleanup function and store it
+    // Belt-and-suspenders: if the indicator is torn down mid-drag, make sure
+    // the document-level listeners can't outlive it. removeEventListener is
+    // idempotent, so this is safe even when no drag is active.
     this.addCleanupTask(() => {
       indicator.removeEventListener('mousedown', dragStart);
       document.removeEventListener('mousemove', drag);
@@ -674,6 +1764,31 @@ export class FolderManager {
     return indicator;
   }
 
+  private getMultiSelectHost(): HTMLElement | null {
+    if (this.containerElement?.isConnected) {
+      return this.containerElement;
+    }
+
+    if (!this.multiSelectHostElement?.isConnected) {
+      const host = document.createElement('div');
+      host.className = 'gv-folder-container gv-multi-select-floating-host';
+      host.dataset.multiSelectFloatingHost = 'true';
+      host.appendChild(this.createMultiSelectIndicator());
+      document.body.appendChild(host);
+      this.multiSelectHostElement = host;
+    }
+
+    return this.multiSelectHostElement;
+  }
+
+  private getExistingMultiSelectHost(): HTMLElement | null {
+    if (this.containerElement?.isConnected) {
+      return this.containerElement;
+    }
+
+    return this.multiSelectHostElement?.isConnected ? this.multiSelectHostElement : null;
+  }
+
   private createHeader(): HTMLElement {
     const header = document.createElement('div');
     header.className = 'gv-folder-header';
@@ -687,6 +1802,17 @@ export class FolderManager {
     title.textContent = this.t('folder_title');
     title.style.visibility = 'visible';
 
+    const collapseButton = document.createElement('button');
+    collapseButton.className = 'gv-folder-section-toggle';
+    collapseButton.type = 'button';
+    collapseButton.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      void this.toggleFoldersCollapsed();
+    });
+    collapseButton.innerHTML = '<span class="google-symbols" aria-hidden="true"></span>';
+
+    titleContainer.appendChild(collapseButton);
     titleContainer.appendChild(title);
 
     // Actions container for buttons
@@ -714,34 +1840,23 @@ export class FolderManager {
     actionsContainer.appendChild(filterUserButton);
     actionsContainer.appendChild(importExportButton);
 
-    // Cloud buttons (Skip on Safari as it doesn't support cloud sync yet)
+    // Cloud popover (single button → menu with Upload + Sync). Skipped on Safari.
     if (!isSafari()) {
-      // Cloud upload button
-      const cloudUploadButton = document.createElement('button');
-      cloudUploadButton.className = 'gv-folder-action-btn';
-      cloudUploadButton.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" height="20px" viewBox="0 -960 960 960" width="20px" fill="currentColor"><path d="M260-160q-91 0-155.5-63T40-377q0-78 47-139t123-78q25-92 100-149t170-57q117 0 198.5 81.5T760-520q69 8 114.5 59.5T920-340q0 75-52.5 127.5T740-160H520q-33 0-56.5-23.5T440-240v-206l-64 62-56-56 160-160 160 160-56 56-64-62v206h220q42 0 71-29t29-71q0-42-29-71t-71-29h-60v-80q0-83-58.5-141.5T480-720q-83 0-141.5 58.5T280-520h-20q-58 0-99 41t-41 99q0 58 41 99t99 41h100v80H260Zm220-280Z"/></svg>`;
-      cloudUploadButton.title = this.t('folder_cloud_upload');
-      cloudUploadButton.addEventListener('click', () => this.handleCloudUpload());
-      // Add dynamic tooltip on mouseenter
-      cloudUploadButton.addEventListener('mouseenter', async () => {
-        const tooltip = await this.getCloudUploadTooltip();
-        cloudUploadButton.title = tooltip;
-      });
-      actionsContainer.appendChild(cloudUploadButton);
-
-      // Cloud sync button
-      const cloudSyncButton = document.createElement('button');
-      cloudSyncButton.className = 'gv-folder-action-btn';
-      cloudSyncButton.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" height="20px" viewBox="0 -960 960 960" width="20px" fill="currentColor"><path d="M260-160q-91 0-155.5-63T40-377q0-78 47-139t123-78q17-72 85-137t145-65q33 0 56.5 23.5T520-716v242l64-62 56 56-160 160-160-160 56-56 64 62v-242q-76 14-118 73.5T280-520h-20q-58 0-99 41t-41 99q0 58 41 99t99 41h480q42 0 71-29t29-71q0-42-29-71t-71-29h-60v-80q0-48-22-89.5T600-680v-93q74 35 117 103.5T760-520q69 8 114.5 59.5T920-340q0 75-52.5 127.5T740-160H260Zm220-358Z"/></svg>`;
-      cloudSyncButton.title = this.t('folder_cloud_sync');
-      cloudSyncButton.addEventListener('click', () => this.handleCloudSync());
-      // Add dynamic tooltip on mouseenter
-      cloudSyncButton.addEventListener('mouseenter', async () => {
-        const tooltip = await this.getCloudSyncTooltip();
-        cloudSyncButton.title = tooltip;
-      });
-      actionsContainer.appendChild(cloudSyncButton);
+      const cloudButton = document.createElement('button');
+      cloudButton.className = 'gv-folder-action-btn';
+      cloudButton.innerHTML = `<mat-icon role="img" class="mat-icon notranslate google-symbols mat-ligature-font mat-icon-no-color" aria-hidden="true">cloud</mat-icon>`;
+      cloudButton.title = this.t('folder_cloud');
+      cloudButton.addEventListener('click', (e) => this.showCloudMenu(e));
+      actionsContainer.appendChild(cloudButton);
     }
+
+    // Folder settings (conversation order, font size, spacing, and indentation).
+    const settingsButton = document.createElement('button');
+    settingsButton.className = 'gv-folder-action-btn gv-folder-settings-btn';
+    settingsButton.innerHTML = `<mat-icon role="img" class="mat-icon notranslate google-symbols mat-ligature-font mat-icon-no-color" aria-hidden="true">settings</mat-icon>`;
+    settingsButton.title = this.t('folder_settings');
+    settingsButton.addEventListener('click', (e) => this.showFolderSettingsMenu(e));
+    actionsContainer.appendChild(settingsButton);
 
     // Add folder button
     const addButton = document.createElement('button');
@@ -761,22 +1876,114 @@ export class FolderManager {
     return header;
   }
 
+  private createFolderSearch(): HTMLElement {
+    const searchContainer = document.createElement('div');
+    searchContainer.className = 'gv-folder-search';
+
+    const input = document.createElement('input');
+    input.className = 'gv-folder-search-input';
+    input.type = 'search';
+    input.value = this.folderSearchQuery;
+
+    const modeBadge = document.createElement('span');
+    modeBadge.className = 'gv-folder-search-mode-badge';
+    modeBadge.setAttribute('aria-hidden', 'true');
+
+    input.addEventListener('input', () => {
+      this.folderSearchQuery = input.value;
+      this.updateFolderSearchInputState(searchContainer, input, modeBadge);
+      if (this.isFolderOnlySearchActive()) {
+        this.markFolderOnlySearchHintSeen(input);
+      }
+      // Debounce the full tree rebuild — rebuilding on every keystroke made
+      // fast typing feel laggy on large trees. The query itself is applied
+      // immediately so a pending refresh from any source uses the latest text.
+      this.clearFolderSearchDebounceTimer();
+      this.folderSearchDebounceTimer = window.setTimeout(() => {
+        this.folderSearchDebounceTimer = null;
+        this.refresh();
+      }, FOLDER_SEARCH_DEBOUNCE_MS);
+    });
+
+    searchContainer.append(input, modeBadge);
+    this.updateFolderSearchInputState(searchContainer, input, modeBadge);
+    return searchContainer;
+  }
+
+  private updateFolderSearchInputState(
+    searchContainer: HTMLElement,
+    input: HTMLInputElement,
+    modeBadge: HTMLElement,
+  ): void {
+    const folderOnlyMode = this.isFolderOnlySearchActive();
+    const baseLabel = this.t('folder_search_placeholder');
+    const modeLabel = this.t('folder_search_mode_folder');
+
+    searchContainer.classList.toggle('gv-folder-search-folder-mode', folderOnlyMode);
+    modeBadge.hidden = !folderOnlyMode;
+    modeBadge.textContent = modeLabel;
+    input.placeholder = this.folderOnlySearchHintSeen
+      ? baseLabel
+      : `${baseLabel} · f: ${modeLabel}`;
+    input.setAttribute('aria-label', folderOnlyMode ? `${baseLabel}: ${modeLabel}` : baseLabel);
+  }
+
+  private markFolderOnlySearchHintSeen(input: HTMLInputElement): void {
+    if (this.folderOnlySearchHintSeen) return;
+
+    this.folderOnlySearchHintSeen = true;
+    input.placeholder = this.t('folder_search_placeholder');
+    void markCoachmarkSeen(FOLDER_ONLY_SEARCH_HINT_ID);
+  }
+
+  private clearFolderSearchDebounceTimer(): void {
+    if (this.folderSearchDebounceTimer === null) return;
+    window.clearTimeout(this.folderSearchDebounceTimer);
+    this.folderSearchDebounceTimer = null;
+  }
+
   private createFoldersList(): HTMLElement {
     const list = document.createElement('div');
     list.className = 'gv-folder-list';
+    const isSearchActive = this.isFolderSearchActive();
+
+    // Native-title sync used to scan the whole sidebar once PER stored
+    // conversation (O(M×N) per render). Build one lookup table per render
+    // pass instead; `createConversationElement` consults it while this field
+    // is non-null. Search-triggered renders (and hide-archived mode, where the
+    // per-conversation guard skips syncing anyway) use an empty table so they
+    // skip the sidebar scan entirely.
+    this.nativeTitleLookup =
+      !this.hideArchivedConversations && !isSearchActive
+        ? this.buildNativeConversationTitleMap()
+        : new Map();
+    try {
+      return this.populateFoldersList(list, isSearchActive);
+    } finally {
+      this.nativeTitleLookup = null;
+    }
+  }
+
+  private populateFoldersList(list: HTMLElement, isSearchActive: boolean): HTMLElement {
+    let renderedItems = 0;
 
     // Setup root-level drop zone for dragging folders and conversations to root
     this.setupRootDropZone(list);
 
     // Render root-level conversations (favorites/pinned conversations)
     const rootConversations = this.data.folderContents[ROOT_CONVERSATIONS_ID] || [];
-    const filteredRootConversations = this.filterConversationsByCurrentUser(rootConversations);
+    const filteredRootConversations = this.filterVisibleConversations(rootConversations);
     if (filteredRootConversations.length > 0) {
       const sortedRootConversations = this.sortConversations(filteredRootConversations);
-      sortedRootConversations.forEach((conv, i) => {
+      const groupIndices = { starred: 0, normal: 0 };
+      sortedRootConversations.forEach((conv) => {
         const convEl = this.createConversationElement(conv, ROOT_CONVERSATIONS_ID, 0);
-        this.setupConversationReorderZone(convEl, ROOT_CONVERSATIONS_ID, i);
+        if (!isSearchActive && this.conversationSortMode === 'manual') {
+          const group = conv.starred ? 'starred' : 'normal';
+          this.setupConversationReorderZone(convEl, ROOT_CONVERSATIONS_ID, groupIndices[group]++);
+        }
         list.appendChild(convEl);
+        renderedItems++;
       });
     }
 
@@ -784,29 +1991,49 @@ export class FolderManager {
     const rootFolders = this.data.folders.filter((f) => f.parentId === null);
     const sortedRootFolders = this.sortFolders(rootFolders);
     let rootFolderIndex = 0;
-    list.appendChild(this.createReorderGap('__root__', 'folder', 0));
+    if (!isSearchActive) {
+      list.appendChild(this.createReorderGap('__root__', 'folder', 0));
+    }
     sortedRootFolders.forEach((folder) => {
       // Filter out empty folders if "Show current user only" is enabled
-      if (!this.hasVisibleContent(folder.id)) return;
+      if (
+        isSearchActive
+          ? !this.matchesFolderSearchTree(folder.id)
+          : !this.hasVisibleContent(folder.id)
+      ) {
+        return;
+      }
 
       const folderElement = this.createFolderElement(folder);
       list.appendChild(folderElement);
+      renderedItems++;
       rootFolderIndex++;
-      list.appendChild(this.createReorderGap('__root__', 'folder', rootFolderIndex));
+      if (!isSearchActive) {
+        list.appendChild(this.createReorderGap('__root__', 'folder', rootFolderIndex));
+      }
     });
 
     // If no folders and no root conversations, show empty state placeholder
-    if (rootFolders.length === 0 && rootConversations.length === 0) {
+    if (renderedItems === 0) {
       const emptyState = document.createElement('div');
       emptyState.className = 'gv-folder-empty';
-      emptyState.textContent = this.t('folder_empty');
+      emptyState.textContent = this.t(isSearchActive ? 'folder_search_empty' : 'folder_empty');
       list.appendChild(emptyState);
     }
 
     return list;
   }
 
-  private createFolderElement(folder: Folder, level = 0): HTMLElement {
+  private createFolderElement(
+    folder: Folder,
+    level = 0,
+    includeEntireSubtree = false,
+  ): HTMLElement {
+    const isSearchActive = this.isFolderSearchActive();
+    const includeFolderSubtree =
+      includeEntireSubtree ||
+      (this.isFolderOnlySearchActive() && this.matchesFolderSearchText(folder.name));
+    const isExpanded = folder.isExpanded || isSearchActive;
     const folderEl = document.createElement('div');
     folderEl.className = 'gv-folder-item';
     folderEl.dataset.folderId = folder.id;
@@ -820,7 +2047,7 @@ export class FolderManager {
     // Expand/collapse button
     const expandBtn = document.createElement('button');
     expandBtn.className = 'gv-folder-expand-btn';
-    expandBtn.innerHTML = folder.isExpanded
+    expandBtn.innerHTML = isExpanded
       ? '<span class="google-symbols">expand_more</span>'
       : '<span class="google-symbols">chevron_right</span>';
     expandBtn.addEventListener('click', () => this.toggleFolder(folder.id));
@@ -894,7 +2121,7 @@ export class FolderManager {
     this.applyFolderDraggableBehavior(folderHeader, folder);
 
     // Folder content (conversations and subfolders)
-    if (folder.isExpanded) {
+    if (isExpanded) {
       const content = document.createElement('div');
       content.className = 'gv-folder-content';
       // Fix: Allow dropping into the content area of the folder (not just the header)
@@ -902,11 +2129,18 @@ export class FolderManager {
 
       // Render conversations in this folder (sorted: starred first)
       const conversations = this.data.folderContents[folder.id] || [];
-      const filteredConversations = this.filterConversationsByCurrentUser(conversations);
+      const filteredConversations = this.filterVisibleConversations(
+        conversations,
+        includeFolderSubtree,
+      );
       const sortedConversations = this.sortConversations(filteredConversations);
-      sortedConversations.forEach((conv, i) => {
+      const groupIndices = { starred: 0, normal: 0 };
+      sortedConversations.forEach((conv) => {
         const convEl = this.createConversationElement(conv, folder.id, level + 1);
-        this.setupConversationReorderZone(convEl, folder.id, i);
+        if (!isSearchActive && this.conversationSortMode === 'manual') {
+          const group = conv.starred ? 'starred' : 'normal';
+          this.setupConversationReorderZone(convEl, folder.id, groupIndices[group]++);
+        }
         content.appendChild(convEl);
       });
 
@@ -914,17 +2148,23 @@ export class FolderManager {
       const subfolders = this.data.folders.filter((f) => f.parentId === folder.id);
       const sortedSubfolders = this.sortFolders(subfolders);
       let subfolderIndex = 0;
-      if (sortedSubfolders.length > 0) {
+      const visibleSubfolders = sortedSubfolders.filter((subfolder) =>
+        isSearchActive
+          ? includeFolderSubtree
+            ? this.hasVisibleContent(subfolder.id)
+            : this.matchesFolderSearchTree(subfolder.id)
+          : this.hasVisibleContent(subfolder.id),
+      );
+      if (!isSearchActive && visibleSubfolders.length > 0) {
         content.appendChild(this.createReorderGap(folder.id, 'folder', 0));
       }
-      sortedSubfolders.forEach((subfolder) => {
-        // Filter out empty folders if "Show current user only" is enabled
-        if (!this.hasVisibleContent(subfolder.id)) return;
-
-        const subfolderEl = this.createFolderElement(subfolder, level + 1);
+      visibleSubfolders.forEach((subfolder) => {
+        const subfolderEl = this.createFolderElement(subfolder, level + 1, includeFolderSubtree);
         content.appendChild(subfolderEl);
         subfolderIndex++;
-        content.appendChild(this.createReorderGap(folder.id, 'folder', subfolderIndex));
+        if (!isSearchActive) {
+          content.appendChild(this.createReorderGap(folder.id, 'folder', subfolderIndex));
+        }
       });
 
       folderEl.appendChild(content);
@@ -976,7 +2216,11 @@ export class FolderManager {
     // Decide what title to display, respecting manual renames and hidden native list
     let displayTitle = conv.title;
     if (!conv.customTitle && !this.hideArchivedConversations) {
-      const syncedTitle = this.syncConversationTitleFromNative(conv.conversationId);
+      // Render passes populate `nativeTitleLookup` once up front (see
+      // createFoldersList); outside a render pass fall back to the direct scan.
+      const syncedTitle = this.nativeTitleLookup
+        ? this.lookupNativeConversationTitle(conv.conversationId)
+        : this.syncConversationTitleFromNative(conv.conversationId);
       if (syncedTitle && syncedTitle !== conv.title) {
         conv.title = syncedTitle;
         displayTitle = syncedTitle;
@@ -1013,6 +2257,10 @@ export class FolderManager {
       };
       e.dataTransfer!.effectAllowed = 'move';
       e.dataTransfer!.setData('application/json', JSON.stringify(dragData));
+      this.setLightweightDragImage(
+        e,
+        selectedConvs.length > 1 ? `${selectedConvs.length} conversations` : displayTitle,
+      );
 
       // Apply opacity to all selected conversations
       this.selectedConversations.forEach((id) => {
@@ -1037,7 +2285,16 @@ export class FolderManager {
         this.clearSelection();
         this.cleanupSelectionArtifacts();
       }
+      this.clearConversationReorderIndicator();
     });
+
+    const link = document.createElement('a');
+    link.className = 'gv-folder-conversation-link';
+    link.href = this.getFolderConversationHref(conv);
+    link.draggable = false;
+    try {
+      (link.style as CSSStyleDeclaration & { webkitUserDrag?: string }).webkitUserDrag = 'none';
+    } catch {}
 
     // Conversation icon - use Gem-specific icons
     const icon = document.createElement('mat-icon');
@@ -1121,10 +2378,13 @@ export class FolderManager {
       }
     });
 
-    // Click to navigate or toggle selection based on mode
-    convEl.addEventListener('click', (e) => {
+    // Plain left clicks keep the existing SPA navigation path. Modified clicks,
+    // middle clicks, and context-menu actions stay native because the row
+    // contains a real anchor.
+    link.addEventListener('click', (e) => {
       // Prevent navigation if long-press was triggered
       if (longPressTriggered) {
+        e.preventDefault();
         longPressTriggered = false;
         return;
       }
@@ -1148,6 +2408,13 @@ export class FolderManager {
         this.toggleConversationSelection(conv.conversationId);
         this.updateConversationSelectionUI();
       } else {
+        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
+          return;
+        }
+
+        e.preventDefault();
+        e.stopPropagation();
+
         // Normal mode: navigate to conversation
         this.navigateToConversationById(folderId, conv.conversationId);
       }
@@ -1155,15 +2422,43 @@ export class FolderManager {
 
     // Double-click to rename
     title.addEventListener('dblclick', (e) => {
+      e.preventDefault();
       e.stopPropagation();
-      this.renameConversation(folderId, conv.conversationId, title);
+      void this.openNativeRenameForFolderConversation(conv);
     });
 
-    convEl.appendChild(icon);
-    convEl.appendChild(title);
+    convEl.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.showFolderConversationMenu(e, conv);
+    });
+
+    link.appendChild(icon);
+    link.appendChild(title);
+    convEl.appendChild(link);
     convEl.appendChild(actionsContainer);
 
     return convEl;
+  }
+
+  private getFolderConversationHref(conversation: ConversationReference): string {
+    const normalizedId = this.normalizeConversationId(conversation.conversationId);
+
+    try {
+      const storedUrl = new URL(conversation.url, window.location.origin);
+
+      if (this.accountIsolationEnabled && normalizedId) {
+        const currentUserMatch = window.location.pathname.match(/\/u\/(\d+)\//);
+        const accountPrefix = currentUserMatch ? `/u/${currentUserMatch[1]}` : '';
+        return `${storedUrl.origin}${accountPrefix}/app/${normalizedId}${storedUrl.search}`;
+      }
+
+      return storedUrl.toString();
+    } catch (error) {
+      this.debug('Failed to build folder conversation href:', error);
+    }
+
+    return normalizedId ? this.buildConversationUrlFromId(normalizedId) : window.location.href;
   }
 
   private setupDropZone(element: HTMLElement, folderId: string): void {
@@ -1195,6 +2490,16 @@ export class FolderManager {
 
       try {
         const dragData: DragData = JSON.parse(data);
+
+        if (
+          this.conversationSortMode === 'recent' &&
+          dragData.type !== 'folder' &&
+          dragData.sourceFolderId === folderId
+        ) {
+          this.showNotification(this.t('folder_sort_recent_drag_hint'), 'info');
+          this.exitMultiSelectMode();
+          return;
+        }
 
         // Pre-cleanup: Restore opacity immediately before processing drop
         // This prevents visual artifacts if dragend doesn't fire properly
@@ -1266,6 +2571,16 @@ export class FolderManager {
       try {
         const dragData: DragData = JSON.parse(data);
 
+        if (
+          this.conversationSortMode === 'recent' &&
+          dragData.type !== 'folder' &&
+          dragData.sourceFolderId === ROOT_CONVERSATIONS_ID
+        ) {
+          this.showNotification(this.t('folder_sort_recent_drag_hint'), 'info');
+          this.exitMultiSelectMode();
+          return;
+        }
+
         // Pre-cleanup: Restore opacity immediately before processing drop
         // This prevents visual artifacts if dragend doesn't fire properly
         this.selectedConversations.forEach((id) => {
@@ -1304,23 +2619,23 @@ export class FolderManager {
     });
   }
 
+  private getNativeConversationRoot(): ParentNode {
+    return this.sidebarContainer?.isConnected ? this.sidebarContainer : document;
+  }
+
+  private getNativeConversationElements(): NodeListOf<Element> {
+    return this.getNativeConversationRoot().querySelectorAll('[data-test-id="conversation"]');
+  }
+
   private makeConversationsDraggable(): void {
-    if (!this.sidebarContainer) return;
-
-    const conversations = this.sidebarContainer.querySelectorAll('[data-test-id="conversation"]');
+    // Full sweeps (init, reinit, recovery) go through the same budgeted
+    // drain as observer bursts so a large Recents list never blocks one
+    // frame for the whole sweep (issue #753).
+    const conversations = this.getNativeConversationElements();
     conversations.forEach((conv) => {
-      this.makeConversationDraggable(conv as HTMLElement);
-
-      // Apply hide archived setting
-      const convId = this.extractConversationId(conv as HTMLElement);
-      const isArchived = this.isConversationInFolders(convId);
-
-      if (this.hideArchivedConversations && isArchived) {
-        (conv as HTMLElement).classList.add('gv-conversation-archived');
-      } else {
-        (conv as HTMLElement).classList.remove('gv-conversation-archived');
-      }
+      this.enhancementQueue.add(conv as HTMLElement);
     });
+    this.scheduleEnhancementDrain();
   }
 
   /**
@@ -1449,6 +2764,13 @@ export class FolderManager {
   }
 
   private makeConversationDraggable(element: HTMLElement): void {
+    // Idempotency guard — the method can legitimately be called more than once
+    // per element (e.g. sidebar success path + document sweep on fallback,
+    // MutationObserver re-entry, route change re-scans). Without this guard
+    // we'd stack duplicate mousedown / dragstart listeners on every call.
+    if (element.dataset.gvConvDragAttached === 'true') return;
+    element.dataset.gvConvDragAttached = 'true';
+
     element.draggable = true;
     element.style.cursor = 'grab';
 
@@ -1493,6 +2815,27 @@ export class FolderManager {
     element.addEventListener(
       'click',
       (e) => {
+        // Never swallow clicks on the trailing ⋮ menu button — those need to
+        // open the per-row actions menu (rename / delete / move / etc.).
+        // Without this guard, our capture-phase stopPropagation below silently
+        // kills the menu trigger during programmatic batch-delete (the
+        // moreButton.click() never reaches Material's menu, so the menu never
+        // opens and waitForDeleteButtonAndClick times out at 3s every row).
+        if (
+          e.target instanceof Element &&
+          e.target.closest(
+            '[data-test-id="actions-menu-button"], [data-test-id="conversation-actions-menu-icon-button"]',
+          )
+        ) {
+          return;
+        }
+
+        // Programmatic batch delete drives Gemini's own menu via .click() — let
+        // every click through unimpeded for the duration of the batch.
+        if (this.batchDeleteInProgress) {
+          return;
+        }
+
         // Prevent navigation if long-press was triggered
         if (longPressTriggered) {
           e.preventDefault();
@@ -1523,8 +2866,8 @@ export class FolderManager {
     ); // Use capture phase to intercept before navigation
 
     element.addEventListener('dragstart', (e) => {
-      const title = element.querySelector('.conversation-title')?.textContent?.trim() || 'Untitled';
       const conversationId = this.extractConversationId(element);
+      const title = this.extractNativeDragTitle(element, conversationId);
 
       // Extract URL and conversation metadata together
       const conversationData = this.extractConversationData(element);
@@ -1554,8 +2897,7 @@ export class FolderManager {
         this.selectedConversations.forEach((id) => {
           const convEl = this.findConversationElement(id);
           if (convEl) {
-            const convTitle =
-              convEl.querySelector('.conversation-title')?.textContent?.trim() || 'Untitled';
+            const convTitle = this.extractNativeDragTitle(convEl, id);
             const convData = this.extractConversationData(convEl);
 
             selectedConvs.push({
@@ -1576,6 +2918,7 @@ export class FolderManager {
         };
 
         e.dataTransfer?.setData('application/json', JSON.stringify(dragData));
+        this.setLightweightDragImage(e, `${selectedConvs.length} conversations`);
 
         // Apply opacity to all selected conversations
         this.selectedConversations.forEach((id) => {
@@ -1601,6 +2944,7 @@ export class FolderManager {
         };
 
         e.dataTransfer?.setData('application/json', JSON.stringify(dragData));
+        this.setLightweightDragImage(e, title);
         element.style.opacity = '0.5';
       }
     });
@@ -1621,6 +2965,7 @@ export class FolderManager {
         this.clearSelection();
         this.cleanupSelectionArtifacts();
       }
+      this.clearConversationReorderIndicator();
     });
   }
 
@@ -1633,17 +2978,23 @@ export class FolderManager {
     if (folderConv) return folderConv;
 
     // Check in native conversations (Recent section)
-    const nativeConvs = this.sidebarContainer?.querySelectorAll('[data-test-id="conversation"]');
-    if (nativeConvs) {
-      for (const conv of Array.from(nativeConvs)) {
-        const id = this.extractConversationId(conv as HTMLElement);
-        if (id === conversationId) {
-          return conv as HTMLElement;
-        }
+    const nativeConvs = this.getNativeConversationElements();
+    for (const conv of Array.from(nativeConvs)) {
+      const id = this.extractConversationId(conv as HTMLElement);
+      if (id === conversationId) {
+        return conv as HTMLElement;
       }
     }
 
     return null;
+  }
+
+  private extractNativeDragTitle(element: HTMLElement, conversationId?: string): string {
+    const title =
+      this.extractNativeConversationTitle(element) ||
+      (conversationId ? this.syncConversationTitleFromNative(conversationId) : null);
+
+    return title || 'Untitled';
   }
 
   private extractConversationId(element: HTMLElement): string {
@@ -1688,7 +3039,7 @@ export class FolderManager {
 
     // Fallback: generate unique ID from element attributes
     // Use multiple attributes to ensure uniqueness
-    const title = element.querySelector('.conversation-title')?.textContent?.trim() || '';
+    const title = this.extractNativeConversationTitle(element) || '';
     const index = Array.from(element.parentElement?.children || []).indexOf(element);
 
     // Generate unique ID combining title, index, random, and timestamp
@@ -1820,101 +3171,205 @@ export class FolderManager {
     }
 
     this.conversationObserver = new MutationObserver((mutations) => {
-      // 1. Handle added conversations (always safe)
-      mutations.forEach((mutation) => {
-        mutation.addedNodes.forEach((node) => {
-          if (node instanceof HTMLElement) {
-            // Check if the node itself is a conversation
-            if (node.matches('[data-test-id="conversation"]')) {
-              this.makeConversationDraggable(node);
-              this.applyHideArchivedToConversation(node);
-              // Cancel pending removal for this conversation (it's back!)
-              this.cancelPendingRemovalForElement(node);
-            }
-            // Also check for conversations within the node
-            const conversations = node.querySelectorAll('[data-test-id="conversation"]');
-            conversations.forEach((conv) => {
-              const convElement = conv as HTMLElement;
-              this.makeConversationDraggable(convElement);
-              // Apply hide archived setting to newly added conversations
-              this.applyHideArchivedToConversation(convElement);
-              // Cancel pending removal for this conversation (it's back!)
-              this.cancelPendingRemovalForElement(convElement);
-            });
-          }
-        });
-      });
-
-      // 2. Handle removed conversations with safeguards
-      // CRITICAL FIX: Prevent data loss when network disconnects or UI refreshes
-
-      // Check 1: If offline, assume removals are due to network error
-      if (!navigator.onLine) {
-        this.debug('Network offline, ignoring conversation removals to prevent data loss');
-        return;
-      }
-
-      // Check 2: Calculate total conversations being removed in this batch
-      let totalRemovedCount = 0;
-      const nodesWithRemovals: HTMLElement[] = [];
-
-      mutations.forEach((mutation) => {
-        mutation.removedNodes.forEach((node) => {
-          if (node instanceof HTMLElement) {
-            const isConv = node.matches('[data-test-id="conversation"]');
-            // Check if it contains conversations (e.g. a container was removed)
-            const containedConvsCount = node.querySelectorAll(
-              '[data-test-id="conversation"]',
-            ).length;
-
-            if (isConv) {
-              totalRemovedCount++;
-              nodesWithRemovals.push(node);
-            } else if (containedConvsCount > 0) {
-              totalRemovedCount += containedConvsCount;
-              nodesWithRemovals.push(node);
-            }
-          }
-        });
-      });
-
-      // If no conversations were removed, we're done
-      if (totalRemovedCount === 0) return;
-
-      // Check 3: If multiple conversations are removed at once, it's likely a UI refresh/clear
-      // Users typically delete conversations one by one.
-      // EXCEPTION: If we are in multi-select mode, the user might be performing a bulk delete.
-      if (totalRemovedCount > 1 && !this.isMultiSelectMode) {
-        this.debugWarn(
-          `Ignored bulk removal of ${totalRemovedCount} conversations - likely UI refresh`,
-        );
-        return;
-      }
-
-      // NEW: Instead of immediately removing, schedule a delayed check
-      // This prevents false positives when Gemini temporarily removes/re-adds DOM elements during UI updates
-      nodesWithRemovals.forEach((node) => {
-        const conversations = node.matches('[data-test-id="conversation"]')
-          ? [node]
-          : Array.from(node.querySelectorAll('[data-test-id="conversation"]'));
-
-        conversations.forEach((conv) => {
-          // Extract conversation ID from the removed element
-          const conversationId = this.extractConversationIdFromElement(conv);
-
-          if (conversationId) {
-            this.debug('Detected potential conversation removal:', conversationId);
-            // Schedule delayed removal check
-            this.scheduleConversationRemovalCheck(conversationId);
-          }
-        });
-      });
+      // Coalesce mutations to the next animation frame instead of processing
+      // them synchronously. Synchronous processing caused sidebar-click
+      // jank — see issue #678. Flush is implemented in `flushMutationBatch`.
+      for (const mutation of mutations) this.mutationBatchQueue.push(mutation);
+      this.scheduleMutationBatchFlush();
     });
 
     this.conversationObserver.observe(this.sidebarContainer, {
       childList: true,
       subtree: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ['aria-label', 'href', 'title'],
     });
+  }
+
+  private scheduleMutationBatchFlush(): void {
+    if (this.mutationFlushScheduled) return;
+    this.mutationFlushScheduled = true;
+    this.mutationFlushRafId = window.requestAnimationFrame(() => {
+      this.mutationFlushRafId = null;
+      this.mutationFlushScheduled = false;
+      if (this.isDestroyed) {
+        this.mutationBatchQueue.length = 0;
+        return;
+      }
+      this.flushMutationBatch();
+    });
+  }
+
+  private cancelMutationBatchFlush(): void {
+    if (this.mutationFlushRafId !== null) {
+      window.cancelAnimationFrame(this.mutationFlushRafId);
+      this.mutationFlushRafId = null;
+    }
+    this.mutationFlushScheduled = false;
+  }
+
+  private scheduleEnhancementDrain(): void {
+    if (this.enhancementQueue.size === 0) return;
+    if (this.enhancementDrainIdleId !== null) return;
+
+    const drain = (deadline?: IdleDeadline) => {
+      this.enhancementDrainIdleId = null;
+      if (this.isDestroyed) {
+        this.enhancementQueue.clear();
+        return;
+      }
+      this.drainEnhancementQueue(deadline);
+    };
+
+    if (typeof window.requestIdleCallback === 'function') {
+      this.enhancementDrainIdleId = window.requestIdleCallback(drain, {
+        timeout: ENHANCEMENT_IDLE_TIMEOUT_MS,
+      });
+    } else {
+      this.enhancementDrainIdleId = window.setTimeout(() => drain(), 0);
+    }
+  }
+
+  private cancelEnhancementDrain(): void {
+    if (this.enhancementDrainIdleId !== null) {
+      if (typeof window.cancelIdleCallback === 'function') {
+        window.cancelIdleCallback(this.enhancementDrainIdleId);
+      } else {
+        window.clearTimeout(this.enhancementDrainIdleId);
+      }
+      this.enhancementDrainIdleId = null;
+    }
+    this.enhancementQueue.clear();
+  }
+
+  // Exposed via the private surface so tests can drive draining
+  // deterministically without depending on idle-callback timing in jsdom.
+  private drainEnhancementQueue(deadline?: IdleDeadline): void {
+    const fallbackDeadline = performance.now() + ENHANCEMENT_IDLE_BUDGET_MS;
+    let processed = 0;
+
+    for (const convEl of this.enhancementQueue) {
+      this.enhancementQueue.delete(convEl);
+      if (!convEl.isConnected) continue; // removed while queued
+      this.makeConversationDraggable(convEl);
+      this.applyHideArchivedToConversation(convEl);
+      processed += 1;
+
+      const outOfIdleTime =
+        deadline && !deadline.didTimeout
+          ? deadline.timeRemaining() <= 0
+          : performance.now() >= fallbackDeadline;
+      if (processed > 0 && outOfIdleTime) break;
+    }
+    this.scheduleEnhancementDrain();
+  }
+
+  // Exposed via the private surface so tests can drive flushing
+  // deterministically without depending on animation-frame timing in jsdom.
+  private flushMutationBatch(): void {
+    if (this.mutationBatchQueue.length === 0) return;
+    const mutations = this.mutationBatchQueue;
+    this.mutationBatchQueue = [];
+
+    // Title-sync detection: short-circuits, debounced downstream.
+    if (this.mutationsMayAffectNativeConversationTitles(mutations)) {
+      this.scheduleNativeConversationTitleSync();
+    }
+
+    // Dedupe added conversation elements. Multiple mutations in a single
+    // tick frequently touch the same row; the per-element work
+    // (makeConversationDraggable, applyHideArchivedToConversation) is
+    // idempotent but the upfront DOM queries are not free.
+    const addedConversations = new Set<HTMLElement>();
+    for (const mutation of mutations) {
+      mutation.addedNodes.forEach((node) => {
+        if (!(node instanceof HTMLElement)) return;
+        if (node.matches('[data-test-id="conversation"]')) {
+          addedConversations.add(node);
+        }
+        const nested = node.querySelectorAll('[data-test-id="conversation"]');
+        nested.forEach((conv) => addedConversations.add(conv as HTMLElement));
+      });
+    }
+
+    addedConversations.forEach((convEl) => {
+      if (!convEl.isConnected) return; // re-removed within the same batch
+      // Drag listeners + hide-archived state are deferred to the budgeted
+      // drain — both are idempotent and tolerate a few frames of latency
+      // (issue #753).
+      this.enhancementQueue.add(convEl);
+    });
+    this.scheduleEnhancementDrain();
+
+    // Deliberately ignore removed conversation rows. Gemini virtualizes the
+    // sidebar, so scrolling or re-rendering can detach one real conversation
+    // row at a time. A detached DOM node is therefore not deletion evidence.
+    // Native deletion is tracked from the explicit Delete action in
+    // `setupConversationClickTracking` and confirmed after the UI settles.
+  }
+
+  private mutationsMayAffectNativeConversationTitles(mutations: MutationRecord[]): boolean {
+    for (const mutation of mutations) {
+      if (mutation.type === 'characterData') {
+        if (mutation.target.parentElement?.closest('[data-test-id="conversation"]')) return true;
+        continue;
+      }
+
+      if (mutation.type === 'attributes') {
+        if (
+          mutation.target instanceof Element &&
+          mutation.target.closest('[data-test-id="conversation"]')
+        ) {
+          return true;
+        }
+        continue;
+      }
+
+      if (mutation.type !== 'childList') continue;
+
+      if (
+        mutation.target instanceof Element &&
+        mutation.target.closest('[data-test-id="conversation"]')
+      ) {
+        return true;
+      }
+
+      for (const node of Array.from(mutation.addedNodes)) {
+        if (this.nodeTouchesNativeConversation(node)) return true;
+      }
+    }
+
+    return false;
+  }
+
+  private nodeTouchesNativeConversation(node: Node): boolean {
+    if (!(node instanceof Element)) return false;
+    if (node.matches('[data-test-id="conversation"]')) return true;
+    if (node.closest('[data-test-id="conversation"]')) return true;
+    return !!node.querySelector('[data-test-id="conversation"]');
+  }
+
+  private clearNativeTitleSyncTimer(): void {
+    if (this.nativeTitleSyncTimer === null) return;
+    clearTimeout(this.nativeTitleSyncTimer);
+    this.nativeTitleSyncTimer = null;
+  }
+
+  private scheduleNativeConversationTitleSync(): void {
+    if (!this.hasStoredConversations()) return;
+    if (this.nativeTitleSyncTimer !== null) return;
+
+    this.nativeTitleSyncTimer = window.setTimeout(() => {
+      this.nativeTitleSyncTimer = null;
+      void this.syncConversationTitlesFromNative();
+    }, NATIVE_TITLE_SYNC_DEBOUNCE_MS);
+  }
+
+  private hasStoredConversations(): boolean {
+    return Object.values(this.data.folderContents).some(
+      (conversations) => conversations.length > 0,
+    );
   }
 
   /**
@@ -1922,9 +3377,11 @@ export class FolderManager {
    * Hides folder container when sidebar is collapsed for better UX
    */
   private setupSideNavObserver(): void {
-    const appRoot = document.querySelector('#app-root');
-    if (!appRoot) {
-      this.debugWarn('Could not find #app-root element for sidebar monitoring');
+    // lr26 moved the `side-nav-open` class from #app-root to the <chat-app>
+    // shell; observe whichever currently carries it (legacy fallback included).
+    const sideNavHost = document.querySelector('chat-app') ?? document.querySelector('#app-root');
+    if (!sideNavHost) {
+      this.debugWarn('Could not find sidebar host element for monitoring');
       return;
     }
 
@@ -1936,7 +3393,7 @@ export class FolderManager {
       });
     });
 
-    this.sideNavObserver.observe(appRoot, {
+    this.sideNavObserver.observe(sideNavHost, {
       attributes: true,
       attributeFilter: ['class'],
     });
@@ -1945,42 +3402,68 @@ export class FolderManager {
   }
 
   /**
-   * Check if sidebar is open and update folder container visibility
-   * Sidebar is considered open when #app-root has 'side-nav-open' class
+   * Whether Gemini's sidebar is currently open.
+   *
+   * The `side-nav-open` class used to live on `#app-root`, but the lr26 UI
+   * refresh moved it to the `<chat-app>` shell (`#app-root` became a class-less
+   * `<chat-app-orchestrator>`, so the old check was always false and the folder
+   * container got hidden even with the sidebar open). Match either element, then
+   * fall back to the rendered width of the sidenav so a future class rename
+   * still degrades sanely.
+   */
+  private isSideNavOpen(): boolean {
+    if (document.querySelector('chat-app.side-nav-open, #app-root.side-nav-open')) return true;
+    const sideNav = document.querySelector('bard-sidenav, side-nav');
+    return sideNav instanceof HTMLElement && sideNav.offsetWidth > 120;
+  }
+
+  /**
+   * Whether the sidebar folder is not just attached but actually *usable*.
+   *
+   * "Mounted in the DOM" is not the same as "the user can see/use it": a Gemini
+   * DOM change can leave the container attached yet invisible (e.g. a stale
+   * display:none from a mis-fired open/closed detection). This predicate is the
+   * basis of the visibility-aware safety net — it returns false ONLY for a
+   * genuine fault, excluding the legitimate hidden states:
+   *   - sidebar collapsed → folder is meant to be hidden;
+   *   - user collapsed the Folders section via the section-hider (peek bar).
+   */
+  private isSidebarFolderUsable(): boolean {
+    const container = this.containerElement;
+    if (!container || !container.isConnected) return false;
+    // Sidebar closed → the folder is supposed to be hidden. Not a fault.
+    if (!this.isSideNavOpen()) return true;
+    // Collapsed by the user via the section-hider (a peek bar stands in). Fine.
+    if (container.classList.contains('gv-sidebar-section-hidden')) return true;
+    // Sidebar open and not user-collapsed: the container must render a real box.
+    return container.offsetParent !== null && container.getBoundingClientRect().height > 0;
+  }
+
+  /**
+   * Check if sidebar is open and update folder container visibility.
    */
   private updateVisibilityBasedOnSideNav(): void {
-    const appRoot = document.querySelector('#app-root');
-    if (!appRoot) return;
+    const isSideNavOpen = this.isSideNavOpen();
 
-    const isSideNavOpen = appRoot.classList.contains('side-nav-open');
-
-    // Check if containerElement exists AND is still in the DOM
-    // During screen resize (e.g., split-screen to fullscreen), Gemini may re-render the sidebar DOM,
-    // causing containerElement to become detached from the DOM tree
-    if (!this.containerElement || !document.body.contains(this.containerElement)) {
+    // During resize Gemini can keep the old sidebar attached while mounting a
+    // new visible sidebar. Treat the folder as healthy only when it lives under
+    // the current sidebar and that sidebar still exposes an anchor section.
+    if (!this.isSidebarFolderMountedInCurrentSidebar()) {
       if (isSideNavOpen) {
-        this.debug('Container element not in DOM, reinitializing folder UI');
-        // Reinitialize the entire folder UI asynchronously
-        // This ensures sidebarContainer and recentSection are also re-found
+        this.debug('Folder UI is not mounted in the current sidebar, reinitializing');
         this.reinitializeFolderUI();
       }
       return;
     }
 
-    // Also check if sidebarContainer is still valid
-    if (!this.sidebarContainer || !document.body.contains(this.sidebarContainer)) {
-      if (isSideNavOpen) {
-        this.debug('Sidebar container not in DOM, reinitializing folder UI');
-        this.reinitializeFolderUI();
-      }
-      return;
-    }
+    const containerElement = this.containerElement;
+    if (!containerElement) return;
 
     if (isSideNavOpen) {
-      this.containerElement.style.display = '';
+      containerElement.style.display = '';
       this.debug('Sidebar open - showing folder container');
     } else {
-      this.containerElement.style.display = 'none';
+      containerElement.style.display = 'none';
       this.debug('Sidebar closed - hiding folder container');
     }
   }
@@ -1999,8 +3482,7 @@ export class FolderManager {
       this.debug('Reinitializing folder UI...');
 
       // Execute general cleanup tasks first (including event listeners)
-      this.cleanupTasks.forEach((task) => task());
-      this.cleanupTasks = [];
+      this.runCleanupTasks();
 
       // Clean up observers/listeners tied to stale DOM nodes
       if (this.sideNavObserver) {
@@ -2017,6 +3499,10 @@ export class FolderManager {
         this.nativeMenuObserver.disconnect();
         this.nativeMenuObserver = null;
       }
+      this.teardownMoveMenuTriggerListener();
+
+      this.teardownPositionEnforcer();
+      this.cleanupNotebooksAnchorButton();
 
       if (this.routeChangeCleanup) {
         try {
@@ -2046,6 +3532,7 @@ export class FolderManager {
 
       this.closeActiveImportExportMenu();
       this.closeActiveImportDialog();
+      this.closeFolderConversationMenus();
       this.clearActiveFolderInput();
 
       // Clear existing references so initialization starts from a clean slate
@@ -2064,6 +3551,16 @@ export class FolderManager {
   }
 
   private createFolder(parentId: string | null = null): void {
+    // Depth cap: subfolder creation stops once the parent is already as deep
+    // as MAX_FOLDER_DEPTH allows. The sidebar context menu hides the affordance
+    // at this depth, but guard here too so any other caller (imports, cross-
+    // module wiring, drag shortcuts) can't silently exceed the cap. Root
+    // creation (parentId === null) is always allowed.
+    if (parentId !== null && this.getFolderDepth(parentId) >= MAX_FOLDER_DEPTH) {
+      this.debugWarn('createFolder refused: parent is already at MAX_FOLDER_DEPTH', parentId);
+      return;
+    }
+
     if (this.activeFolderInput && !this.activeFolderInput.isConnected) {
       this.clearActiveFolderInput();
     }
@@ -2263,7 +3760,7 @@ export class FolderManager {
     // Create buttons safely
     const yesBtn = document.createElement('button');
     yesBtn.className = 'gv-folder-confirm-btn gv-folder-confirm-yes';
-    yesBtn.textContent = this.t('pm_delete'); // Safe: uses textContent
+    yesBtn.textContent = this.t('folder_remove_conversation_action'); // Safe: uses textContent
 
     const noBtn = document.createElement('button');
     noBtn.className = 'gv-folder-confirm-btn gv-folder-confirm-no';
@@ -2345,7 +3842,9 @@ export class FolderManager {
 
     folder.isExpanded = !folder.isExpanded;
     folder.updatedAt = Date.now();
-    this.saveData();
+    // Pure UI state — debounce the full persistence pipeline instead of
+    // running stringify/verify/mirror/backup on every expand/collapse click.
+    this.scheduleSaveData();
     this.refresh();
   }
 
@@ -2382,7 +3881,7 @@ export class FolderManager {
   }
 
   private sortConversations(conversations: ConversationReference[]): ConversationReference[] {
-    return sortConversationsByPriority(conversations);
+    return sortConversationsByPriority(conversations, this.conversationSortMode);
   }
 
   /**
@@ -2454,81 +3953,79 @@ export class FolderManager {
     return true;
   }
 
-  /**
-   * Add reorder capability to a conversation element using top/bottom half detection.
-   * When dragging over the top half, an indicator line appears above; bottom half → below.
-   */
+  /** Add manual reorder capability to a conversation row. */
   private setupConversationReorderZone(
     convEl: HTMLElement,
     folderId: string,
-    sortedIndex: number,
+    groupIndex: number,
   ): void {
-    convEl.addEventListener('dragover', (e) => {
-      const data = e.dataTransfer?.types.includes('application/json');
-      if (!data) return;
+    convEl.addEventListener('dragover', (event) => {
+      if (this.conversationSortMode !== 'manual') return;
+      if (!event.dataTransfer?.types.includes('application/json')) return;
 
-      e.preventDefault();
-      e.stopPropagation();
-      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-
-      const rect = convEl.getBoundingClientRect();
-      const midY = rect.top + rect.height / 2;
-      const isTopHalf = e.clientY < midY;
-
-      convEl.classList.remove('gv-reorder-above', 'gv-reorder-below');
-      convEl.classList.add(isTopHalf ? 'gv-reorder-above' : 'gv-reorder-below');
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = 'move';
+      this.scheduleConversationReorderIndicator(
+        convEl,
+        this.getConversationReorderPlacement(convEl, event.clientY),
+      );
     });
 
-    convEl.addEventListener('dragleave', (e) => {
-      // Only remove if truly leaving the element (not entering a child)
-      const related = e.relatedTarget as Node | null;
+    convEl.addEventListener('dragleave', (event) => {
+      const related = event.relatedTarget as Node | null;
       if (!related || !convEl.contains(related)) {
-        convEl.classList.remove('gv-reorder-above', 'gv-reorder-below');
+        this.clearConversationReorderIndicator(convEl);
       }
     });
 
-    convEl.addEventListener('drop', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
+    convEl.addEventListener('drop', (event) => {
+      if (this.conversationSortMode !== 'manual') return;
 
-      const isAbove = convEl.classList.contains('gv-reorder-above');
-      convEl.classList.remove('gv-reorder-above', 'gv-reorder-below');
+      event.preventDefault();
+      event.stopPropagation();
 
-      const rawData = e.dataTransfer?.getData('application/json');
+      const placement = this.getConversationReorderDropPlacement(
+        convEl,
+        this.getConversationReorderPlacement(convEl, event.clientY),
+      );
+      this.clearConversationReorderIndicator();
+
+      const rawData = event.dataTransfer?.getData('application/json');
       if (!rawData) return;
 
       try {
         const dragData: DragData = JSON.parse(rawData);
         if (dragData.type !== 'conversation') return;
 
-        // Restore opacity
         this.selectedConversations.forEach((id) => {
-          const el = this.findConversationElement(id);
-          if (el) el.style.opacity = '1';
+          const element = this.findConversationElement(id);
+          if (element) element.style.opacity = '1';
         });
 
-        const insertIndex = isAbove ? sortedIndex : sortedIndex + 1;
-        const convs = dragData.conversations ?? [];
-        const singleId = dragData.conversationId;
+        const insertIndex = placement === 'above' ? groupIndex : groupIndex + 1;
+        const conversations = dragData.conversations ?? [];
         const sourceFolderId = dragData.sourceFolderId;
 
-        // If conversation(s) are from outside any folder (native sidebar drag),
-        // add them to the folder data first so reorderOrMoveConversations can find them
         if (!sourceFolderId) {
           this.ensureConversationsInFolder(folderId, dragData);
         }
 
         const effectiveSource = sourceFolderId ?? folderId;
-
-        if (convs.length > 0) {
+        if (conversations.length > 0) {
           this.reorderOrMoveConversations(
-            convs.map((c) => c.conversationId),
+            conversations.map((conversation) => conversation.conversationId),
             effectiveSource,
             folderId,
             insertIndex,
           );
-        } else if (singleId) {
-          this.reorderOrMoveConversations([singleId], effectiveSource, folderId, insertIndex);
+        } else if (dragData.conversationId) {
+          this.reorderOrMoveConversations(
+            [dragData.conversationId],
+            effectiveSource,
+            folderId,
+            insertIndex,
+          );
         }
 
         this.exitMultiSelectMode();
@@ -2536,6 +4033,101 @@ export class FolderManager {
         console.error('[FolderManager] Conversation reorder drop error:', error);
       }
     });
+  }
+
+  private getConversationReorderPlacement(
+    convEl: HTMLElement,
+    clientY: number,
+  ): ConversationReorderPlacement {
+    const rect = convEl.getBoundingClientRect();
+    return clientY < rect.top + rect.height / 2 ? 'above' : 'below';
+  }
+
+  private getConversationReorderDropPlacement(
+    convEl: HTMLElement,
+    fallback: ConversationReorderPlacement,
+  ): ConversationReorderPlacement {
+    if (this.pendingConversationReorderTarget?.element === convEl) {
+      return this.pendingConversationReorderTarget.placement;
+    }
+    if (this.activeConversationReorderTarget?.element === convEl) {
+      return this.activeConversationReorderTarget.placement;
+    }
+    return fallback;
+  }
+
+  private scheduleConversationReorderIndicator(
+    element: HTMLElement,
+    placement: ConversationReorderPlacement,
+  ): void {
+    this.pendingConversationReorderTarget = { element, placement };
+    if (this.conversationReorderRafId !== null) return;
+
+    this.conversationReorderRafId = window.requestAnimationFrame(() => {
+      this.conversationReorderRafId = null;
+      const target = this.pendingConversationReorderTarget;
+      this.pendingConversationReorderTarget = null;
+      if (target) this.applyConversationReorderIndicator(target);
+    });
+  }
+
+  private applyConversationReorderIndicator(target: ConversationReorderTarget): void {
+    if (!target.element.isConnected) {
+      this.clearConversationReorderIndicator(target.element);
+      return;
+    }
+
+    const active = this.activeConversationReorderTarget;
+    if (active && (active.element !== target.element || active.placement !== target.placement)) {
+      active.element.classList.remove('gv-reorder-above', 'gv-reorder-below');
+    }
+
+    target.element.classList.toggle('gv-reorder-above', target.placement === 'above');
+    target.element.classList.toggle('gv-reorder-below', target.placement === 'below');
+    this.activeConversationReorderTarget = target;
+  }
+
+  private clearConversationReorderIndicator(element?: HTMLElement): void {
+    if (!element) {
+      if (this.conversationReorderRafId !== null) {
+        window.cancelAnimationFrame(this.conversationReorderRafId);
+        this.conversationReorderRafId = null;
+      }
+      this.pendingConversationReorderTarget = null;
+    } else if (this.pendingConversationReorderTarget?.element === element) {
+      this.pendingConversationReorderTarget = null;
+      if (this.conversationReorderRafId !== null) {
+        window.cancelAnimationFrame(this.conversationReorderRafId);
+        this.conversationReorderRafId = null;
+      }
+    }
+
+    if (!element || this.activeConversationReorderTarget?.element === element) {
+      this.activeConversationReorderTarget?.element.classList.remove(
+        'gv-reorder-above',
+        'gv-reorder-below',
+      );
+      this.activeConversationReorderTarget = null;
+    }
+  }
+
+  private setLightweightDragImage(event: DragEvent, label: string): void {
+    const transfer = event.dataTransfer;
+    if (!transfer || typeof transfer.setDragImage !== 'function') return;
+
+    const dragImage = document.createElement('div');
+    dragImage.className = 'gv-folder-drag-image';
+    dragImage.textContent = label;
+    document.body.appendChild(dragImage);
+
+    try {
+      transfer.setDragImage(dragImage, 12, 12);
+    } catch {
+      dragImage.remove();
+      return;
+    }
+
+    window.setTimeout(() => dragImage.remove(), 0);
   }
 
   /**
@@ -2673,7 +4265,7 @@ export class FolderManager {
 
       this.data.folderContents[folderId].push({
         conversationId: item.id,
-        title: item.title,
+        title: this.resolveDraggedConversationTitleForStorage(item.id, item.title),
         url: item.url ?? '',
         addedAt: Date.now(),
         isGem: item.isGem,
@@ -2681,6 +4273,13 @@ export class FolderManager {
         sortIndex: ++maxSortIndex,
       });
     }
+  }
+
+  private resolveDraggedConversationTitleForStorage(conversationId: string, title: string): string {
+    const normalizedTitle = title.trim();
+    if (normalizedTitle && normalizedTitle !== 'Untitled') return normalizedTitle;
+
+    return this.syncConversationTitleFromNative(conversationId) || normalizedTitle || 'Untitled';
   }
 
   /**
@@ -2808,9 +4407,10 @@ export class FolderManager {
       (max, c) => Math.max(max, c.sortIndex ?? -1),
       -1,
     );
+    const conversationId = dragData.conversationId!;
     const conv: ConversationReference = {
-      conversationId: dragData.conversationId!,
-      title: dragData.title,
+      conversationId,
+      title: this.resolveDraggedConversationTitleForStorage(conversationId, dragData.title),
       url: dragData.url!,
       addedAt: Date.now(),
       isGem: dragData.isGem,
@@ -2826,12 +4426,14 @@ export class FolderManager {
       this.debug('Moving from folder:', dragData.sourceFolderId);
       this.removeConversationFromFolder(dragData.sourceFolderId, dragData.conversationId!);
       // Note: removeConversationFromFolder calls saveData() and refresh(), so we don't need to call them again
+      // Folder→folder move is not a "first archive"; skip the nudge.
       return;
     }
 
     // Save immediately before refresh to persist data
     this.saveData();
     this.refresh();
+    this.maybeShowHideArchivedNudge();
   }
 
   // Batch add conversations to folder (for multi-select support)
@@ -2868,6 +4470,9 @@ export class FolderManager {
         // Create a copy with updated timestamp
         const newConv: ConversationReference = {
           ...conv,
+          title: sourceFolderId
+            ? conv.title
+            : this.resolveDraggedConversationTitleForStorage(conv.conversationId, conv.title),
           addedAt: Date.now(),
           sortIndex: maxSortIndex,
         };
@@ -2900,6 +4505,12 @@ export class FolderManager {
     // Save immediately before refresh to persist data
     this.saveData();
     this.refresh();
+    // Trigger nudge only if at least one conversation was actually added from
+    // outside. If the whole batch came from another folder (sourceFolderId set),
+    // it's a folder→folder move and not a "first archive" event.
+    if (addedCount > 0 && !sourceFolderId) {
+      this.maybeShowHideArchivedNudge();
+    }
   }
 
   private addFolderToFolder(targetFolderId: string, dragData: DragData): void {
@@ -2946,6 +4557,22 @@ export class FolderManager {
       currentId = folder?.parentId || null;
     }
     return false;
+  }
+
+  /**
+   * Distance from a folder to the root — 0 for a top-level folder, 1 for a
+   * subfolder, etc. Returns 0 for unknown ids so callers can treat "not found"
+   * the same as "at root" for gating purposes (they'll also fail their own
+   * existence check before mutating).
+   */
+  private getFolderDepth(folderId: string): number {
+    let depth = 0;
+    let current = this.data.folders.find((f) => f.id === folderId);
+    while (current?.parentId) {
+      depth += 1;
+      current = this.data.folders.find((f) => f.id === current?.parentId);
+    }
+    return depth;
   }
 
   private toggleConversationStar(folderId: string, conversationId: string): void {
@@ -3162,39 +4789,39 @@ export class FolderManager {
    */
   private async triggerNativeDeleteForConversation(conversationId: string): Promise<boolean> {
     try {
-      // Step 1: Find the conversation element in the sidebar
+      // Step 1: Find the conversation element in the sidebar.
+      // The lr26 sidebar virtualizes rows — if the user has scrolled the list
+      // since selecting, the target row may be unmounted entirely.
       const conversationEl = this.findNativeConversationElement(conversationId);
       if (!conversationEl) {
-        this.debugWarn(`Could not find conversation element for: ${conversationId}`);
+        console.warn(
+          `[FolderManager] Batch delete: conversation row not in DOM (likely virtualized out): ${conversationId}. ` +
+            'Scroll the sidebar to bring it back into view, or split the batch into smaller chunks.',
+        );
         return false;
       }
 
-      // Step 2: Find and click the more options button
       const moreButton = await this.findAndClickMoreButton(conversationEl);
       if (!moreButton) {
-        this.debugWarn(`Could not find more button for: ${conversationId}`);
+        console.warn(
+          `[FolderManager] Batch delete: actions menu button not found for ${conversationId}`,
+        );
         return false;
       }
 
-      // Wait for menu to appear
       await this.delay(this.BATCH_DELETE_CONFIG.MENU_APPEAR_DELAY);
 
-      // Step 3: Find and click the delete button in the menu
       const deleteSuccess = await this.waitForDeleteButtonAndClick();
       if (!deleteSuccess) {
-        this.debugWarn(`Could not click delete button for: ${conversationId}`);
-        // Try to close the menu by clicking the backdrop
+        console.warn(
+          `[FolderManager] Batch delete: Delete menu item not found after ${this.BATCH_DELETE_CONFIG.MAX_BUTTON_WAIT_TIME}ms for ${conversationId}`,
+        );
         this.clickBackdropToCloseMenu();
         return false;
       }
 
-      // Wait for confirmation dialog (if any)
       await this.delay(this.BATCH_DELETE_CONFIG.DIALOG_APPEAR_DELAY);
-
-      // Step 4: Confirm deletion if confirmation dialog appears
       await this.confirmDeleteIfNeeded();
-
-      // Wait for deletion to complete
       await this.delay(this.BATCH_DELETE_CONFIG.DELETION_COMPLETE_DELAY);
 
       return true;
@@ -3208,15 +4835,17 @@ export class FolderManager {
    * Find native conversation element by conversation ID
    */
   private findNativeConversationElement(conversationId: string): HTMLElement | null {
+    const targetId = this.normalizeConversationId(conversationId);
+    if (!targetId) return null;
+
     // Try multiple strategies to find the conversation
-    const allConversations = this.sidebarContainer?.querySelectorAll(
-      '[data-test-id="conversation"]',
-    );
-    if (!allConversations) return null;
+    const allConversations = this.getNativeConversationElements();
 
     for (const conv of allConversations) {
-      const id = this.extractConversationId(conv as HTMLElement);
-      if (id === conversationId) {
+      const id =
+        this.extractConversationIdFromElement(conv) ||
+        this.extractConversationId(conv as HTMLElement);
+      if (this.normalizeConversationId(id) === targetId) {
         return conv as HTMLElement;
       }
     }
@@ -3225,36 +4854,60 @@ export class FolderManager {
   }
 
   /**
-   * Find and click the more options button for a conversation
+   * Find and click the more options button for a conversation.
+   *
+   * In Gemini's current sidebar layout the actions-menu-button is rendered
+   * INSIDE the conversation host (<gem-nav-list-item data-test-id="conversation">),
+   * so we look there first. The legacy sibling-container and ancestor-<li>
+   * strategies are kept as fallbacks for older layouts but are no-ops in the
+   * lr26 sidebar.
+   *
+   * The host is also virtualized — a row scrolled far off-screen may exist
+   * only as an empty stub or be missing entirely. Scroll the host into view
+   * before clicking so the trailing actions actually mount.
    */
   private async findAndClickMoreButton(conversationEl: HTMLElement): Promise<HTMLElement | null> {
-    // The more button might be in the actions container which is a sibling
-    let moreButton: HTMLElement | null = null;
-
-    // Strategy 1: Look for actions container as a sibling
-    const parent = conversationEl.parentElement;
-    if (parent) {
-      const actionsContainer = parent.querySelector('.conversation-actions-container');
-      if (actionsContainer) {
-        moreButton = actionsContainer.querySelector(
-          '[data-test-id="actions-menu-button"]',
-        ) as HTMLElement;
-      }
-    }
-
-    // Strategy 2: Look within the conversation element
-    if (!moreButton) {
-      moreButton = conversationEl.querySelector(
+    const locate = (): HTMLElement | null => {
+      // Primary: button is inside the conversation host (current lr26 layout).
+      const inside = conversationEl.querySelector<HTMLElement>(
         '[data-test-id="actions-menu-button"]',
-      ) as HTMLElement;
-    }
+      );
+      if (inside) return inside;
 
-    // Strategy 3: Look for any visible button with the actions-menu-button test id near this element
+      // Fallback: legacy sibling .conversation-actions-container layout.
+      const actionsContainer = conversationEl.parentElement?.querySelector(
+        '.conversation-actions-container',
+      );
+      const sibling = actionsContainer?.querySelector<HTMLElement>(
+        '[data-test-id="actions-menu-button"]',
+      );
+      if (sibling) return sibling;
+
+      // Fallback: nearest <li> ancestor (very old layout).
+      return (
+        conversationEl
+          .closest('li')
+          ?.querySelector<HTMLElement>('[data-test-id="actions-menu-button"]') ?? null
+      );
+    };
+
+    let moreButton = locate();
+
+    // If the row was virtualized away from the viewport its trailing actions
+    // may not have mounted yet. Scroll it back into view and poll briefly.
     if (!moreButton) {
-      // Find the closest list item that contains both the conversation and actions
-      const listItem = conversationEl.closest('li');
-      if (listItem) {
-        moreButton = listItem.querySelector('[data-test-id="actions-menu-button"]') as HTMLElement;
+      try {
+        conversationEl.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior });
+      } catch {
+        /* scrollIntoView may throw in some embedded contexts — ignore */
+      }
+      const maxWait = this.BATCH_DELETE_CONFIG.MAX_BUTTON_WAIT_TIME;
+      const step = this.BATCH_DELETE_CONFIG.BUTTON_CHECK_INTERVAL;
+      let waited = 0;
+      while (waited < maxWait && !moreButton) {
+        await this.delay(step);
+        waited += step;
+        moreButton = locate();
       }
     }
 
@@ -3264,7 +4917,145 @@ export class FolderManager {
       return moreButton;
     }
 
+    console.warn(
+      '[FolderManager] Could not locate actions-menu-button inside conversation host. ' +
+        'Gemini sidebar DOM may have changed.',
+      conversationEl,
+    );
     return null;
+  }
+
+  private async openNativeRenameForFolderConversation(
+    conversation: ConversationReference,
+  ): Promise<boolean> {
+    const conversationId =
+      this.normalizeConversationId(conversation.conversationId) ||
+      this.extractConversationIdFromHref(conversation.url);
+    if (!conversationId) return false;
+
+    const conversationEl = this.findNativeConversationElement(conversationId);
+    if (!conversationEl) {
+      this.debugWarn('Could not find native conversation element for rename:', conversationId);
+      return false;
+    }
+
+    const restoreArchivedVisibility = this.temporarilyRevealNativeConversation(conversationEl);
+    const nativeTitle = this.extractNativeConversationTitle(conversationEl);
+    let moreButton: HTMLElement | null = null;
+
+    try {
+      moreButton = await this.findAndClickMoreButton(conversationEl);
+      if (!moreButton) {
+        this.debugWarn('Could not find native more button for rename:', conversationId);
+        return false;
+      }
+
+      const renamed = await this.waitForRenameButtonAndClick();
+      if (!renamed) {
+        this.debugWarn('Could not find native rename button:', conversationId);
+      } else {
+        await this.restoreNativeTitleSync(conversationId, nativeTitle);
+      }
+      return renamed;
+    } finally {
+      if (moreButton) {
+        this.resetNativeConversationMenuTrigger(moreButton);
+      }
+      restoreArchivedVisibility();
+    }
+  }
+
+  private async restoreNativeTitleSync(
+    conversationId: string,
+    nativeTitle: string | null,
+  ): Promise<void> {
+    const title = nativeTitle?.trim() || null;
+    const updatedAt = Date.now();
+    let updated = false;
+
+    for (const folderId in this.data.folderContents) {
+      for (const conversation of this.data.folderContents[folderId]) {
+        if (!this.isSameConversation(conversationId, conversation)) continue;
+
+        if (conversation.customTitle) {
+          delete conversation.customTitle;
+          updated = true;
+        }
+
+        if (title && conversation.title !== title) {
+          conversation.title = title;
+          conversation.updatedAt = updatedAt;
+          updated = true;
+        }
+      }
+    }
+
+    if (!updated) return;
+
+    await this.saveData();
+    this.renderAllFolders();
+  }
+
+  private temporarilyRevealNativeConversation(conversationEl: HTMLElement): () => void {
+    const wasArchived = conversationEl.classList.contains('gv-conversation-archived');
+    const actionsContainer = this.getNativeConversationActionsContainer(conversationEl);
+    const wereActionsArchived =
+      actionsContainer?.classList.contains(ARCHIVED_CONVERSATION_ACTIONS_CLASS) ?? false;
+    if (!wasArchived && !wereActionsArchived) return () => {};
+
+    conversationEl.classList.remove('gv-conversation-archived');
+    actionsContainer?.classList.remove(ARCHIVED_CONVERSATION_ACTIONS_CLASS);
+    return () => {
+      if (this.hideArchivedConversations) {
+        this.setNativeConversationArchivedState(conversationEl, true);
+      }
+    };
+  }
+
+  private resetNativeConversationMenuTrigger(moreButton: HTMLElement): void {
+    moreButton.blur();
+    const actionsContainer = moreButton.closest('.conversation-actions-container');
+    if (actionsContainer instanceof HTMLElement) {
+      actionsContainer.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+    }
+  }
+
+  private async waitForRenameButtonAndClick(): Promise<boolean> {
+    const maxWaitTime = this.BATCH_DELETE_CONFIG.MAX_BUTTON_WAIT_TIME;
+    const checkInterval = this.BATCH_DELETE_CONFIG.BUTTON_CHECK_INTERVAL;
+    let elapsed = 0;
+
+    while (elapsed < maxWaitTime) {
+      const renameByTestId = document.querySelector(
+        '[data-test-id="rename-button"]',
+      ) as HTMLElement | null;
+      if (renameByTestId && this.isVisibleElement(renameByTestId)) {
+        renameByTestId.click();
+        this.debug('Clicked rename button (by test-id)');
+        return true;
+      }
+
+      const renameIcons = document.querySelectorAll(
+        '.cdk-overlay-container mat-icon, .cdk-overlay-container .material-icons',
+      );
+
+      for (const icon of renameIcons) {
+        const iconText = icon.textContent?.toLowerCase().trim() || '';
+        if (iconText !== 'edit' && iconText !== 'edit_square') continue;
+
+        const parentButton = icon.closest('button, [role="menuitem"]') as HTMLElement | null;
+        if (parentButton && this.isVisibleElement(parentButton)) {
+          parentButton.click();
+          this.debug('Clicked rename button (by icon)');
+          return true;
+        }
+      }
+
+      await this.delay(checkInterval);
+      elapsed += checkInterval;
+    }
+
+    return false;
   }
 
   /**
@@ -3278,56 +5069,75 @@ export class FolderManager {
 
     const keywords = this.getDeleteKeywords();
 
+    // Track per-poll state so we can emit one summary diagnostic on timeout.
+    let lastTestIdCount = 0;
+    let lastVisibleTestIdCount = 0;
+    let lastOverlayPanes = 0;
+    let lastMenuPanels = 0;
+    let lastMenuItemTexts: string[] = [];
+
     while (elapsed < maxWaitTime) {
-      // Strategy 1: Look for delete button by data-test-id (primary method)
-      const deleteByTestId = document.querySelector(
-        '[data-test-id="delete-button"]',
-      ) as HTMLElement;
-      if (deleteByTestId && this.isVisibleElement(deleteByTestId)) {
-        deleteByTestId.click();
+      // Strategy 1: data-test-id (primary). Use querySelectorAll because some
+      // layouts render hidden template copies that querySelector would lock
+      // onto, never advancing past an invisible match.
+      const deleteCandidates = Array.from(
+        document.querySelectorAll<HTMLElement>('[data-test-id="delete-button"]'),
+      );
+      lastTestIdCount = deleteCandidates.length;
+      const visibleByTestId = deleteCandidates.filter((el) => this.isVisibleElement(el));
+      lastVisibleTestIdCount = visibleByTestId.length;
+      // Prefer one that lives inside an open menu / overlay panel.
+      const targetByTestId =
+        visibleByTestId.find((el) => el.closest('.mat-mdc-menu-panel, .cdk-overlay-pane')) ??
+        visibleByTestId[0];
+      if (targetByTestId) {
+        targetByTestId.click();
         this.debug('Clicked delete button (by test-id)');
         return true;
       }
 
-      // Strategy 2: Look for menu items containing delete text (supports translations)
-      const menuItems = document.querySelectorAll(
-        '.cdk-overlay-container button, ' +
-          '.cdk-overlay-container [role="menuitem"], ' +
-          '.mat-mdc-menu-content button, ' +
-          '.mat-menu-content button',
+      // Strategy 2: scan menu items for matching text (i18n-friendly).
+      const menuItems = Array.from(
+        document.querySelectorAll<HTMLElement>(
+          '.cdk-overlay-container button[role="menuitem"], ' +
+            '.cdk-overlay-container [role="menuitem"], ' +
+            '.mat-mdc-menu-content button, ' +
+            '.mat-menu-content button',
+        ),
       );
+      lastMenuItemTexts = menuItems.map((el) => el.textContent?.trim().slice(0, 20) || '');
 
       for (const item of menuItems) {
-        if (!this.isVisibleElement(item as HTMLElement)) continue;
-
+        if (!this.isVisibleElement(item)) continue;
         const text = item.textContent?.toLowerCase().trim() || '';
-        // Match keywords from i18n
         if (
           text &&
           keywords.some(
             (keyword: string) => text === keyword || (text.includes(keyword) && text.length < 20),
           )
         ) {
-          (item as HTMLElement).click();
+          item.click();
           this.debug('Clicked delete button (by text):', text);
           return true;
         }
       }
 
-      // Strategy 3: Look for button with delete icon (mat-icon containing 'delete')
+      // Strategy 3: by icon (mat-icon delete / delete_forever / delete_outline).
       const deleteIcons = document.querySelectorAll(
         '.cdk-overlay-container mat-icon, .cdk-overlay-container .material-icons',
       );
-
       for (const icon of deleteIcons) {
         const iconText = icon.textContent?.toLowerCase().trim() || '';
+        const iconAttr = icon.getAttribute('fonticon') || '';
         if (
           iconText === 'delete' ||
           iconText === 'delete_forever' ||
-          iconText === 'delete_outline'
+          iconText === 'delete_outline' ||
+          iconAttr === 'delete' ||
+          iconAttr === 'delete_forever' ||
+          iconAttr === 'delete_outline'
         ) {
-          // Find the parent button and click it
-          const parentButton = icon.closest('button, [role="menuitem"]') as HTMLElement;
+          const parentButton = icon.closest('button, [role="menuitem"]') as HTMLElement | null;
           if (parentButton && this.isVisibleElement(parentButton)) {
             parentButton.click();
             this.debug('Clicked delete button (by icon)');
@@ -3336,10 +5146,26 @@ export class FolderManager {
         }
       }
 
+      lastOverlayPanes = document.querySelectorAll('.cdk-overlay-pane').length;
+      lastMenuPanels = document.querySelectorAll('.mat-mdc-menu-panel').length;
+
       await this.delay(checkInterval);
       elapsed += checkInterval;
     }
 
+    // Emit a SINGLE compact diagnostic on timeout so users can paste it
+    // verbatim when reporting batch-delete failures.
+    console.warn(
+      '[FolderManager] Batch delete diagnostics on timeout: ' +
+        JSON.stringify({
+          deleteButtonsFound: lastTestIdCount,
+          deleteButtonsVisible: lastVisibleTestIdCount,
+          overlayPanes: lastOverlayPanes,
+          menuPanels: lastMenuPanels,
+          menuItemTexts: lastMenuItemTexts.slice(0, 10),
+          keywordsTried: keywords,
+        }),
+    );
     return false;
   }
 
@@ -3438,8 +5264,11 @@ export class FolderManager {
    */
   private getDeleteKeywords(): string[] {
     const rawPatterns = this.t('batch_delete_match_patterns') || '';
+    // Split on both ASCII and CJK fullwidth commas (and a couple of common
+    // separators) so locales authored with `，` / `、` / `；` don't end up as
+    // one giant unsplittable string.
     return rawPatterns
-      .split(',')
+      .split(/[,，、；;]+/)
       .map((s: string) => s.trim().toLowerCase())
       .filter((s: string) => s.length > 0);
   }
@@ -3615,8 +5444,8 @@ export class FolderManager {
       });
     } else if (this.multiSelectSource === 'native') {
       // Only update native conversation elements (Recent section)
-      const nativeConvs = this.sidebarContainer?.querySelectorAll('[data-test-id="conversation"]');
-      nativeConvs?.forEach((el) => {
+      const nativeConvs = this.getNativeConversationElements();
+      nativeConvs.forEach((el) => {
         const convId = this.extractConversationId(el as HTMLElement);
         if (convId) {
           if (this.selectedConversations.has(convId)) {
@@ -3692,14 +5521,22 @@ export class FolderManager {
       const target = e.target as HTMLElement;
 
       // Check if click is inside the sidebar or folder container
-      const isInsideSidebar = this.sidebarContainer?.contains(target);
+      const isInsideSidebar =
+        this.sidebarContainer?.contains(target) ||
+        !!target.closest('[data-test-id="overflow-container"]');
       const isInsideFolderContainer = this.containerElement?.contains(target);
+      const isInsideMultiSelectHost = this.multiSelectHostElement?.contains(target);
 
       // Check if click is on an overlay (menus, dialogs, etc.)
       const isOnOverlay = target.closest('.cdk-overlay-container, .mat-mdc-dialog-container');
 
       // If click is outside all relevant areas, exit multi-select mode
-      if (!isInsideSidebar && !isInsideFolderContainer && !isOnOverlay) {
+      if (
+        !isInsideSidebar &&
+        !isInsideFolderContainer &&
+        !isInsideMultiSelectHost &&
+        !isOnOverlay
+      ) {
         this.debug('Click outside sidebar detected, exiting multi-select mode');
         this.exitMultiSelectMode();
       }
@@ -3723,8 +5560,8 @@ export class FolderManager {
 
   private cleanupSelectionArtifacts(): void {
     // Remove selection classes from all native conversations
-    const nativeConvs = this.sidebarContainer?.querySelectorAll('[data-test-id="conversation"]');
-    nativeConvs?.forEach((el) => {
+    const nativeConvs = this.getNativeConversationElements();
+    nativeConvs.forEach((el) => {
       (el as HTMLElement).classList.remove('gv-conversation-selected');
       (el as HTMLElement).style.opacity = '1';
     });
@@ -3777,24 +5614,26 @@ export class FolderManager {
   }
 
   private updateMultiSelectModeUI(): void {
+    const multiSelectHost = this.isMultiSelectMode
+      ? this.getMultiSelectHost()
+      : this.getExistingMultiSelectHost();
+
     // Add or remove multi-select mode class from container
     if (this.isMultiSelectMode) {
-      this.containerElement?.classList.add('gv-multi-select-mode');
+      multiSelectHost?.classList.add('gv-multi-select-mode');
     } else {
-      this.containerElement?.classList.remove('gv-multi-select-mode');
+      multiSelectHost?.classList.remove('gv-multi-select-mode');
     }
 
     // Update selection count in indicator
-    const countElement = this.containerElement?.querySelector('[data-selection-count="true"]');
+    const countElement = multiSelectHost?.querySelector('[data-selection-count="true"]');
     if (countElement) {
       const count = this.selectedConversations.size;
       countElement.textContent = `${count} selected`;
     }
 
     // Update action buttons based on source
-    const actionsContainer = this.containerElement?.querySelector(
-      '[data-multi-select-actions="true"]',
-    );
+    const actionsContainer = multiSelectHost?.querySelector('[data-multi-select-actions="true"]');
     if (actionsContainer && this.isMultiSelectMode) {
       actionsContainer.innerHTML = ''; // Clear existing buttons
 
@@ -3849,100 +5688,6 @@ export class FolderManager {
     return result;
   }
 
-  private renameConversation(
-    folderId: string,
-    conversationId: string,
-    titleElement: HTMLElement,
-  ): void {
-    // Get current title
-    const conv = this.data.folderContents[folderId]?.find(
-      (c) => c.conversationId === conversationId,
-    );
-    if (!conv) return;
-
-    const currentTitle = conv.title;
-
-    // Create inline input for renaming
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.className = 'gv-folder-name-input gv-conversation-rename-input';
-    input.value = currentTitle;
-    input.style.width = '100%';
-
-    // Replace title with input
-    const parent = titleElement.parentElement;
-    if (!parent) return;
-
-    titleElement.style.display = 'none';
-    parent.insertBefore(input, titleElement);
-    input.focus();
-    input.select();
-
-    let finished = false;
-    const cleanup = () => {
-      try {
-        input.removeEventListener('blur', onBlur);
-      } catch (e) {
-        this.debug('Failed to remove blur listener:', e);
-      }
-      try {
-        input.removeEventListener('keydown', onKeyDown);
-      } catch (e) {
-        this.debug('Failed to remove keydown listener:', e);
-      }
-    };
-    const finalize = (commit: boolean) => {
-      if (finished) return;
-      finished = true;
-      cleanup();
-      try {
-        if (commit) {
-          const newTitle = input.value.trim();
-          if (newTitle && newTitle !== currentTitle) {
-            conv.title = newTitle;
-            conv.customTitle = true; // mark as manually renamed, don't auto-sync from native
-            conv.updatedAt = Date.now(); // record update time for sync conflict resolution
-            this.saveData();
-          }
-        }
-      } catch (e) {
-        this.debug('Failed to save renamed conversation:', e);
-      }
-      // Restore title element gracefully even if DOM re-rendered
-      try {
-        if (input.isConnected) input.remove();
-      } catch (e) {
-        this.debug('Failed to remove input:', e);
-      }
-      try {
-        titleElement.style.display = '';
-      } catch (e) {
-        this.debug('Failed to restore title display:', e);
-      }
-      try {
-        titleElement.textContent = conv.title;
-      } catch (e) {
-        this.debug('Failed to restore title text:', e);
-      }
-    };
-    const onBlur = () => {
-      // Defer finalize to let Angular/SPA navigation settle
-      requestAnimationFrame(() => finalize(true));
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        finalize(true);
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        finalize(false);
-      }
-    };
-
-    input.addEventListener('blur', onBlur);
-    input.addEventListener('keydown', onKeyDown);
-  }
-
   private showFolderMenu(event: MouseEvent, folderId: string): void {
     event.stopPropagation();
 
@@ -3961,13 +5706,29 @@ export class FolderManager {
         label: folder.pinned ? this.t('folder_unpin') : this.t('folder_pin'),
         action: () => this.togglePinFolder(folderId),
       },
-      { label: this.t('folder_create_subfolder'), action: () => this.createFolder(folderId) },
+    ];
+
+    // "Create subfolder" only appears when the parent isn't already at the
+    // floor of the depth cap. Pre-existing deeper data still renders; we just
+    // don't offer a UI path to grow it further.
+    if (this.getFolderDepth(folderId) < MAX_FOLDER_DEPTH) {
+      menuItems.push({
+        label: this.t('folder_create_subfolder'),
+        action: () => this.createFolder(folderId),
+      });
+    }
+
+    menuItems.push(
       { label: this.t('folder_rename'), action: () => this.renameFolder(folderId) },
       { label: this.t('folder_change_color'), action: () => this.showColorPicker(folderId, event) },
-    ];
+    );
 
     // Only show instructions editor when Folder-as-Project is enabled
     if (this.folderProjectEnabled) {
+      menuItems.push({
+        label: this.t('folder_new_chat_in_folder'),
+        action: () => this.createNewChatInFolder(folderId),
+      });
       menuItems.push({
         label: folder.instructions
           ? this.t('folderAsProject_editInstructions')
@@ -3999,6 +5760,84 @@ export class FolderManager {
       }
     };
     setTimeout(() => document.addEventListener('click', closeMenu), 0);
+  }
+
+  private closeFolderConversationMenus(): void {
+    document.querySelectorAll('.gv-folder-conversation-menu').forEach((menu) => menu.remove());
+  }
+
+  private showFolderConversationMenu(event: MouseEvent, conversation: ConversationReference): void {
+    this.closeFolderConversationMenus();
+
+    const menu = document.createElement('div');
+    menu.className = 'gv-folder-menu gv-folder-conversation-menu';
+    menu.style.position = 'fixed';
+    menu.style.left = `${event.clientX}px`;
+    menu.style.top = `${event.clientY}px`;
+
+    const renameItem = document.createElement('button');
+    renameItem.className = 'gv-folder-menu-item';
+    renameItem.textContent = this.t('folder_rename');
+    renameItem.addEventListener('click', () => {
+      menu.remove();
+      void this.openNativeRenameForFolderConversation(conversation);
+    });
+
+    menu.appendChild(renameItem);
+    document.body.appendChild(menu);
+
+    const closeMenu = (e: MouseEvent) => {
+      if (!menu.contains(e.target as Node)) {
+        menu.remove();
+        document.removeEventListener('click', closeMenu);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', closeMenu), 0);
+  }
+
+  /**
+   * Navigate to a new chat page and pre-select this folder via the
+   * Folder-as-Project picker. Stores the folder ID in local storage so the
+   * picker can auto-select it after the page loads.
+   */
+  private createNewChatInFolder(folderId: string): void {
+    const navigate = () => {
+      const userPrefix = window.location.pathname.match(/^\/u\/\d+/)?.[0] ?? '';
+      const targetPath = `${userPrefix}/app`;
+      if (
+        window.location.pathname === targetPath ||
+        window.location.pathname === `${targetPath}/`
+      ) {
+        // Already on the new-chat page. The Folder-as-Project picker only
+        // consumes the pending folder id when it (re)injects, and its URL
+        // watcher cannot observe a same-URL pushState, so an SPA "navigation"
+        // here would be a silent no-op. A full reload is the only way to
+        // re-run picker injection — accepted as the explicit reload exception
+        // to the no-full-refresh navigation rule.
+        window.location.reload();
+        return;
+      }
+      // Preferred path: SPA route change (History API + popstate), same helper
+      // the folder conversation navigation uses. folderProject's URL watcher
+      // picks this up, re-injects the picker, and applies the pending folder.
+      if (this.navigateWithSpaRoute(`${window.location.origin}${targetPath}`)) {
+        return;
+      }
+      // Last-resort fallback: the History API path failed (pushState threw).
+      // A full page load is acceptable here because the alternative is a dead
+      // menu item — this mirrors the rule's History-API-then-fallback order.
+      window.location.href = `${window.location.origin}${targetPath}`;
+    };
+
+    browser.storage.local
+      .set({ [StorageKeys.FOLDER_PROJECT_PENDING_FOLDER_ID]: folderId })
+      .then(navigate)
+      .catch((error) => {
+        if (isExtensionContextInvalidatedError(error)) return;
+        // storage failed — still navigate so the user isn't stranded; they can pick the folder manually
+        console.warn('[folder] failed to set pending folder ID', error);
+        navigate();
+      });
   }
 
   /**
@@ -4182,18 +6021,52 @@ export class FolderManager {
     dialogTitle.className = 'gv-folder-dialog-title';
     dialogTitle.textContent = this.t('conversation_move_to_folder_title');
 
+    const searchInput = document.createElement('input');
+    searchInput.type = 'search';
+    searchInput.className = 'gv-folder-dialog-search';
+    searchInput.placeholder = this.t('timelinePreviewSearch');
+    searchInput.setAttribute('aria-label', this.t('timelinePreviewSearch'));
+
     // Folder list
     const folderList = document.createElement('div');
     folderList.className = 'gv-folder-dialog-list';
 
-    // Helper function to add folder options recursively
-    const addFolderOptions = (parentId: string | null, level: number = 0) => {
+    const emptyState = document.createElement('div');
+    emptyState.className = 'gv-folder-dialog-empty';
+    emptyState.textContent = this.t('timelinePreviewNoResults');
+
+    const folderOptions: FolderDialogOption[] = [];
+
+    const collectFolderOptions = (
+      parentId: string | null,
+      level: number = 0,
+      parentPath: string = '',
+    ) => {
       const folders = this.data.folders.filter((f) => f.parentId === parentId);
       const sortedFolders = this.sortFolders(folders); // Apply same sorting as sidebar
       sortedFolders.forEach((folder) => {
+        const path = parentPath ? `${parentPath} / ${folder.name}` : folder.name;
+        folderOptions.push({ folder, level, path });
+        collectFolderOptions(folder.id, level + 1, path);
+      });
+    };
+
+    const renderFolderOptions = (query: string = '') => {
+      folderList.innerHTML = '';
+      const normalizedQuery = normalizeFolderDialogSearchText(query);
+      const visibleOptions = normalizedQuery
+        ? folderOptions.filter((option) =>
+            normalizeFolderDialogSearchText(option.path).includes(normalizedQuery),
+          )
+        : folderOptions;
+
+      visibleOptions.forEach(({ folder, level, path }) => {
         const folderItem = document.createElement('button');
         folderItem.className = 'gv-folder-dialog-item';
-        folderItem.style.paddingLeft = `${calculateFolderDialogPaddingLeft(level, this.folderTreeIndent)}px`;
+        folderItem.style.paddingLeft = `${calculateFolderDialogPaddingLeft(level)}px`;
+        folderItem.dataset.folderId = folder.id;
+        folderItem.dataset.folderPath = path;
+        folderItem.setAttribute('aria-label', path);
 
         // Folder icon
         const icon = document.createElement('mat-icon');
@@ -4204,10 +6077,16 @@ export class FolderManager {
 
         // Folder name
         const name = document.createElement('span');
+        name.className = 'gv-folder-dialog-item-text';
         name.textContent = folder.name;
+
+        const pathLabel = document.createElement('span');
+        pathLabel.className = 'gv-folder-dialog-item-path';
+        pathLabel.textContent = `/${normalizeFolderDialogSearchText(path)}`;
 
         folderItem.appendChild(icon);
         folderItem.appendChild(name);
+        folderItem.appendChild(pathLabel);
 
         folderItem.addEventListener('click', () => {
           this.addConversationToFolderFromNative(
@@ -4222,14 +6101,19 @@ export class FolderManager {
         });
 
         folderList.appendChild(folderItem);
-
-        // Add subfolders recursively
-        addFolderOptions(folder.id, level + 1);
       });
+
+      if (visibleOptions.length === 0) {
+        folderList.appendChild(emptyState);
+      }
     };
 
-    // Add root folders and their children
-    addFolderOptions(null);
+    collectFolderOptions(null);
+    renderFolderOptions();
+
+    searchInput.addEventListener('input', () => {
+      renderFolderOptions(searchInput.value);
+    });
 
     // Cancel button
     const cancelBtn = document.createElement('button');
@@ -4239,6 +6123,7 @@ export class FolderManager {
 
     // Assemble dialog
     dialog.appendChild(dialogTitle);
+    dialog.appendChild(searchInput);
     dialog.appendChild(folderList);
     dialog.appendChild(cancelBtn);
     overlay.appendChild(dialog);
@@ -4311,20 +6196,40 @@ export class FolderManager {
       (c) => c.conversationId === conversationId,
     );
 
+    let addedNewConversation = false;
     if (existingIndex === -1) {
-      // Add new conversation
+      // Insert at the top by claiming sortIndex 0 and shifting existing entries
+      // up by one. Time-based fallback alone is not enough — ensureDataIntegrity
+      // (called from saveData) will assign sortIndex 0 to the newest entry by
+      // time and collide with any pre-existing sortIndex 0, after which JS's
+      // stable sort drops the new entry below the old one.
+      //
+      // Run ensureDataIntegrity first so any nullish sortIndex on existing
+      // entries gets a numeric value before the shift. Otherwise (sortIndex ?? 0)
+      // would map both null entries and the existing 0 entry to 1.
+      this.ensureDataIntegrity();
+      const now = Date.now();
+      for (const c of this.data.folderContents[folderId]) {
+        c.sortIndex = (c.sortIndex ?? 0) + 1;
+      }
       this.data.folderContents[folderId].push({
         conversationId,
         title,
         url,
-        addedAt: Date.now(),
+        addedAt: now,
+        lastOpenedAt: now,
         isGem,
         gemId,
+        sortIndex: 0,
       });
+      addedNewConversation = true;
     }
 
     this.saveData();
     this.refresh();
+    if (addedNewConversation) {
+      this.maybeShowHideArchivedNudge();
+    }
   }
 
   /**
@@ -4439,366 +6344,353 @@ export class FolderManager {
     setTimeout(() => textarea.focus(), 50);
   }
 
+  // Detect a freshly-opened conversation ⋮ menu and inject our "Move to folder"
+  // item. Google's "lr26" UI overhaul replaced the old `.mat-mdc-menu-panel`
+  // (rendered into `.cdk-overlay-container`) with a `<gem-menu>` element and
+  // re-creates the overlay container, which silently broke the previous
+  // observer. This mirrors the proven, robust export-button observer: it
+  // watches `document.body`, matches both panel variants, and retries while
+  // the menu items stream in asynchronously.
   private setupNativeConversationMenuObserver(): void {
-    // Disconnect existing observer if any
     if (this.nativeMenuObserver) {
       this.nativeMenuObserver.disconnect();
+      this.nativeMenuObserver = null;
     }
 
-    // Observe the document for menu appearance and disappearance
-    this.nativeMenuObserver = new MutationObserver((mutations) => {
+    const observer = new MutationObserver((mutations) => {
       if (this.isDestroyed) return;
-      mutations.forEach((mutation) => {
-        // Handle added nodes (menu opening)
+      for (const mutation of mutations) {
         mutation.addedNodes.forEach((node) => {
-          if (node instanceof HTMLElement) {
-            // Check if this is the native conversation menu
-            const menuContent = node.querySelector('.mat-mdc-menu-content');
-            if (menuContent && !menuContent.querySelector('.gv-move-to-folder-btn')) {
-              // Check if this is a conversation menu (not model selection menu or other menus)
-              if (this.isConversationMenu(node)) {
-                this.debug('Observer: conversation menu detected, preparing to inject');
-                this.injectMoveToFolderButton(menuContent as HTMLElement);
-              } else {
-                this.debug('Observer: non-conversation menu detected, skipping injection');
-              }
-            } else if (menuContent) {
-              this.debug('Observer: menu content detected but button already present');
-            }
-          }
+          if (!(node instanceof HTMLElement)) return;
+          // Cheap gate before the matches/querySelectorAll/closest triple:
+          // menu panels only ever live inside a CDK overlay (or are a
+          // <gem-menu> themselves), while the overwhelming majority of body
+          // mutations are sidebar/chat re-renders that can't contain one.
+          // Missed edge cases are covered by the click-tracking fallback in
+          // setupConversationClickTracking.
+          const className = typeof node.className === 'string' ? node.className : '';
+          const mayHostMenuPanel =
+            node.tagName === 'GEM-MENU' ||
+            className.includes('mat-mdc-menu-panel') ||
+            className.includes('cdk-overlay') ||
+            node.parentElement?.closest('.cdk-overlay-container') != null;
+          if (!mayHostMenuPanel) return;
+          const panels = new Set<HTMLElement>();
+          if (node.matches(CONVERSATION_MENU_PANEL_SELECTOR)) panels.add(node);
+          node
+            .querySelectorAll<HTMLElement>(CONVERSATION_MENU_PANEL_SELECTOR)
+            .forEach((panel) => panels.add(panel));
+          const closest = node.closest(CONVERSATION_MENU_PANEL_SELECTOR) as HTMLElement | null;
+          if (closest) panels.add(closest);
+          panels.forEach((panel) =>
+            window.setTimeout(() => this.tryInjectMoveToFolderOnPanel(panel), 30),
+          );
         });
 
-        // Handle removed nodes (menu closing)
+        // When a conversation menu we injected into closes, mat-menu restores
+        // focus to the ⋮ trigger, which keeps the row visually selected via
+        // :focus-within. Drop that focus on pointer-driven dismissals so the
+        // row reverts. See releaseTriggerFocusAfterPointerClose for guards.
         mutation.removedNodes.forEach((node) => {
-          if (node instanceof HTMLElement) {
-            // Check if a menu panel was removed
-            const isMenuPanel =
-              node.classList?.contains('mat-mdc-menu-panel') ||
-              node.querySelector('.mat-mdc-menu-panel');
-            if (isMenuPanel) {
-              this.debug('Observer: menu closed, clearing conversation state');
-              this.lastClickedConversation = null;
-              this.lastClickedConversationInfo = null;
-            }
+          if (!(node instanceof HTMLElement)) return;
+          const wasInjectedConversationMenu =
+            (node.matches?.(CONVERSATION_MENU_PANEL_SELECTOR) &&
+              node.querySelector('.gv-move-to-folder-btn')) ||
+            node.querySelector?.(`${CONVERSATION_MENU_PANEL_SELECTOR} .gv-move-to-folder-btn`) ||
+            (node.querySelector?.(CONVERSATION_MENU_PANEL_SELECTOR) &&
+              node.querySelector('.gv-move-to-folder-btn'));
+          if (wasInjectedConversationMenu) {
+            this.releaseTriggerFocusAfterPointerClose();
           }
         });
-      });
-    });
-
-    this.nativeMenuObserver.observe(document.body, {
-      childList: true,
-      subtree: true,
-    });
-  }
-
-  private isConversationMenu(menuElement: HTMLElement): boolean {
-    // Check if this is NOT a model selection menu or other non-conversation menus
-    const menuPanel = menuElement.querySelector('.mat-mdc-menu-panel');
-
-    // Exclude model selection menu (has gds-mode-switch-menu class)
-    if (menuPanel?.classList.contains('gds-mode-switch-menu')) {
-      this.debug('isConversationMenu: detected model selection menu');
-      return false;
-    }
-
-    // Exclude menus with bard-mode-list-button (model selection)
-    if (menuElement.querySelector('.bard-mode-list-button')) {
-      this.debug('isConversationMenu: detected bard mode list menu');
-      return false;
-    }
-
-    // Check for conversation-specific elements
-    const menuContent = menuElement.querySelector('.mat-mdc-menu-content');
-    if (!menuContent) return false;
-
-    // Look for conversation menu indicators:
-    // 1. Pin button (common in conversation menus)
-    // 2. Rename/delete conversation buttons
-    // 3. Share conversation button
-    const hasPinButton = menuContent.querySelector('[data-test-id="pin-button"]');
-    const hasRenameButton = menuContent.querySelector('[data-test-id="rename-button"]');
-    const hasShareButton = menuContent.querySelector('[data-test-id="share-button"]');
-    const hasDeleteButton = menuContent.querySelector('[data-test-id="delete-button"]');
-
-    // If any conversation-specific button exists, it's a conversation menu
-    if (hasPinButton || hasRenameButton || hasShareButton || hasDeleteButton) {
-      this.debug('isConversationMenu: found conversation-specific buttons');
-      return true;
-    }
-
-    // If we have a lastClickedConversation, we can assume it's a conversation menu
-    if (this.lastClickedConversation) {
-      this.debug('isConversationMenu: lastClickedConversation exists');
-      return true;
-    }
-
-    // Default to false if we can't determine
-    this.debug('isConversationMenu: could not determine menu type, defaulting to false');
-    return false;
-  }
-
-  private injectMoveToFolderButton(menuContent: HTMLElement): void {
-    this.debug('injectMoveToFolderButton: begin');
-
-    // First, try to use pre-extracted conversation info (most reliable)
-    let conversationId: string | null = null;
-    let title: string | null = null;
-    let url: string | null = null;
-
-    if (this.lastClickedConversationInfo) {
-      this.debug('Using pre-extracted conversation info');
-      conversationId = this.lastClickedConversationInfo.id;
-      title = this.lastClickedConversationInfo.title;
-      url = this.lastClickedConversationInfo.url;
-    } else {
-      // Fallback: try to extract from conversation element
-      this.debug('No pre-extracted info, falling back to extraction from element');
-      const conversationEl = this.findConversationElementFromMenu();
-      if (!conversationEl) {
-        this.debug('No conversation element found from menu');
-        return;
       }
+    });
 
-      conversationId = this.extractNativeConversationId(conversationEl);
-      title = this.extractNativeConversationTitle(conversationEl);
-      url = this.extractNativeConversationUrl(conversationEl);
+    observer.observe(document.body, { childList: true, subtree: true });
+    this.nativeMenuObserver = observer;
+
+    // Catch any menu already open at setup time.
+    document
+      .querySelectorAll<HTMLElement>(CONVERSATION_MENU_PANEL_SELECTOR)
+      .forEach((panel) => window.setTimeout(() => this.tryInjectMoveToFolderOnPanel(panel), 30));
+  }
+
+  // Inject the "Move to folder" item into a native conversation menu panel,
+  // retrying while the menu content renders. Conversation info is resolved
+  // lazily on click (from the menu trigger or the open page) so a transient
+  // extraction miss never prevents the item from appearing.
+  private tryInjectMoveToFolderOnPanel(
+    panel: HTMLElement,
+    retriesLeft: number = MOVE_MENU_INJECTION_RETRY_LIMIT,
+  ): void {
+    if (this.isDestroyed || !panel.isConnected) return;
+
+    const context = getConversationMenuContext(panel);
+    if (!context) return; // not a conversation menu (e.g. model picker / response menu)
+
+    const label = this.t('conversation_move_to_folder');
+    const injected = injectConversationMenuMoveToFolderButton(panel, {
+      label,
+      tooltip: label,
+      onClick: () => {
+        const info = this.resolveConversationInfoForMenu(context);
+        if (info) {
+          this.showMoveToFolderDialog(info.id, info.title, info.url);
+        } else {
+          this.debugWarn('Move to folder: could not resolve conversation info on click');
+        }
+      },
+    });
+
+    if (!injected && retriesLeft > 0) {
+      window.setTimeout(
+        () => this.tryInjectMoveToFolderOnPanel(panel, retriesLeft - 1),
+        MOVE_MENU_INJECTION_RETRY_DELAY_MS,
+      );
     }
+  }
 
-    // Additional fallbacks when info is still missing
-    if (!conversationId) {
-      // Try to parse hex id from the overlay menu itself
-      const hexFromMenu = this.extractHexIdFromMenu(menuContent);
-      if (hexFromMenu) {
-        conversationId = hexFromMenu;
-        this.debug('injectMoveToFolderButton: using id from menu jslog', conversationId);
-      } else if (this.lastClickedConversation) {
-        // Try from jslog on the conversation element tree
-        const hexFromJslog = this.extractHexIdFromJslog(this.lastClickedConversation);
-        if (hexFromJslog) {
-          conversationId = hexFromJslog;
-          this.debug('injectMoveToFolderButton: using id from conversation jslog', conversationId);
+  // Resolve the conversation a menu belongs to. Sidebar menus map back to their
+  // list item via the trigger; the top-bar ⋮ menu maps to the open page.
+  private resolveConversationInfoForMenu(
+    context: ConversationMenuContext,
+  ): { id: string; title: string; url: string } | null {
+    const trigger = context.trigger;
+    if (trigger) {
+      const conversationEl = this.findConversationElementForTrigger(trigger);
+      if (conversationEl) {
+        const id = this.extractNativeConversationId(conversationEl);
+        if (id) {
+          const url =
+            this.extractNativeConversationUrl(conversationEl) ||
+            this.buildConversationUrlFromId(id);
+          const title =
+            this.extractNativeConversationTitle(conversationEl) ||
+            this.extractFallbackTitle(conversationEl) ||
+            'Untitled';
+          if (url) {
+            this.debug('resolveConversationInfoForMenu(sidebar):', { id, title, url });
+            return { id, title, url };
+          }
         }
       }
     }
 
-    // If URL is missing but we have an id, synthesize a best-effort URL
-    if (!url && conversationId) {
-      url = this.buildConversationUrlFromId(conversationId);
-      this.debug('injectMoveToFolderButton: built fallback URL from id', url);
+    // Top-bar menu (or sidebar resolution miss): derive from the current page.
+    const pageInfo = this.extractConversationInfoFromPage();
+    if (pageInfo) {
+      this.debug('resolveConversationInfoForMenu(page):', pageInfo);
+      return pageInfo;
     }
-
-    // Title fallback
-    if ((!title || title.trim() === '') && this.lastClickedConversation) {
-      title = this.extractFallbackTitle(this.lastClickedConversation) || 'Untitled';
-      this.debug('injectMoveToFolderButton: using fallback title', title);
-    }
-
-    this.debug('Extracted conversation info:', { conversationId, title, url });
-
-    if (!conversationId || !title || !url) {
-      this.debugWarn('Missing conversation info:', { conversationId, title, url });
-      return;
-    }
-
-    const moveToFolderLabel = this.t('conversation_move_to_folder');
-    const menuItem = createMoveToFolderMenuItem(menuContent, moveToFolderLabel, moveToFolderLabel);
-
-    // Add click handler
-    menuItem.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.showMoveToFolderDialog(conversationId, title, url);
-
-      // Close the native menu properly
-      // Strategy 1: Simulate click on backdrop to trigger Angular's native cleanup
-      // We look for the last backdrop as it's likely the one covering the screen for the current menu
-      const backdrops = document.querySelectorAll('.cdk-overlay-backdrop');
-      const backdrop = backdrops.length > 0 ? backdrops[backdrops.length - 1] : null;
-
-      if (backdrop instanceof HTMLElement) {
-        this.debug('Closing menu by clicking backdrop');
-        backdrop.click();
-      } else {
-        // Strategy 2: Fallback manual cleanup if backdrop logic fails
-        this.debug('Backdrop not found, performing manual cleanup');
-        const menu = menuContent.closest('.mat-mdc-menu-panel');
-        if (menu) {
-          menu.remove();
-        }
-
-        // Also try to remove any orphaned backdrop that might be blocking the screen
-        const orphanedBackdrop = document.querySelector('.cdk-overlay-backdrop');
-        if (orphanedBackdrop) {
-          orphanedBackdrop.remove();
-        }
-      }
-    });
-
-    // Insert after the pin button if it exists, otherwise insert at the beginning
-    const pinButton = menuContent.querySelector('[data-test-id="pin-button"]');
-    if (pinButton && pinButton.nextSibling) {
-      this.debug('injectMoveToFolderButton: inserting after pin-button');
-      menuContent.insertBefore(menuItem, pinButton.nextSibling);
-    } else {
-      this.debug('injectMoveToFolderButton: inserting at beginning of menu');
-      menuContent.insertBefore(menuItem, menuContent.firstChild);
-    }
-  }
-
-  private findConversationElementFromMenu(): HTMLElement | null {
-    // Use the element captured on click
-    if (this.lastClickedConversation) {
-      this.debug('findConversationElementFromMenu: using lastClickedConversation');
-      return this.lastClickedConversation;
-    }
-
-    // No fallback - if we don't have the clicked conversation element, we should not guess
-    // The previous fallback logic using '.conversation-actions-container.selected' was incorrect
-    // as it would select the currently focused conversation instead of the one user clicked
-    this.debugWarn(
-      'findConversationElementFromMenu: no conversation element found (lastClickedConversation is null)',
-    );
     return null;
   }
 
-  private lastClickedConversation: HTMLElement | null = null;
-  private lastClickedConversationInfo: { id: string; title: string; url: string } | null = null;
+  // Map a ⋮ trigger button to its conversation list item. Handles the current
+  // UI (trigger nested inside `[data-test-id="conversation"]`) and the older
+  // sibling layout (`.conversation-actions-container` next to the item).
+  private findConversationElementForTrigger(trigger: HTMLElement): HTMLElement | null {
+    const direct = trigger.closest('[data-test-id="conversation"]') as HTMLElement | null;
+    if (direct) return direct;
 
-  private setupConversationClickTracking(): void {
-    // Track clicks on conversation more buttons
-    document.addEventListener(
-      'click',
-      (e) => {
-        const target = e.target as HTMLElement;
-        const moreButton = target.closest('[data-test-id="actions-menu-button"]');
-        if (moreButton) {
-          this.debug('More button clicked:', moreButton);
-
-          let conversationEl: HTMLElement | null = null;
-
-          // Strategy 1: In Gemini's new UI, the conversation div and actions-menu-button are siblings!
-          // Find the actions container first, then look for sibling conversation div
-          const actionsContainer = moreButton.closest('.conversation-actions-container');
-          if (actionsContainer) {
-            this.debug('Found actions container, looking for sibling conversation...');
-            // Look for previous sibling with data-test-id="conversation"
-            let sibling = actionsContainer.previousElementSibling;
-            while (sibling) {
-              if (sibling.getAttribute('data-test-id') === 'conversation') {
-                conversationEl = sibling as HTMLElement;
-                this.debug('Found conversation as sibling:', conversationEl);
-                break;
-              }
-              sibling = sibling.previousElementSibling;
-            }
-          }
-
-          // Strategy 2: Try traditional closest approach (for older UI patterns)
-          if (!conversationEl) {
-            this.debug('Trying closest with conversation selector...');
-            conversationEl = moreButton.closest(
-              '[data-test-id="conversation"]',
-            ) as HTMLElement | null;
-          }
-
-          if (!conversationEl) {
-            this.debug('Trying history-item selector...');
-            conversationEl = moreButton.closest(
-              '[data-test-id^="history-item"]',
-            ) as HTMLElement | null;
-          }
-
-          if (!conversationEl) {
-            this.debug('Trying conversation-card selector...');
-            conversationEl = moreButton.closest('.conversation-card') as HTMLElement | null;
-          }
-
-          // Strategy 3: Check parent container for conversation children
-          if (!conversationEl && actionsContainer && actionsContainer.parentElement) {
-            this.debug('Trying to find conversation in parent container...');
-            const parentContainer = actionsContainer.parentElement;
-            const conversationInParent = parentContainer.querySelector(
-              '[data-test-id="conversation"]',
-            ) as HTMLElement | null;
-            if (conversationInParent) {
-              // Verify this is the right conversation by checking it's close to the actions container
-              const actionsIndex = Array.from(parentContainer.children).indexOf(actionsContainer);
-              const convIndex = Array.from(parentContainer.children).indexOf(conversationInParent);
-              if (Math.abs(actionsIndex - convIndex) <= 1) {
-                conversationEl = conversationInParent;
-                this.debug('Found conversation in parent container');
-              }
-            }
-          }
-
-          // Last resort fallback
-          if (!conversationEl) {
-            this.debugWarn('Could not find precise conversation element, using broader fallback');
-            conversationEl = moreButton.closest('[jslog]') as HTMLElement | null;
-          }
-
-          if (conversationEl) {
-            this.lastClickedConversation = conversationEl as HTMLElement;
-
-            // Debug: verify this element and show its attributes
-            const linkCount = conversationEl.querySelectorAll(
-              'a[href*="/app/"], a[href*="/gem/"]',
-            ).length;
-            const jslogAttr = conversationEl.getAttribute('jslog');
-            const dataTestId = conversationEl.getAttribute('data-test-id');
-            this.debug('Tracked conversation element:', {
-              element: conversationEl,
-              linkCount,
-              jslog: jslogAttr,
-              dataTestId,
-            });
-
-            // Extract conversation info immediately to avoid issues with multiple links later
-            const conversationId = this.extractNativeConversationId(conversationEl);
-            const title = this.extractNativeConversationTitle(conversationEl);
-            const url = this.extractNativeConversationUrl(conversationEl);
-
-            if (conversationId && title && url) {
-              this.lastClickedConversationInfo = { id: conversationId, title, url };
-              this.debug(
-                '✅ Extracted conversation info on click:',
-                this.lastClickedConversationInfo,
-              );
-            } else {
-              this.debugWarn('⚠️ Failed to extract complete conversation info on click', {
-                conversationId,
-                title,
-                url,
-              });
-              this.lastClickedConversationInfo = null;
-            }
-
-            // Fallback: after the click, the Angular Material menu is rendered
-            // into a global overlay container. Poll briefly to inject our item
-            // even if the mutation observer misses the insertion.
-            let attempts = 0;
-            const maxAttempts = 20; // ~1s at 50ms intervals
-            const timer = window.setInterval(() => {
-              attempts++;
-              const menuContent = document.querySelector(
-                '.mat-mdc-menu-panel .mat-mdc-menu-content',
-              ) as HTMLElement | null;
-              if (menuContent) {
-                this.debug('Overlay poll: menu content found on attempt', attempts);
-                if (!menuContent.querySelector('.gv-move-to-folder-btn')) {
-                  this.debug('Overlay poll: injecting Move to Folder');
-                  this.injectMoveToFolderButton(menuContent);
-                }
-                window.clearInterval(timer);
-              } else if (attempts >= maxAttempts) {
-                this.debugWarn('Overlay poll: menu not found within attempts', maxAttempts);
-                window.clearInterval(timer);
-              }
-            }, 50);
-          }
+    const actionsContainer = trigger.closest('.conversation-actions-container');
+    if (actionsContainer) {
+      let sibling = actionsContainer.previousElementSibling;
+      while (sibling) {
+        if (sibling.getAttribute('data-test-id') === 'conversation') {
+          return sibling as HTMLElement;
         }
-      },
-      true,
+        sibling = sibling.previousElementSibling;
+      }
+    }
+
+    const historyItem = trigger.closest('[data-test-id^="history-item"]') as HTMLElement | null;
+    if (historyItem) return historyItem;
+
+    return null;
+  }
+
+  // Belt-and-suspenders alongside nativeMenuObserver: when a conversation ⋮
+  // trigger is clicked, resolve the panel it controls (via aria-controls/owns)
+  // and retry injection while the menu renders. This covers cases where the
+  // panel is re-used / re-rendered without a fresh childList mutation.
+  private setupConversationClickTracking(): void {
+    if (this.moveMenuTriggerHandler) return; // already wired (idempotent across reinit)
+
+    const handler = (event: Event) => {
+      if (this.isDestroyed) return;
+      // Any pointerdown/click marks the modality; used to decide whether to drop
+      // trigger focus on menu close (pointer) vs preserve it (keyboard a11y).
+      this.lastInputModality = 'pointer';
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+
+      if (event.type === 'click' && this.isNativeDeleteConfirmationTarget(target)) {
+        const conversationId = this.nativeDeleteCandidateId;
+        if (conversationId) {
+          this.clearNativeDeleteCandidate();
+          this.scheduleConversationRemovalCheck(conversationId);
+        }
+        return;
+      }
+
+      if (event.type === 'click' && this.isNativeDeleteMenuAction(target)) {
+        const conversationId = this.activeNativeMenuConversationId;
+        if (conversationId) {
+          this.rememberNativeDeleteCandidate(conversationId);
+        }
+        return;
+      }
+
+      const trigger = target.closest(CONVERSATION_MENU_TRIGGER_SELECTOR) as HTMLElement | null;
+      if (!trigger) return;
+
+      this.clearNativeDeleteCandidate();
+      const conversationEl = this.findConversationElementForTrigger(trigger);
+      const rawConversationId =
+        (conversationEl && this.extractNativeConversationId(conversationEl)) ||
+        this.extractConversationInfoFromPage()?.id ||
+        null;
+      this.activeNativeMenuConversationId = this.normalizeConversationId(rawConversationId);
+
+      const panelIds = this.parseMenuTriggerPanelIds(trigger);
+      for (let attempt = 0; attempt <= MOVE_MENU_INJECTION_RETRY_LIMIT; attempt++) {
+        window.setTimeout(() => {
+          if (this.isDestroyed) return;
+          if (panelIds.length > 0) {
+            panelIds.forEach((id) => {
+              const panel = document.getElementById(id);
+              if (panel instanceof HTMLElement && panel.matches(CONVERSATION_MENU_PANEL_SELECTOR)) {
+                this.tryInjectMoveToFolderOnPanel(panel);
+              }
+            });
+          } else {
+            document
+              .querySelectorAll<HTMLElement>(CONVERSATION_MENU_PANEL_SELECTOR)
+              .forEach((panel) => this.tryInjectMoveToFolderOnPanel(panel));
+          }
+        }, attempt * MOVE_MENU_INJECTION_RETRY_DELAY_MS);
+      }
+    };
+
+    document.addEventListener('click', handler, true);
+    document.addEventListener('pointerdown', handler, true);
+    this.moveMenuTriggerHandler = handler;
+
+    const keyHandler = () => {
+      if (!this.isDestroyed) this.lastInputModality = 'keyboard';
+    };
+    document.addEventListener('keydown', keyHandler, true);
+    this.moveMenuKeydownHandler = keyHandler;
+  }
+
+  private isNativeDeleteMenuAction(target: HTMLElement): boolean {
+    const action = target.closest(
+      '[data-test-id="delete-button"], button[role="menuitem"], [role="menuitem"], gem-menu-item',
+    ) as HTMLElement | null;
+    if (!action || action.closest('[class*="gv-"]')) return false;
+
+    const panel = action.closest(CONVERSATION_MENU_PANEL_SELECTOR) as HTMLElement | null;
+    if (!panel || !getConversationMenuContext(panel)) return false;
+    if (action.getAttribute('data-test-id') === 'delete-button') return true;
+
+    const icon = action.querySelector('mat-icon, .material-icons');
+    const iconName =
+      icon?.getAttribute('fonticon') ||
+      icon?.getAttribute('data-mat-icon-name') ||
+      icon?.textContent?.trim().toLowerCase();
+    if (iconName === 'delete' || iconName === 'delete_forever' || iconName === 'delete_outline') {
+      return true;
+    }
+
+    const text = action.textContent?.trim().toLowerCase() || '';
+    return this.getDeleteKeywords().some(
+      (keyword) => text === keyword || (text.includes(keyword) && text.length < 20),
     );
+  }
+
+  private isNativeDeleteConfirmationTarget(target: HTMLElement): boolean {
+    if (!this.nativeDeleteCandidateId) return false;
+    const button = target.closest('button, [role="button"]') as HTMLElement | null;
+    if (!button) return false;
+    const dialog = button.closest('[role="dialog"], .mat-mdc-dialog-container');
+    if (!dialog) return false;
+
+    const testId = button.getAttribute('data-test-id')?.toLowerCase() || '';
+    if (testId.includes('cancel')) return false;
+    if (testId.includes('confirm') || testId.includes('delete')) return true;
+
+    const text = button.textContent?.trim().toLowerCase() || '';
+    return this.getDeleteKeywords().some(
+      (keyword) => text === keyword || (text.includes(keyword) && text.length < 20),
+    );
+  }
+
+  private rememberNativeDeleteCandidate(conversationId: string): void {
+    const normalized = this.normalizeConversationId(conversationId);
+    if (!normalized) return;
+    this.clearNativeDeleteCandidate();
+    this.nativeDeleteCandidateId = normalized;
+    this.nativeDeleteCandidateTimer = window.setTimeout(
+      () => this.clearNativeDeleteCandidate(),
+      NATIVE_DELETE_CANDIDATE_TIMEOUT_MS,
+    );
+  }
+
+  private clearNativeDeleteCandidate(): void {
+    if (this.nativeDeleteCandidateTimer !== null) {
+      window.clearTimeout(this.nativeDeleteCandidateTimer);
+      this.nativeDeleteCandidateTimer = null;
+    }
+    this.nativeDeleteCandidateId = null;
+  }
+
+  // After a conversation ⋮ menu we injected into closes, mat-menu restores DOM
+  // focus to the trigger (Angular default), leaving the row highlighted via
+  // :focus-within. Drop that focus — but ONLY for plain pointer dismissals, so
+  // we never disturb keyboard navigation, the rename/delete flows, our
+  // move-to-folder dialog, or any confirm dialog that takes focus.
+  private releaseTriggerFocusAfterPointerClose(): void {
+    if (this.lastInputModality !== 'pointer') return;
+    window.setTimeout(() => {
+      if (this.isDestroyed) return;
+      // Skip if another overlay/dialog grabbed the stage (delete confirm, our
+      // move-to-folder dialog, any CDK dialog) — those manage their own focus.
+      if (
+        document.querySelector(
+          '.cdk-overlay-backdrop, .mat-mdc-dialog-container, .gv-folder-dialog-overlay',
+        )
+      ) {
+        return;
+      }
+      const active = document.activeElement as HTMLElement | null;
+      if (active && active.matches?.(CONVERSATION_MENU_TRIGGER_SELECTOR)) {
+        active.blur();
+      }
+    }, 0);
+  }
+
+  private parseMenuTriggerPanelIds(trigger: HTMLElement): string[] {
+    const raw = `${trigger.getAttribute('aria-controls') || ''} ${
+      trigger.getAttribute('aria-owns') || ''
+    }`;
+    return raw
+      .split(/\s+/)
+      .map((id) => id.trim())
+      .filter(Boolean);
+  }
+
+  private teardownMoveMenuTriggerListener(): void {
+    if (this.moveMenuTriggerHandler) {
+      document.removeEventListener('click', this.moveMenuTriggerHandler, true);
+      document.removeEventListener('pointerdown', this.moveMenuTriggerHandler, true);
+      this.moveMenuTriggerHandler = null;
+    }
+    if (this.moveMenuKeydownHandler) {
+      document.removeEventListener('keydown', this.moveMenuKeydownHandler, true);
+      this.moveMenuKeydownHandler = null;
+    }
+    this.activeNativeMenuConversationId = null;
+    this.clearNativeDeleteCandidate();
   }
 
   private extractNativeConversationId(conversationEl: HTMLElement): string | null {
@@ -4868,7 +6760,7 @@ export class FolderManager {
       (conversationEl.closest('[data-test-id="conversation"]') as HTMLElement) || conversationEl;
     // 1) Known title selectors
     const titleEl = scope.querySelector(
-      '.gds-label-l, .conversation-title-text, [data-test-id="conversation-title"], h3',
+      '.title-text, .gds-label-l, .conversation-title-text, [data-test-id="conversation-title"], h3',
     );
     let title = titleEl?.textContent?.trim() || null;
     if (title && !this.isGemLabel(title)) {
@@ -4909,6 +6801,68 @@ export class FolderManager {
     return null;
   }
 
+  /**
+   * Build a conversationId → native title lookup table with ONE sidebar scan.
+   *
+   * Mirrors the per-row matching semantics of `syncConversationTitleFromNative`
+   * (`jslog.includes(id)` and `link.href.includes(id)`): every `c_<hex>` id a
+   * row's jslog mentions and the id extracted from the row's link href are all
+   * registered, in both prefixed (`c_<hex>`) and bare (`<hex>`) forms, so
+   * callers can look up either id shape. First title-bearing row wins — same
+   * as the old first-match-in-DOM-order behavior.
+   */
+  private buildNativeConversationTitleMap(): Map<string, string> {
+    const map = new Map<string, string>();
+    try {
+      const conversations = document.querySelectorAll('[data-test-id="conversation"]');
+      for (const convEl of Array.from(conversations)) {
+        const element = convEl as HTMLElement;
+        const title = this.extractNativeConversationTitle(element);
+        if (!title) continue;
+
+        const register = (rawId: string | null | undefined): void => {
+          const hex = this.normalizeConversationId(rawId);
+          if (!hex) return;
+          if (!map.has(hex)) map.set(hex, title);
+          const prefixed = `c_${hex}`;
+          if (!map.has(prefixed)) map.set(prefixed, title);
+        };
+
+        const jslog = element.getAttribute('jslog');
+        if (jslog) {
+          for (const match of jslog.matchAll(/c_([a-f0-9]{8,})/gi)) {
+            register(match[1]);
+          }
+        }
+
+        const link = element.querySelector(
+          'a[href*="/app/"], a[href*="/gem/"]',
+        ) as HTMLAnchorElement | null;
+        if (link) {
+          register(this.extractConversationIdFromHref(link.href));
+        }
+      }
+    } catch (e) {
+      this.debug('Error building native title map:', e);
+    }
+    return map;
+  }
+
+  private lookupNativeConversationTitle(conversationId: string): string | null {
+    const map = this.nativeTitleLookup;
+    if (!map) return null;
+
+    const direct = map.get(conversationId);
+    if (direct) return direct;
+
+    const normalized = this.normalizeConversationId(conversationId);
+    if (normalized) {
+      const byHex = map.get(normalized);
+      if (byHex) return byHex;
+    }
+    return null;
+  }
+
   private syncConversationTitleFromNative(conversationId: string): string | null {
     try {
       // Try to find the conversation in the native sidebar by its ID
@@ -4943,35 +6897,71 @@ export class FolderManager {
     return null;
   }
 
-  private updateConversationTitle(conversationId: string, newTitle: string): void {
-    // Update the title for all instances of this conversation across all folders
+  private applyConversationTitleUpdate(conversationId: string, newTitle: string): boolean {
+    const title = newTitle.trim();
+    if (!title) return false;
+
     let updated = false;
+    const updatedAt = Date.now();
 
     for (const folderId in this.data.folderContents) {
       const conversations = this.data.folderContents[folderId];
       for (const conv of conversations) {
-        // Match by conversation ID (check both direct match and URL match)
-        if (
-          (conv.conversationId === conversationId || conv.url.includes(conversationId)) &&
-          !conv.customTitle
-        ) {
-          conv.title = newTitle;
-          updated = true;
-          this.debug(`Updated title for conversation ${conversationId} in folder ${folderId}`);
-        }
+        if (conv.customTitle) continue;
+        if (!this.isSameConversation(conversationId, conv)) continue;
+        if (conv.title === title) continue;
+
+        conv.title = title;
+        conv.updatedAt = updatedAt;
+        updated = true;
+        this.debug(`Updated title for conversation ${conversationId} in folder ${folderId}`);
       }
     }
 
-    if (updated) {
-      this.saveData();
-      // Re-render folders to show updated title
+    return updated;
+  }
+
+  private async syncConversationTitlesFromNative(): Promise<void> {
+    if (this.nativeTitleSyncInProgress) return;
+    if (!this.hasStoredConversations()) return;
+
+    this.nativeTitleSyncInProgress = true;
+    try {
+      let updated = false;
+      const conversations = this.getNativeConversationElements();
+
+      for (const convEl of Array.from(conversations)) {
+        const element = convEl as HTMLElement;
+        const conversationId =
+          this.extractNativeConversationId(element) ||
+          this.extractConversationIdFromElement(element);
+        const title = this.extractNativeConversationTitle(element);
+        if (!conversationId || !title) continue;
+
+        updated = this.applyConversationTitleUpdate(conversationId, title) || updated;
+      }
+
+      if (!updated) return;
+
+      await this.saveData();
       this.renderAllFolders();
+    } finally {
+      this.nativeTitleSyncInProgress = false;
     }
   }
 
+  private updateConversationTitle(conversationId: string, newTitle: string): void {
+    if (!this.applyConversationTitleUpdate(conversationId, newTitle)) return;
+
+    void this.saveData();
+    // Re-render folders to show updated title
+    this.renderAllFolders();
+  }
+
   /**
-   * Schedule a delayed check to confirm conversation deletion
-   * This prevents false positives when Gemini UI temporarily removes/re-adds elements
+   * Schedule a delayed check after an explicit native Delete action. DOM
+   * disappearance alone never calls this method because the sidebar virtualizes
+   * rows during normal scrolling.
    */
   private scheduleConversationRemovalCheck(conversationId: string): void {
     // Cancel any existing timer for this conversation
@@ -4990,23 +6980,6 @@ export class FolderManager {
     this.debug(
       `Scheduled removal check for ${conversationId} (delay: ${this.removalCheckDelay}ms)`,
     );
-  }
-
-  /**
-   * Cancel pending removal for a conversation element that was re-added
-   */
-  private cancelPendingRemovalForElement(element: HTMLElement): void {
-    // Extract conversation ID from the element
-    const conversationId = this.extractConversationIdFromElement(element);
-
-    if (conversationId) {
-      const timerId = this.pendingRemovals.get(conversationId);
-      if (timerId) {
-        clearTimeout(timerId);
-        this.pendingRemovals.delete(conversationId);
-        this.debug(`Cancelled removal for ${conversationId} (conversation re-added to DOM)`);
-      }
-    }
   }
 
   /**
@@ -5061,8 +7034,9 @@ export class FolderManager {
   }
 
   /**
-   * Confirm conversation removal after delay
-   * Only removes if conversation is truly deleted (not in DOM and not current conversation)
+   * Confirm an explicit native deletion after the UI has settled. The current
+   * URL / visible-row checks keep the folder entry if Gemini rejected or
+   * cancelled the operation.
    */
   private confirmConversationRemoval(conversationId: string): void {
     // Remove from pending list
@@ -5158,37 +7132,35 @@ export class FolderManager {
     return null;
   }
 
-  private extractHexIdFromMenu(menuContent: HTMLElement): string | null {
+  private buildConversationUrlFromId(hexId: string): string {
+    // Mirror extractConversationData's account-scope semantics: preserve the
+    // current /u/<index>/ segment for multi-account users so jslog-fallback
+    // URLs don't open in the wrong account. Under hard account isolation the
+    // /u/<index> segment is intentionally NOT persisted (navigation rebuilds
+    // it from the live page context).
+    let accountPrefix = '';
     try {
-      const nodes = menuContent.querySelectorAll('[jslog]');
-      for (const n of Array.from(nodes)) {
-        const val = n.getAttribute('jslog');
-        if (!val) continue;
-        const m = val.match(/c_([a-f0-9]{8,})/i);
-        if (m && m[1]) {
-          this.debug('extractId(menu jslog):', m[1]);
-          return m[1];
+      if (!this.accountIsolationEnabled) {
+        const userMatch = window.location.pathname.match(/\/u\/(\d+)\//);
+        if (userMatch) {
+          accountPrefix = `/u/${userMatch[1]}`;
         }
       }
     } catch (e) {
-      this.debugWarn('extractHexIdFromMenu error:', e);
+      this.debug('Failed to extract account prefix:', e);
     }
-    this.debugWarn('extractId(menu): not found');
-    return null;
-  }
 
-  private buildConversationUrlFromId(hexId: string): string {
     try {
       const path = window.location.pathname;
       const gemMatch = path.match(/\/gem\/([^\/]+)/);
       if (gemMatch && gemMatch[1]) {
         const gemId = gemMatch[1];
-        return `https://gemini.google.com/gem/${gemId}/${hexId}`;
+        return `https://gemini.google.com${accountPrefix}/gem/${gemId}/${hexId}`;
       }
     } catch (e) {
       this.debug('Failed to extract gem URL:', e);
     }
-    return `https://gemini.google.com/app/${hexId}`;
+    return `https://gemini.google.com${accountPrefix}/app/${hexId}`;
   }
 
   private extractFallbackTitle(conversationEl: HTMLElement): string | null {
@@ -5337,16 +7309,31 @@ export class FolderManager {
     }
   }
 
+  private getFolderConversationInstanceKey(folderId: string, conversationId: string): string {
+    return `${folderId}:${conversationId}`;
+  }
+
   private highlightActiveConversationInFolders(): void {
     if (!this.containerElement) return;
     const hex = this.getCurrentHexIdFromLocation();
     const currentId = hex ? `c_${hex}` : null;
-    const rows = this.containerElement.querySelectorAll('.gv-folder-conversation');
-    rows.forEach((el) => {
-      const row = el as HTMLElement;
-      const isActive = currentId && row.dataset.conversationId === currentId;
-      row.classList.toggle('gv-folder-conversation-selected', !!isActive);
-    });
+    const rows = Array.from(
+      this.containerElement.querySelectorAll<HTMLElement>('.gv-folder-conversation'),
+    );
+
+    rows.forEach((row) => row.classList.remove('gv-folder-conversation-selected'));
+    if (!currentId) return;
+
+    const matches = rows.filter((row) => row.dataset.conversationId === currentId);
+    const activeRow =
+      matches.find(
+        (row) =>
+          row.dataset.folderId &&
+          this.getFolderConversationInstanceKey(row.dataset.folderId, currentId) ===
+            this.activeFolderConversationKey,
+      ) ?? matches[0];
+
+    activeRow?.classList.add('gv-folder-conversation-selected');
   }
 
   /**
@@ -5446,6 +7433,10 @@ export class FolderManager {
    */
   private async loadData(): Promise<void> {
     try {
+      // On Safari, restore recovery backups from the durable mirror before any
+      // recoverFromBackup() can run (localStorage may have been ITP-evicted).
+      await this.backupService.ensureHydrated();
+
       let loadedData = await this.storage.loadData(this.activeStorageKey);
 
       if (!loadedData && this.accountIsolationEnabled && this.activeStorageKey !== STORAGE_KEY) {
@@ -5569,6 +7560,7 @@ export class FolderManager {
       }
 
       const migratedData = this.filterLegacyFolderDataByCurrentAccount(legacyData);
+      this.armStorageEchoSuppression();
       const saved = await this.storage.saveData(this.activeStorageKey, migratedData);
       if (!saved) {
         console.warn('[FolderManager] Failed to persist scoped migration data');
@@ -5683,13 +7675,69 @@ export class FolderManager {
   }
 
   /**
+   * Trailing-debounced save for high-frequency pure-UI state changes
+   * (expand/collapse, recently-opened marks). Coalesces a burst of calls into
+   * one `saveData()` run. Data-shape mutations (create/delete/rename/import/
+   * move) must keep calling `saveData()` directly.
+   */
+  private scheduleSaveData(): void {
+    if (this.saveDebounceTimer !== null) {
+      window.clearTimeout(this.saveDebounceTimer);
+    }
+    this.saveDebounceTimer = window.setTimeout(() => {
+      this.saveDebounceTimer = null;
+      void this.saveData();
+    }, SAVE_DEBOUNCE_MS);
+  }
+
+  /**
+   * Run a pending debounced save immediately. Called on beforeunload and
+   * teardown so a recent UI-state change isn't lost. The localStorage half of
+   * `saveData` is synchronous, so the data survives unload; the chrome.storage
+   * mirror is best-effort.
+   */
+  private flushPendingSaveData(): void {
+    if (this.saveDebounceTimer === null) return;
+    window.clearTimeout(this.saveDebounceTimer);
+    this.saveDebounceTimer = null;
+    void this.saveData();
+  }
+
+  /**
+   * Arm suppression of the chrome.storage.onChanged echo produced by our own
+   * mirror write. Must be called immediately before every
+   * `this.storage.saveData(...)` invocation. See `pendingStorageEchoes`.
+   */
+  private armStorageEchoSuppression(): void {
+    this.pendingStorageEchoes += 1;
+    this.lastStorageEchoArmedAt = Date.now();
+  }
+
+  /**
+   * Consume one armed echo. Returns true when the incoming onChanged event is
+   * our own mirror-write echo and should NOT trigger a reload. A stale counter
+   * (echo never delivered) expires after STORAGE_ECHO_SUPPRESS_WINDOW_MS so
+   * genuine external writes can never be swallowed indefinitely.
+   */
+  private consumeStorageEchoSuppression(): boolean {
+    if (this.pendingStorageEchoes <= 0) return false;
+    if (Date.now() - this.lastStorageEchoArmedAt > STORAGE_ECHO_SUPPRESS_WINDOW_MS) {
+      this.pendingStorageEchoes = 0;
+      return false;
+    }
+    this.pendingStorageEchoes -= 1;
+    return true;
+  }
+
+  /**
    * Save folder data to storage (async, browser-agnostic)
    * Uses storage adapter for automatic Safari/non-Safari handling
    */
   private async saveData(): Promise<boolean> {
     // Prevent concurrent saves to avoid race conditions
     if (this.saveInProgress) {
-      this.debug('Save already in progress, skipping duplicate call');
+      this.savePending = true;
+      this.debug('Save already in progress, queueing one trailing save');
       return false;
     }
 
@@ -5719,12 +7767,17 @@ export class FolderManager {
         }
       }
 
-      // Save via storage adapter (handles both Safari and non-Safari)
+      // Save via storage adapter (handles both Safari and non-Safari).
+      // Each write mirrors into chrome.storage.local and echoes back through
+      // storage.onChanged in this same context — arm suppression so the echo
+      // doesn't trigger a redundant full reload (see setupStorageListener).
+      this.armStorageEchoSuppression();
       success = await this.storage.saveData(this.activeStorageKey, this.data);
 
       // Retry once if the first attempt fails (for transient errors)
       if (!success) {
         console.warn('[FolderManager] Save failed, retrying once...');
+        this.armStorageEchoSuppression();
         success = await this.storage.saveData(this.activeStorageKey, this.data);
       }
 
@@ -5732,6 +7785,11 @@ export class FolderManager {
         // Create primary backup AFTER successful save
         this.backupService.createPrimaryBackup(this.data);
         this.debug('Data saved successfully');
+        // Centralised floating-panel sync. Any code path that persists folder
+        // data (sidebar actions, cloud download, native menu → "Move to
+        // folder", etc.) ends up here, so one hook keeps the floating view
+        // live without every call site having to remember.
+        this.floatingPanelHandle?.update(this.data, this.conversationSortMode);
       } else {
         console.error('[FolderManager] Save failed after retry');
       }
@@ -5740,6 +7798,11 @@ export class FolderManager {
       success = false;
     } finally {
       this.saveInProgress = false;
+      const shouldRunTrailingSave = this.savePending;
+      this.savePending = false;
+      if (shouldRunTrailingSave && !this.isDestroyed) {
+        void this.saveData();
+      }
     }
 
     return success;
@@ -5753,6 +7816,32 @@ export class FolderManager {
     } catch (error) {
       console.error('[FolderManager] Failed to load folder enabled setting:', error);
       this.folderEnabled = true;
+    }
+  }
+
+  /**
+   * Opt-in toggle that puts the folder feature into "floating window" mode.
+   * When on, the sidebar-injection path is skipped entirely and folders live
+   * in a body-level floating panel/FAB instead. Off by default — users opt in
+   * from the popup's Folder options.
+   */
+  private async loadFloatingModeSetting(): Promise<void> {
+    try {
+      const result = await browser.storage.sync.get({
+        [StorageKeys.FOLDER_FLOATING_MODE_ENABLED]: false,
+        [StorageKeys.FOLDER_FLOATING_OPEN_ON_START]: true,
+      });
+      this.floatingModeEnabled = result[StorageKeys.FOLDER_FLOATING_MODE_ENABLED] === true;
+      this.floatingOpenOnStart = result[StorageKeys.FOLDER_FLOATING_OPEN_ON_START] !== false;
+      this.debug('Loaded floating-mode setting:', {
+        enabled: this.floatingModeEnabled,
+        openOnStart: this.floatingOpenOnStart,
+      });
+    } catch (error) {
+      if (isExtensionContextInvalidatedError(error)) return;
+      console.error('[FolderManager] Failed to load floating-mode setting:', error);
+      this.floatingModeEnabled = false;
+      this.floatingOpenOnStart = true;
     }
   }
 
@@ -5822,6 +7911,187 @@ export class FolderManager {
     }
   }
 
+  private async loadFolderAnchorSetting(): Promise<void> {
+    try {
+      const result = await browser.storage.local.get({
+        [StorageKeys.FOLDERS_ANCHOR]: 'above-recents',
+      });
+      const raw = result[StorageKeys.FOLDERS_ANCHOR];
+      this.folderAnchor = raw === 'above-notebooks' ? 'above-notebooks' : 'above-recents';
+      this.debug('Loaded folder anchor preference:', this.folderAnchor);
+    } catch (error) {
+      console.error('[FolderManager] Failed to load folder anchor preference:', error);
+      this.folderAnchor = 'above-recents';
+    }
+  }
+
+  private async loadFoldersCollapsedSetting(): Promise<void> {
+    try {
+      const result = await browser.storage.local.get({
+        [StorageKeys.FOLDERS_COLLAPSED]: false,
+      });
+      this.foldersCollapsed = result[StorageKeys.FOLDERS_COLLAPSED] === true;
+      this.debug('Loaded folder collapsed preference:', this.foldersCollapsed);
+    } catch (error) {
+      console.error('[FolderManager] Failed to load folder collapsed preference:', error);
+      this.foldersCollapsed = false;
+    }
+  }
+
+  private applyFoldersCollapsedState(): void {
+    const container = this.containerElement;
+    if (!container) return;
+
+    container.classList.toggle('gv-folder-collapsed', this.foldersCollapsed);
+
+    const button = container.querySelector<HTMLButtonElement>('.gv-folder-section-toggle');
+    if (!button) return;
+
+    const label = this.t(this.foldersCollapsed ? 'pm_expand' : 'pm_collapse');
+    button.title = label;
+    button.setAttribute('aria-label', label);
+    button.setAttribute('aria-expanded', String(!this.foldersCollapsed));
+
+    const icon = button.querySelector<HTMLElement>('.google-symbols');
+    if (icon) {
+      icon.textContent = this.foldersCollapsed ? 'chevron_right' : 'expand_more';
+    }
+  }
+
+  private async toggleFoldersCollapsed(): Promise<void> {
+    this.foldersCollapsed = !this.foldersCollapsed;
+    this.applyFoldersCollapsedState();
+
+    try {
+      await browser.storage.local.set({ [StorageKeys.FOLDERS_COLLAPSED]: this.foldersCollapsed });
+    } catch (error) {
+      console.error('[FolderManager] Failed to persist folder collapsed preference:', error);
+    }
+  }
+
+  /**
+   * Flip the folder anchor between 'above-recents' and 'above-notebooks',
+   * persist it, and re-anchor the panel immediately. Persistence triggers the
+   * storage listener too, but we eagerly call the enforcer here so the user
+   * sees the panel jump instantly instead of waiting for the storage echo.
+   */
+  private async toggleFolderAnchor(): Promise<void> {
+    const next: 'above-recents' | 'above-notebooks' =
+      this.folderAnchor === 'above-notebooks' ? 'above-recents' : 'above-notebooks';
+    this.folderAnchor = next;
+    this.refreshNotebooksAnchorButtonState();
+    this.enforceFolderAboveRecents();
+    try {
+      await browser.storage.local.set({ [StorageKeys.FOLDERS_ANCHOR]: next });
+    } catch (error) {
+      console.error('[FolderManager] Failed to persist folder anchor preference:', error);
+    }
+  }
+
+  /**
+   * Build the small hover-reveal swap toggle that paints over the Notebooks
+   * section's top-right corner (taking the slot where the section-hider's eye
+   * used to live). Uses an inline SVG — not a `mat-icon` ligature — because
+   * Gemini ships its own `Luminous Symbols` font that doesn't include
+   * `swap_vert`; the public `Google Symbols` font does, but it's not loaded on
+   * gemini.google.com, so the ligature would render as the literal letter "S".
+   *
+   * Built as `<span role="button">` rather than `<button>` so it can sit
+   * inside Gemini's expandable-section without producing a nested button.
+   */
+  private createNotebooksAnchorButton(): HTMLElement {
+    const btn = document.createElement('span');
+    btn.className = 'gv-folders-anchor-toggle';
+    btn.setAttribute('role', 'button');
+    btn.setAttribute('tabindex', '0');
+    // Material Symbols `swap_vert` path data. Inline so font availability is
+    // a non-issue. viewBox matches the Material Symbols sheet.
+    btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" fill="currentColor" aria-hidden="true">
+      <path d="M320-440v-287L217-624l-57-56 200-200 200 200-57 56-103-103v287h-80Zm320 280L440-360l57-56 103 103v-287h80v287l103-103 57 56-200 200Z"/>
+    </svg>`;
+    btn.addEventListener('click', (e) => {
+      // Stop the click from bubbling to the expandable-section's header
+      // <button> (which would toggle the section open/closed).
+      e.stopPropagation();
+      e.preventDefault();
+      void this.toggleFolderAnchor();
+    });
+    btn.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.stopPropagation();
+      e.preventDefault();
+      void this.toggleFolderAnchor();
+    });
+    btn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    btn.addEventListener('mousedown', (e) => e.stopPropagation());
+    return btn;
+  }
+
+  /**
+   * Make sure exactly one swap toggle is mounted on the *current* Notebooks
+   * section. Safe to call on every position-enforcer tick: re-mounts after
+   * Gemini replaces the Notebooks element, no-ops once correctly attached.
+   */
+  private ensureNotebooksAnchorButton(): void {
+    if (this.isDestroyed) return;
+    if (!this.folderEnabled || this.floatingModeActive) {
+      this.cleanupNotebooksAnchorButton();
+      return;
+    }
+
+    const notebooks = this.findNotebooksSectionCandidate();
+    if (!notebooks) {
+      // Legacy layout or signed-out — nothing to paint on.
+      if (this.notebooksAnchorButton && !this.notebooksAnchorButton.isConnected) {
+        this.notebooksAnchorButton = null;
+      }
+      return;
+    }
+
+    const existing = this.notebooksAnchorButton;
+    if (existing && existing.parentElement === notebooks) {
+      this.refreshNotebooksAnchorButtonState();
+      return;
+    }
+
+    // Either no button yet, or the prior section element was replaced.
+    if (existing && existing.isConnected) existing.remove();
+    notebooks.classList.add('gv-folders-anchor-host');
+    const btn = this.createNotebooksAnchorButton();
+    notebooks.appendChild(btn);
+    this.notebooksAnchorButton = btn;
+    this.refreshNotebooksAnchorButtonState();
+  }
+
+  private cleanupNotebooksAnchorButton(): void {
+    if (this.notebooksAnchorButton) {
+      this.notebooksAnchorButton.remove();
+      this.notebooksAnchorButton = null;
+    }
+    // Strip the host class from any lingering Notebooks section so we don't
+    // leave it `position: relative` after the feature shuts down.
+    document
+      .querySelectorAll('expandable-section.gv-folders-anchor-host')
+      .forEach((el) => el.classList.remove('gv-folders-anchor-host'));
+  }
+
+  /**
+   * Sync the swap button's tooltip + active-state class with the current
+   * anchor preference. Tooltip describes the action a click will take (not
+   * the current state) so it stays useful no matter which side folders are on.
+   */
+  private refreshNotebooksAnchorButtonState(): void {
+    const btn = this.notebooksAnchorButton;
+    if (!btn) return;
+    const showsAboveNotebooks = this.folderAnchor === 'above-notebooks';
+    const label = showsAboveNotebooks
+      ? this.t('folder_anchor_move_above_recents')
+      : this.t('folder_anchor_move_above_notebooks');
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+    btn.classList.toggle('gv-anchor-above-notebooks', showsAboveNotebooks);
+  }
+
   private async loadHideArchivedSetting(): Promise<void> {
     try {
       const result = await browser.storage.sync.get({
@@ -5833,6 +8103,72 @@ export class FolderManager {
       console.error('[FolderManager] Failed to load hide archived setting:', error);
       this.hideArchivedConversations = false;
     }
+    // If the user has (or ever had) hide-archived turned on, they already know
+    // the feature exists. Mark the nudge as shown so we never surface it again
+    // even if they later turn the feature off.
+    this.markNudgeShownIfUserKnowsFeature();
+  }
+
+  private markNudgeShownIfUserKnowsFeature(): void {
+    if (!this.hideArchivedConversations) return;
+    if (this.hideArchivedNudgeShown) return;
+    this.hideArchivedNudgeShown = true;
+    browser.storage.sync
+      .set({ [StorageKeys.FOLDER_HIDE_ARCHIVED_NUDGE_SHOWN]: true })
+      .catch((error) => {
+        console.error(
+          '[FolderManager] Failed to persist nudge-shown flag after observing hide-archived=true:',
+          error,
+        );
+      });
+  }
+
+  private async loadHideArchivedNudgeShownSetting(): Promise<void> {
+    try {
+      const result = await browser.storage.sync.get({
+        [StorageKeys.FOLDER_HIDE_ARCHIVED_NUDGE_SHOWN]: false,
+      });
+      this.hideArchivedNudgeShown = !!result[StorageKeys.FOLDER_HIDE_ARCHIVED_NUDGE_SHOWN];
+      this.debug('Loaded hide-archived nudge shown flag:', this.hideArchivedNudgeShown);
+    } catch (error) {
+      console.error('[FolderManager] Failed to load hide-archived nudge flag:', error);
+      this.hideArchivedNudgeShown = false;
+    }
+  }
+
+  private maybeShowHideArchivedNudge(): void {
+    if (
+      !shouldShowHideArchivedNudge({
+        nudgeShown: this.hideArchivedNudgeShown,
+        hideArchivedAlreadyOn: this.hideArchivedConversations,
+      })
+    ) {
+      return;
+    }
+    if (!this.containerElement || !document.body.contains(this.containerElement)) return;
+
+    mountHideArchivedNudge({
+      container: this.containerElement,
+      onEnable: () => {
+        this.hideArchivedNudgeShown = true;
+        browser.storage.sync
+          .set({
+            [StorageKeys.FOLDER_HIDE_ARCHIVED_CONVERSATIONS]: true,
+            [StorageKeys.FOLDER_HIDE_ARCHIVED_NUDGE_SHOWN]: true,
+          })
+          .catch((error) => {
+            console.error('[FolderManager] Failed to enable hide-archived from nudge:', error);
+          });
+      },
+      onDismiss: () => {
+        this.hideArchivedNudgeShown = true;
+        browser.storage.sync
+          .set({ [StorageKeys.FOLDER_HIDE_ARCHIVED_NUDGE_SHOWN]: true })
+          .catch((error) => {
+            console.error('[FolderManager] Failed to persist nudge-dismissed flag:', error);
+          });
+      },
+    });
   }
 
   private async loadFilterUserSetting(): Promise<void> {
@@ -5846,6 +8182,39 @@ export class FolderManager {
       console.error('[FolderManager] Failed to load filter user setting:', error);
       this.filterCurrentUserOnly = false;
     }
+  }
+
+  private async loadFolderSearchEnabledSetting(): Promise<void> {
+    try {
+      const result = await browser.storage.sync.get({
+        [StorageKeys.FOLDER_SEARCH_ENABLED]: true,
+      });
+      this.folderSearchEnabled = result[StorageKeys.FOLDER_SEARCH_ENABLED] !== false;
+    } catch {
+      this.folderSearchEnabled = true;
+    }
+  }
+
+  private async loadFolderOnlySearchHintState(): Promise<void> {
+    this.folderOnlySearchHintSeen = await hasSeenCoachmark(FOLDER_ONLY_SEARCH_HINT_ID);
+  }
+
+  private applyFolderSearchEnabledSetting(value: unknown): void {
+    const next = value !== false;
+    if (next === this.folderSearchEnabled) return;
+
+    this.folderSearchEnabled = next;
+    if (!next) this.folderSearchQuery = '';
+    if (!this.containerElement) return;
+
+    this.containerElement.querySelector('.gv-folder-search')?.remove();
+
+    if (next) {
+      const list = this.containerElement.querySelector('.gv-folder-list');
+      this.containerElement.insertBefore(this.createFolderSearch(), list);
+    }
+
+    this.refresh();
   }
 
   private async loadFolderTreeIndentSetting(): Promise<void> {
@@ -5870,6 +8239,38 @@ export class FolderManager {
     } catch {
       this.folderProjectEnabled = false;
     }
+  }
+
+  private async loadConversationSortModeSetting(): Promise<void> {
+    try {
+      const result = await browser.storage.sync.get({
+        [StorageKeys.FOLDER_CONVERSATION_SORT_MODE]: 'manual',
+      });
+      this.conversationSortMode =
+        result[StorageKeys.FOLDER_CONVERSATION_SORT_MODE] === 'recent' ? 'recent' : 'manual';
+    } catch (error) {
+      console.error('[FolderManager] Failed to load conversation sort mode:', error);
+      this.conversationSortMode = 'manual';
+    }
+  }
+
+  private applyConversationSortMode(value: unknown): void {
+    const next: ConversationSortMode = value === 'recent' ? 'recent' : 'manual';
+    if (next === this.conversationSortMode) return;
+
+    this.conversationSortMode = next;
+    this.clearConversationReorderIndicator();
+    this.refresh();
+    this.floatingPanelHandle?.update(this.data, next);
+  }
+
+  private setConversationSortMode(mode: ConversationSortMode): void {
+    this.applyConversationSortMode(mode);
+    void browser.storage.sync
+      .set({ [StorageKeys.FOLDER_CONVERSATION_SORT_MODE]: mode })
+      .catch((error) => {
+        console.error('[FolderManager] Failed to persist conversation sort mode:', error);
+      });
   }
 
   private applyFolderTreeIndentSetting(value: unknown): void {
@@ -5906,17 +8307,86 @@ export class FolderManager {
           // Apply the change to folder visibility
           this.applyFolderEnabledSetting();
         }
+        if (changes[StorageKeys.FOLDER_FLOATING_OPEN_ON_START]) {
+          this.floatingOpenOnStart =
+            changes[StorageKeys.FOLDER_FLOATING_OPEN_ON_START].newValue !== false;
+          this.debug('Floating-mode startup panel setting changed:', this.floatingOpenOnStart);
+        }
+        if (changes[StorageKeys.FOLDER_FLOATING_MODE_ENABLED]) {
+          const next = changes[StorageKeys.FOLDER_FLOATING_MODE_ENABLED].newValue === true;
+          if (next !== this.floatingModeEnabled) {
+            this.floatingModeEnabled = next;
+            this.debug('Floating-mode toggle changed:', next);
+
+            if (!this.folderEnabled) {
+              // Folder feature itself is off — nothing to swap in or out, just
+              // remember the setting for when the user turns folders back on.
+            } else if (next) {
+              // Switch to floating: drop any sidebar-mode UI and mount the
+              // floating panel. `reinitializeFolderUI` would normally tear down
+              // the sidebar bits but also re-run sidebar init; we want the
+              // teardown without the re-init, so do it inline.
+              if (this.containerElement) {
+                this.containerElement.remove();
+                this.containerElement = null;
+              }
+              if (this.multiSelectHostElement) {
+                this.multiSelectHostElement.remove();
+                this.multiSelectHostElement = null;
+              }
+              if (this.conversationObserver) {
+                this.conversationObserver.disconnect();
+                this.conversationObserver = null;
+              }
+              if (this.sideNavObserver) {
+                this.sideNavObserver.disconnect();
+                this.sideNavObserver = null;
+              }
+              this.teardownPositionEnforcer();
+              this.cleanupNotebooksAnchorButton();
+              void this.startFloatingMode();
+            } else {
+              // Switch to sidebar: tear down floating, then ask the existing
+              // re-init pipeline to rebuild the sidebar panel.
+              this.stopFloatingMode();
+              this.reinitializeFolderUI();
+            }
+          }
+        }
         if (changes.geminiFolderHideArchivedConversations) {
           this.hideArchivedConversations = !!changes.geminiFolderHideArchivedConversations.newValue;
           this.debug('Hide archived setting changed:', this.hideArchivedConversations);
           // Apply the change to all conversations
           this.applyHideArchivedSetting();
+          // If user enabled hide-archived from the popup while the nudge is
+          // still visible, remove it — the nudge's purpose is already served.
+          if (this.hideArchivedConversations && this.containerElement) {
+            unmountHideArchivedNudge(this.containerElement);
+          }
+          // Persist that the user knows this feature, so turning it off later
+          // won't cause the nudge to reappear on the next archive.
+          this.markNudgeShownIfUserKnowsFeature();
+        }
+        if (changes[StorageKeys.FOLDER_HIDE_ARCHIVED_NUDGE_SHOWN]) {
+          this.hideArchivedNudgeShown =
+            !!changes[StorageKeys.FOLDER_HIDE_ARCHIVED_NUDGE_SHOWN].newValue;
+          if (this.hideArchivedNudgeShown && this.containerElement) {
+            unmountHideArchivedNudge(this.containerElement);
+          }
         }
         if (changes[StorageKeys.GV_FOLDER_TREE_INDENT]) {
           this.applyFolderTreeIndentSetting(changes[StorageKeys.GV_FOLDER_TREE_INDENT].newValue);
         }
+        if (changes[StorageKeys.FOLDER_SEARCH_ENABLED]) {
+          this.applyFolderSearchEnabledSetting(changes[StorageKeys.FOLDER_SEARCH_ENABLED].newValue);
+        }
         if (changes[StorageKeys.FOLDER_PROJECT_ENABLED]) {
           this.folderProjectEnabled = changes[StorageKeys.FOLDER_PROJECT_ENABLED].newValue === true;
+        }
+        if (changes[StorageKeys.FOLDER_CONVERSATION_SORT_MODE]) {
+          this.applyConversationSortMode(
+            changes[StorageKeys.FOLDER_CONVERSATION_SORT_MODE].newValue,
+          );
         }
         if (
           changes[StorageKeys.GV_ACCOUNT_ISOLATION_ENABLED] ||
@@ -5941,22 +8411,46 @@ export class FolderManager {
         this.debug('Language changed (local), updating UI text...');
         this.updateHeaderLanguageText();
       }
-      // Listen for folder data changes from cloud sync
+      // Listen for folder data changes from cloud sync / other tabs. Our own
+      // saveData mirror writes echo back here in the same context — skip
+      // those (each save arms one suppression token), otherwise every local
+      // save triggered a redundant reload + full re-render and a stale
+      // snapshot could briefly overwrite this.data mid-interaction.
       if (areaName === 'local' && changes[this.activeStorageKey]) {
-        this.debug('Folder data changed in chrome.storage.local, reloading...');
-        this.reloadFoldersFromStorage();
+        if (this.consumeStorageEchoSuppression()) {
+          this.debug('Ignoring self-write storage echo for folder data');
+        } else {
+          this.debug('Folder data changed in chrome.storage.local, reloading...');
+          this.reloadFoldersFromStorage();
+        }
+      }
+      // Folder anchor preference (local-only) — re-anchor the panel without
+      // a full reinit. Mirrors `toggleFolderAnchor` for the cross-tab case.
+      if (areaName === 'local' && changes[StorageKeys.FOLDERS_ANCHOR]) {
+        const raw = changes[StorageKeys.FOLDERS_ANCHOR].newValue;
+        const next: 'above-recents' | 'above-notebooks' =
+          raw === 'above-notebooks' ? 'above-notebooks' : 'above-recents';
+        if (next !== this.folderAnchor) {
+          this.folderAnchor = next;
+          this.debug('Folder anchor changed via storage event:', next);
+          this.refreshNotebooksAnchorButtonState();
+          this.enforceFolderAboveRecents();
+        }
+      }
+      if (areaName === 'local' && changes[StorageKeys.FOLDERS_COLLAPSED]) {
+        const next = changes[StorageKeys.FOLDERS_COLLAPSED].newValue === true;
+        if (next !== this.foldersCollapsed) {
+          this.foldersCollapsed = next;
+          this.applyFoldersCollapsedState();
+        }
       }
     });
 
-    // Listen for reload message from popup after sync
-    chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-      if (message?.type === 'gv.folders.reload') {
-        this.debug('Received folder reload message');
-        this.reloadFoldersFromStorage();
-        sendResponse({ ok: true });
-      }
-      return true;
-    });
+    // NOTE: the popup's 'gv.folders.reload' message is handled in
+    // setupMessageListener. A second chrome.runtime.onMessage listener here
+    // used to double-handle it (double loadData + double render per sync) and
+    // its unconditional `return true` left responder-less broadcasts pending
+    // forever on the sender side.
 
     // Perform migration from legacy settings
     this.performMigration();
@@ -6048,30 +8542,31 @@ export class FolderManager {
 
   private applyFolderEnabledSetting(): void {
     if (this.folderEnabled) {
-      // If folder UI doesn't exist yet, initialize it
+      this.debug('Folder feature enabled');
+
+      if (this.floatingModeEnabled) {
+        void this.startFloatingMode().catch((error) => {
+          console.error('[FolderManager] Failed to initialize floating folder UI:', error);
+        });
+        return;
+      }
+
       if (!this.containerElement) {
-        this.debug('Folder feature enabled, initializing UI');
-        this.initializeFolderUI().catch((error) => {
+        this.debug('Folder feature enabled, initializing sidebar UI');
+        void this.initializeFolderUI().catch((error) => {
           console.error('[FolderManager] Failed to initialize folder UI:', error);
         });
       } else {
-        // UI already exists, just show it
         this.containerElement.style.display = '';
-        this.debug('Folder feature enabled');
       }
     } else {
-      // Hide the folder UI if it exists
-      if (this.containerElement) {
-        this.containerElement.style.display = 'none';
-        this.debug('Folder feature disabled');
-      }
+      this.debug('Folder feature disabled, tearing down mounted runtime');
+      this.teardownMountedFolderRuntime();
     }
   }
 
   private applyHideArchivedSetting(): void {
-    if (!this.sidebarContainer) return;
-
-    const conversations = this.sidebarContainer.querySelectorAll('[data-test-id="conversation"]');
+    const conversations = this.getNativeConversationElements();
     conversations.forEach((conv) => {
       this.applyHideArchivedToConversation(conv as HTMLElement);
     });
@@ -6081,14 +8576,70 @@ export class FolderManager {
    * Apply hide archived setting to a single conversation element
    */
   private applyHideArchivedToConversation(conv: HTMLElement): void {
+    if (!this.hideArchivedConversations) {
+      if (
+        conv.classList.contains('gv-conversation-archived') ||
+        this.getNativeConversationActionsContainer(conv)?.classList.contains(
+          ARCHIVED_CONVERSATION_ACTIONS_CLASS,
+        )
+      ) {
+        this.setNativeConversationArchivedState(conv, false);
+      }
+      return;
+    }
+
     const convId = this.extractConversationId(conv);
     const isArchived = this.isConversationInFolders(convId);
 
-    if (this.hideArchivedConversations && isArchived) {
-      conv.classList.add('gv-conversation-archived');
-    } else {
-      conv.classList.remove('gv-conversation-archived');
+    this.setNativeConversationArchivedState(conv, isArchived);
+  }
+
+  private setNativeConversationArchivedState(conv: HTMLElement, isArchived: boolean): void {
+    conv.classList.toggle('gv-conversation-archived', isArchived);
+    this.getNativeConversationActionsContainer(conv)?.classList.toggle(
+      ARCHIVED_CONVERSATION_ACTIONS_CLASS,
+      isArchived,
+    );
+  }
+
+  /**
+   * `.conversation-actions-container` only exists in Gemini's legacy sidebar
+   * layout (lr26 renders the actions button INSIDE the conversation host).
+   * Probing per row turned every sidebar-open burst into an O(N²) scan —
+   * issue #753 — so probe the root once and cache the answer briefly.
+   */
+  private hasLegacyActionsContainer(): boolean {
+    const now = performance.now();
+    if (this.legacyActionsProbe && now - this.legacyActionsProbe.at < LEGACY_ACTIONS_PROBE_TTL_MS) {
+      return this.legacyActionsProbe.present;
     }
+    const present =
+      this.getNativeConversationRoot().querySelector('.conversation-actions-container') !== null;
+    this.legacyActionsProbe = { present, at: now };
+    return present;
+  }
+
+  private getNativeConversationActionsContainer(conversationEl: HTMLElement): HTMLElement | null {
+    // When no legacy actions container exists anywhere under the conversation
+    // root, neither the sibling walk nor the parent querySelector below can
+    // match — skip both (issue #753).
+    if (!this.hasLegacyActionsContainer()) return null;
+
+    const parent = conversationEl.parentElement;
+    if (!parent) return null;
+
+    let sibling = conversationEl.nextElementSibling;
+    while (sibling) {
+      if (
+        sibling instanceof HTMLElement &&
+        sibling.classList.contains('conversation-actions-container')
+      ) {
+        return sibling;
+      }
+      sibling = sibling.nextElementSibling;
+    }
+
+    return parent.querySelector<HTMLElement>('.conversation-actions-container');
   }
 
   private isConversationInFolders(conversationId: string): boolean {
@@ -6150,6 +8701,10 @@ export class FolderManager {
       gemId: conv.gemId,
     });
 
+    this.activeFolderConversationKey = this.getFolderConversationInstanceKey(
+      folderId,
+      conv.conversationId,
+    );
     this.navigateToConversation(conv.url, conv);
   }
 
@@ -6186,11 +8741,10 @@ export class FolderManager {
 
     if (!changed) return;
 
-    void this.saveData();
-
-    if (this.folderEnabled && this.containerElement) {
-      this.renderAllFolders();
-    }
+    // Keep the visible row stable during navigation; the saved time affects
+    // the next natural render. Debounced: rapid navigation shouldn't run the
+    // full save pipeline per click.
+    this.scheduleSaveData();
   }
 
   private normalizeConversationId(value: string | null | undefined): string | null {
@@ -6221,6 +8775,101 @@ export class FolderManager {
     return null;
   }
 
+  /**
+   * Extract conversation info from the current page URL and top-bar title.
+   * Used exclusively for the top-right conversation header menu (not sidebar).
+   *
+   * Returns null ONLY when the URL does not contain a valid conversation ID,
+   * in which case injection is skipped entirely.
+   * Title always has a fallback — never returns null for title.
+   */
+  private extractConversationInfoFromPage(): { id: string; title: string; url: string } | null {
+    // --- Robust URL parsing ---
+    let path: string;
+    try {
+      path = window.location.pathname;
+    } catch {
+      this.debugWarn('extractConversationInfoFromPage: failed to read location.pathname');
+      return null;
+    }
+
+    // Support multi-user prefix /u/<n>/, /app/<hexId>, and /gem/<gemId>/<hexId>
+    const hexMatch = path.match(/\/(?:app|gem\/[^/?#]+)\/([a-f0-9]{8,})/i);
+    if (!hexMatch?.[1]) {
+      this.debug('extractConversationInfoFromPage: no valid conversation ID in URL');
+      return null;
+    }
+    const id = hexMatch[1];
+    const url = window.location.href;
+
+    // --- Defensive title extraction ---
+    // Gemini generates titles asynchronously; the DOM element may not be ready yet.
+    // Try multiple selectors, then fallback to document.title, then to a default string.
+    const titleSelectors = [
+      '.conversation-title-container [data-test-id="conversation-title"]',
+      'top-bar-actions [data-test-id="conversation-title"]',
+      '.top-bar-actions [data-test-id="conversation-title"]',
+      '.conversation-title-container .conversation-title.gds-title-m',
+      'top-bar-actions .conversation-title.gds-title-m',
+    ];
+
+    // Placeholder strings Gemini shows before the chat is auto-titled.
+    // Must cover every locale Gemini supports — the DOM text is localized
+    // even though the brand name "Gemini" is not.
+    const DISALLOWED_TITLES = new Set([
+      '',
+      'Gemini',
+      'Google Gemini',
+      'New chat', // en
+      '新对话', // zh-CN
+      '新對話', // zh-TW
+      '新しいチャット', // ja
+      '새 채팅', // ko
+      'Nuevo chat', // es
+      'Nouveau chat', // fr
+      'Novo chat', // pt
+      'Новый чат', // ru
+      'محادثة جديدة', // ar
+    ]);
+
+    let title: string | null = null;
+    for (const sel of titleSelectors) {
+      try {
+        const el = document.querySelector(sel);
+        const text = el?.textContent?.trim();
+        if (text && !DISALLOWED_TITLES.has(text)) {
+          title = text;
+          break;
+        }
+      } catch {
+        // Continue to next selector
+      }
+    }
+
+    // Fallback 1: document.title (Gemini sets "Title - Gemini" format)
+    if (!title) {
+      try {
+        const docTitle = document.title?.trim();
+        if (docTitle) {
+          const cleaned = docTitle.replace(/\s*[-–—]\s*Gemini\s*$/i, '').trim();
+          if (cleaned && !DISALLOWED_TITLES.has(cleaned)) {
+            title = cleaned;
+          }
+        }
+      } catch {
+        // Continue to default
+      }
+    }
+
+    // Fallback 2: safe default — never return empty/null title
+    if (!title) {
+      title = 'Untitled';
+    }
+
+    this.debug('extractConversationInfoFromPage:', { id, title, url });
+    return { id, title, url };
+  }
+
   private findNativeConversationLinkById(conversationId: string): HTMLAnchorElement | null {
     const normalizedId = this.normalizeConversationId(conversationId);
     if (!normalizedId) return null;
@@ -6228,7 +8877,9 @@ export class FolderManager {
     const byJslog = document.querySelector(
       `[data-test-id="conversation"][jslog*="c_${normalizedId}"] a[href]`,
     ) as HTMLAnchorElement | null;
-    if (byJslog) return byJslog;
+    if (byJslog && this.extractConversationIdFromHref(byJslog.href) === normalizedId) {
+      return byJslog;
+    }
 
     const links = Array.from(
       document.querySelectorAll<HTMLAnchorElement>(
@@ -6253,11 +8904,32 @@ export class FolderManager {
     target.dispatchEvent(new MouseEvent('click', options));
   }
 
-  private navigateWithFullReload(url: string): void {
-    window.location.assign(url);
+  private navigateWithSpaRoute(url: string): boolean {
+    try {
+      const targetUrl = new URL(url, window.location.origin);
+      window.history.pushState({}, '', `${targetUrl.pathname}${targetUrl.search}${targetUrl.hash}`);
+      const event =
+        typeof PopStateEvent === 'function'
+          ? new PopStateEvent('popstate', { state: window.history.state })
+          : new Event('popstate');
+      window.dispatchEvent(event);
+      return true;
+    } catch (error) {
+      this.debug('SPA route navigation failed:', error);
+      return false;
+    }
+  }
+
+  private clearFolderNavigationConfirmation(): void {
+    if (this.folderNavigationConfirmTimer === null) return;
+    window.clearTimeout(this.folderNavigationConfirmTimer);
+    this.folderNavigationConfirmTimer = null;
   }
 
   private navigateToConversation(url: string, conversation?: ConversationReference): void {
+    // A newer folder click supersedes any delayed fallback from an older one.
+    this.clearFolderNavigationConfirmation();
+
     // Use History API to navigate without page reload (SPA-style)
     // This mimics how Gemini's original conversation links work
     try {
@@ -6288,12 +8960,34 @@ export class FolderManager {
       }
 
       const navigationUrl = this.accountIsolationEnabled && effectiveUrl ? effectiveUrl : url;
-      const hardNavigate = () => {
+      const finishNavigation = () => {
+        this.highlightActiveConversationInFolders();
+
+        // After navigation, sync title and check for gem updates
+        setTimeout(() => {
+          if (conversation && hexId) {
+            const syncedTitle = this.syncConversationTitleFromNative(hexId);
+            if (syncedTitle && syncedTitle !== conversation.title) {
+              this.updateConversationTitle(hexId, syncedTitle);
+              this.debug('Updated conversation title after navigation:', syncedTitle);
+            }
+          }
+
+          if (conversation && hexId && !conversation.gemId) {
+            this.checkAndUpdateGemId(hexId);
+          } else if (conversation?.gemId) {
+            this.debug('Known gem conversation:', conversation.gemId);
+          }
+        }, 300);
+      };
+      const spaNavigate = () => {
         if (hexId) {
           this.markConversationAsRecentlyOpened(hexId);
         }
 
-        this.navigateWithFullReload(navigationUrl);
+        if (this.navigateWithSpaRoute(navigationUrl)) {
+          finishNavigation();
+        }
       };
 
       if (hexId && currentConversationId === hexId) {
@@ -6303,44 +8997,26 @@ export class FolderManager {
 
       const sidebarLink = hexId ? this.findNativeConversationLinkById(hexId) : null;
       if (!sidebarLink) {
-        this.debug('Sidebar link not found, falling back to location.assign');
-        hardNavigate();
+        this.debug('Sidebar link not found, falling back to SPA route navigation');
+        spaNavigate();
         return;
       }
 
       this.triggerNativeConversationClick(sidebarLink);
       this.debug('Triggered native sidebar link click');
 
-      window.setTimeout(() => {
+      this.folderNavigationConfirmTimer = window.setTimeout(() => {
+        this.folderNavigationConfirmTimer = null;
         if (!hexId || this.getCurrentConversationId() === hexId) {
-          this.highlightActiveConversationInFolders();
-
-          // After navigation, sync title and check for gem updates
-          setTimeout(() => {
-            if (conversation && hexId) {
-              const syncedTitle = this.syncConversationTitleFromNative(hexId);
-              if (syncedTitle && syncedTitle !== conversation.title) {
-                this.updateConversationTitle(hexId, syncedTitle);
-                this.debug('Updated conversation title after navigation:', syncedTitle);
-              }
-            }
-
-            if (conversation && hexId && !conversation.gemId) {
-              this.checkAndUpdateGemId(hexId);
-            } else if (conversation?.gemId) {
-              this.debug('Known gem conversation:', conversation.gemId);
-            }
-          }, 300);
+          finishNavigation();
           return;
         }
 
-        this.debug('Native sidebar click did not navigate, falling back to location.assign');
-        hardNavigate();
+        this.debug('Native sidebar click did not navigate, falling back to SPA route navigation');
+        spaNavigate();
       }, FOLDER_NAVIGATION_CONFIRM_DELAY_MS);
     } catch (error) {
       console.error('[FolderManager] Navigation error:', error);
-      // Fallback to regular navigation
-      this.navigateWithFullReload(url);
     }
   }
 
@@ -6475,30 +9151,25 @@ export class FolderManager {
       this.debug('Failed to wrap history methods:', e);
     }
 
-    // Fallback poller for routers/flows that don't emit events
+    // Shared fallback for routers/flows that don't emit events.
     try {
       this.lastPathname = window.location.pathname;
-      this.navPoller = window.setInterval(() => {
-        if (this.isDestroyed) {
-          if (this.navPoller) clearInterval(this.navPoller);
-          return;
-        }
-        const now = window.location.pathname;
-        if (now !== this.lastPathname) {
-          this.lastPathname = now;
-          update();
-        }
-      }, 400);
+      cleanupFns.push(
+        watchRouteChanges(() => {
+          if (this.isDestroyed) return;
+          const now = window.location.pathname;
+          if (now !== this.lastPathname) {
+            this.lastPathname = now;
+            update();
+          }
+        }),
+      );
     } catch (e) {
-      this.debug('Failed to setup navigation poller:', e);
+      this.debug('Failed to setup navigation watcher:', e);
     }
 
     this.routeChangeCleanup = () => {
       cleanupFns.forEach((fn) => fn());
-      if (this.navPoller) {
-        clearInterval(this.navPoller);
-        this.navPoller = null;
-      }
     };
   }
 
@@ -6540,6 +9211,7 @@ export class FolderManager {
     if (title) {
       title.textContent = this.t('folder_title');
     }
+    this.applyFoldersCollapsedState();
 
     // Update button tooltips in header actions
     const actionsContainer = this.containerElement.querySelector('.gv-folder-header-actions');
@@ -6556,6 +9228,8 @@ export class FolderManager {
             btn.title = this.t('folder_filter_current_user');
           } else if (icon?.textContent === 'folder_managed') {
             btn.title = this.t('folder_import_export');
+          } else if (icon?.textContent === 'settings') {
+            btn.title = this.t('folder_settings');
           }
           // Cloud buttons use SVG, check for SVG content
           const svg = btn.querySelector('svg');
@@ -6572,17 +9246,37 @@ export class FolderManager {
       });
     }
 
+    const searchInput =
+      this.containerElement.querySelector<HTMLInputElement>('.gv-folder-search-input');
+    if (searchInput) {
+      const searchContainer = searchInput.closest<HTMLElement>('.gv-folder-search');
+      const modeBadge = searchContainer?.querySelector<HTMLElement>('.gv-folder-search-mode-badge');
+      if (searchContainer && modeBadge) {
+        this.updateFolderSearchInputState(searchContainer, searchInput, modeBadge);
+      }
+    }
+
     // Update empty state text if present
     const emptyState = this.containerElement.querySelector('.gv-folder-empty');
     if (emptyState) {
-      emptyState.textContent = this.t('folder_empty');
+      emptyState.textContent = this.t(
+        this.isFolderSearchActive() ? 'folder_search_empty' : 'folder_empty',
+      );
     }
+
+    // Notebooks corner swap toggle is mounted on the Notebooks section, not
+    // inside our container — refresh its tooltip in the now-current locale.
+    this.refreshNotebooksAnchorButtonState();
 
     this.debug('Header language text updated');
   }
 
   private setupMessageListener(): void {
-    browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    const listener = (
+      message: unknown,
+      _sender: Runtime.MessageSender,
+      sendResponse: (response: unknown) => void,
+    ): true | undefined => {
       const msg = message as Record<string, unknown>;
       // Handle request for current folder data
       if (msg.type === 'gv.sync.requestData') {
@@ -6592,18 +9286,16 @@ export class FolderManager {
           data: this.data,
           accountScope: this.toSyncAccountScope(this.accountScope),
         });
-        // Return true to indicate we might respond asynchronously (though we responded synchronously above)
-        // This is good practice in some browser implementations or if we change logic later
         return true;
       }
 
-      // Handle reload request (existing functionality might be handled elsewhere, but safe to add log)
+      // Handle reload request from the popup after a cloud sync. This is the
+      // single handler for this message (a duplicate listener used to live in
+      // setupStorageListener and double-processed every sync).
       if (msg.type === 'gv.folders.reload') {
         this.debug('Received reload request');
         this.loadData().then(() => {
           this.refresh();
-          // We can't easily respond to reload since it's fire-and-forget in some contexts,
-          // but if sendResponse is provided we can use it
           try {
             sendResponse({ ok: true });
           } catch {
@@ -6613,51 +9305,97 @@ export class FolderManager {
         return true;
       }
 
-      if (msg.type === 'gv.account.getContext') {
-        const context = detectAccountContextFromDocument(window.location.href, document);
-        sendResponse({ ok: true, context });
-        return true;
-      }
-
       // Handle request to collect all conversations and folder structure for AI organization
       if (msg.type === 'gv.folders.getStructureForAI') {
         this.debug('Received AI structure request');
-        const sidebarConversations = this.collectAllSidebarConversations();
-        sendResponse({
-          ok: true,
-          sidebarConversations,
-          folderData: this.data,
-        });
-        return true;
+        this.collectAllSidebarConversations()
+          .then((sidebarConversations) => {
+            sendResponse({ ok: true, sidebarConversations, folderData: this.data });
+          })
+          .catch((error) => {
+            this.debugWarn('getStructureForAI collection failed:', error);
+            sendResponse({ ok: true, sidebarConversations: [], folderData: this.data });
+          });
+        return true; // respond asynchronously after rows populate
       }
 
-      // Return true for all messages to keep the channel open
-      return true;
-    });
+      // Not a message we handle. Returning `true` here would claim "I will
+      // respond asynchronously" and never do so, leaving the sender's promise
+      // pending forever (e.g. a background broadcast awaiting Promise.all over
+      // every tab). Return undefined so the channel closes normally.
+      return undefined;
+    };
+    // The polyfill's OnMessageListener typing cannot express "sync-respond to
+    // some messages, ignore the rest" (its callback variant requires a constant
+    // `true` return). Runtime behavior is well-defined for both values, so
+    // cast: `true` keeps the channel open for handled messages, `undefined`
+    // closes it for unknown ones.
+    browser.runtime.onMessage.addListener(listener as Runtime.OnMessageListenerCallback);
   }
 
   /**
-   * Collect all conversation titles and URLs from the native sidebar DOM
+   * A conversation row is "populated" once Gemini fills in its link. The lr26
+   * sidebar virtualizes rows: `[data-test-id="conversation"]` elements exist as
+   * empty stubs (no link, no title) while collapsed or mid-render, and only gain
+   * an `<a href>` once actually rendered. We use the link as the populated signal.
    */
-  private collectAllSidebarConversations(): Array<{
-    id: string;
-    title: string;
-    url: string;
-  }> {
+  private isPopulatedConversationEl(el: HTMLElement): boolean {
+    return !!el.querySelector('a[href*="/app/"], a[href*="/gem/"]');
+  }
+
+  /**
+   * Collect all conversation titles and URLs from the native sidebar DOM.
+   * Waits for the virtualized rows to populate before reading them — otherwise
+   * the list comes back empty and the AI-organize prompt has nothing to work
+   * with (see #725).
+   */
+  private async collectAllSidebarConversations(): Promise<
+    Array<{ id: string; title: string; url: string }>
+  > {
+    await this.waitForPopulatedSidebarConversations();
+    return this.collectPopulatedConversations();
+  }
+
+  /** Synchronous extraction over the currently-populated sidebar rows. */
+  private collectPopulatedConversations(): Array<{ id: string; title: string; url: string }> {
     const results: Array<{ id: string; title: string; url: string }> = [];
-    const conversationEls = document.querySelectorAll('[data-test-id="conversation"]');
+    const seen = new Set<string>();
+    const conversationEls = this.getNativeConversationElements();
 
     for (const el of Array.from(conversationEls)) {
       const htmlEl = el as HTMLElement;
+      if (!this.isPopulatedConversationEl(htmlEl)) continue; // skip virtualized stub
       const id = this.extractNativeConversationId(htmlEl);
-      const title = this.extractNativeConversationTitle(htmlEl);
       const url = this.extractNativeConversationUrl(htmlEl);
-      if (id && title && url) {
-        results.push({ id, title, url });
-      }
+      if (!id || !url) continue;
+      if (seen.has(id)) continue; // collapsed rail can emit duplicate rows
+      seen.add(id);
+      const title = this.extractNativeConversationTitle(htmlEl) || 'Untitled';
+      results.push({ id, title, url });
     }
 
     return results;
+  }
+
+  /**
+   * Poll until at least one sidebar conversation row is populated, or timeout.
+   * Returns true if a populated row was found.
+   */
+  private async waitForPopulatedSidebarConversations(): Promise<boolean> {
+    const hasPopulated = () =>
+      Array.from(this.getNativeConversationElements()).some((el) =>
+        this.isPopulatedConversationEl(el as HTMLElement),
+      );
+
+    if (hasPopulated()) return true;
+
+    const deadline = Date.now() + AI_ORG_COLLECT_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      await this.delay(AI_ORG_COLLECT_POLL_MS);
+      if (this.isDestroyed) return false;
+      if (hasPopulated()) return true;
+    }
+    return false;
   }
 
   // Tooltip methods
@@ -7031,10 +9769,8 @@ export class FolderManager {
     this.importInProgress = true;
 
     try {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(jsonText);
-      } catch {
+      const parseResult = FolderImportExportService.parseJSONText(jsonText);
+      if (!parseResult.success) {
         this.showNotification(this.t('folder_import_invalid_format'), 'error');
         return;
       }
@@ -7044,7 +9780,7 @@ export class FolderManager {
         if (!confirmed) return;
       }
 
-      const validationResult = FolderImportExportService.validatePayload(parsed);
+      const validationResult = FolderImportExportService.validatePayload(parseResult.data);
       if (!validationResult.success) {
         this.showNotification(
           this.t('folder_import_invalid_format') + ': ' + validationResult.error.message,
@@ -7099,6 +9835,52 @@ export class FolderManager {
     } finally {
       this.importInProgress = false;
     }
+  }
+
+  private isFolderSearchActive(): boolean {
+    return this.folderSearchEnabled && normalizeFolderSearchText(this.folderSearchQuery).length > 0;
+  }
+
+  private isFolderOnlySearchActive(): boolean {
+    return this.isFolderSearchActive() && this.getFolderSearchCriteria().mode === 'folder';
+  }
+
+  private getFolderSearchCriteria(): FolderSearchCriteria {
+    return parseFolderSearchCriteria(this.folderSearchQuery);
+  }
+
+  private matchesFolderSearchText(value: string): boolean {
+    const { query } = this.getFolderSearchCriteria();
+    return query.length === 0 || normalizeFolderSearchText(value).includes(query);
+  }
+
+  private filterVisibleConversations(
+    conversations: ConversationReference[],
+    includeForFolderOnlySearch = false,
+  ): ConversationReference[] {
+    const userConversations = this.filterConversationsByCurrentUser(conversations);
+    if (!this.isFolderSearchActive()) return userConversations;
+    if (this.isFolderOnlySearchActive()) {
+      return includeForFolderOnlySearch ? userConversations : [];
+    }
+
+    return userConversations.filter((conversation) =>
+      this.matchesFolderSearchText(conversation.title),
+    );
+  }
+
+  private matchesFolderSearchTree(folderId: string): boolean {
+    if (!this.isFolderSearchActive()) return this.hasVisibleContent(folderId);
+
+    const folder = this.data.folders.find((item) => item.id === folderId);
+    if (!folder) return false;
+    if (this.matchesFolderSearchText(folder.name) && this.hasVisibleContent(folder.id)) return true;
+
+    const conversations = this.data.folderContents[folderId] || [];
+    if (this.filterVisibleConversations(conversations).length > 0) return true;
+
+    const subfolders = this.data.folders.filter((item) => item.parentId === folderId);
+    return subfolders.some((subfolder) => this.matchesFolderSearchTree(subfolder.id));
   }
 
   /**
@@ -7234,9 +10016,15 @@ export class FolderManager {
   }
 
   /**
-   * Show import/export dropdown menu
+   * Generic header dropdown menu opener. Used by import/export, cloud, and any
+   * other header action that wants a "click button → click an item" popover.
+   * Reuses the activeImportExportMenu slot so only one header menu is open at
+   * a time across the entire header.
    */
-  private showImportExportMenu(event: MouseEvent): void {
+  private openHeaderMenu(
+    event: MouseEvent,
+    items: Array<{ label: string; icon?: string; iconHtml?: string; action: () => void }>,
+  ): void {
     event.stopPropagation();
 
     if (this.activeImportExportMenu && !this.activeImportExportMenu.isConnected) {
@@ -7244,37 +10032,24 @@ export class FolderManager {
       this.removeActiveImportExportMenuCloseHandler();
     }
 
-    // Remove existing menu if already open (toggle behavior)
     if (this.activeImportExportMenu) {
       this.closeActiveImportExportMenu();
       return;
     }
 
-    // Create context menu
     const menu = document.createElement('div');
     menu.className = 'gv-folder-menu';
     menu.style.position = 'fixed';
     menu.style.left = `${event.clientX}px`;
     menu.style.top = `${event.clientY}px`;
 
-    const menuItems = [
-      {
-        label: this.t('folder_import'),
-        icon: 'upload',
-        action: () => this.showImportDialog(),
-      },
-      {
-        label: this.t('folder_export'),
-        icon: 'download',
-        action: () => this.exportFolders(),
-      },
-    ];
-
-    menuItems.forEach((item) => {
+    items.forEach((item) => {
       const menuItem = document.createElement('button');
       menuItem.className = 'gv-folder-menu-item';
-
-      menuItem.innerHTML = `<mat-icon role="img" class="mat-icon notranslate google-symbols mat-ligature-font mat-icon-no-color" aria-hidden="true" style="font-size: 18px; line-height: 1; margin-right: 8px;">${item.icon}</mat-icon>${item.label}`;
+      const iconMarkup = item.iconHtml
+        ? `<span class="gv-folder-menu-icon" aria-hidden="true">${item.iconHtml}</span>`
+        : `<mat-icon role="img" class="mat-icon notranslate google-symbols mat-ligature-font mat-icon-no-color" aria-hidden="true" style="font-size: 18px; line-height: 1; margin-right: 8px;">${item.icon ?? ''}</mat-icon>`;
+      menuItem.innerHTML = `${iconMarkup}${item.label}`;
       menuItem.addEventListener('click', () => {
         this.closeActiveImportExportMenu();
         item.action();
@@ -7283,11 +10058,8 @@ export class FolderManager {
     });
 
     document.body.appendChild(menu);
-
-    // Track this menu as the active one
     this.activeImportExportMenu = menu;
 
-    // Close menu on click outside
     const closeMenu = (e: MouseEvent) => {
       if (!menu.contains(e.target as Node)) {
         this.closeActiveImportExportMenu();
@@ -7298,6 +10070,261 @@ export class FolderManager {
       document.addEventListener('click', closeMenu);
       this.activeImportExportMenuListenerTimeout = null;
     }, 0);
+  }
+
+  /**
+   * Show import/export dropdown menu
+   */
+  private showImportExportMenu(event: MouseEvent): void {
+    this.openHeaderMenu(event, [
+      {
+        label: this.t('folder_import'),
+        icon: 'upload',
+        action: () => this.showImportDialog(),
+      },
+      {
+        label: this.t('folder_export'),
+        icon: 'download',
+        action: () => this.exportFolders(),
+      },
+    ]);
+  }
+
+  /**
+   * Cloud popover — replaces the previous two-button Upload/Sync split.
+   * Uses the original inline SVG glyphs because Gemini's bundled Material
+   * Symbols font does not include `cloud_upload` / `cloud_download` ligatures.
+   */
+  private showCloudMenu(event: MouseEvent): void {
+    const uploadSvg = `<svg xmlns="http://www.w3.org/2000/svg" height="20px" viewBox="0 -960 960 960" width="20px" fill="currentColor"><path d="M260-160q-91 0-155.5-63T40-377q0-78 47-139t123-78q25-92 100-149t170-57q117 0 198.5 81.5T760-520q69 8 114.5 59.5T920-340q0 75-52.5 127.5T740-160H520q-33 0-56.5-23.5T440-240v-206l-64 62-56-56 160-160 160 160-56 56-64-62v206h220q42 0 71-29t29-71q0-42-29-71t-71-29h-60v-80q0-83-58.5-141.5T480-720q-83 0-141.5 58.5T280-520h-20q-58 0-99 41t-41 99q0 58 41 99t99 41h100v80H260Zm220-280Z"/></svg>`;
+    const syncSvg = `<svg xmlns="http://www.w3.org/2000/svg" height="20px" viewBox="0 -960 960 960" width="20px" fill="currentColor"><path d="M260-160q-91 0-155.5-63T40-377q0-78 47-139t123-78q17-72 85-137t145-65q33 0 56.5 23.5T520-716v242l64-62 56 56-160 160-160-160 56-56 64 62v-242q-76 14-118 73.5T280-520h-20q-58 0-99 41t-41 99q0 58 41 99t99 41h480q42 0 71-29t29-71q0-42-29-71t-71-29h-60v-80q0-48-22-89.5T600-680v-93q74 35 117 103.5T760-520q69 8 114.5 59.5T920-340q0 75-52.5 127.5T740-160H260Zm220-358Z"/></svg>`;
+
+    this.openHeaderMenu(event, [
+      {
+        label: this.t('folder_cloud_upload'),
+        iconHtml: uploadSvg,
+        action: () => {
+          void this.handleCloudUpload();
+        },
+      },
+      {
+        label: this.t('folder_cloud_sync'),
+        iconHtml: syncSvg,
+        action: () => {
+          void this.handleCloudSync();
+        },
+      },
+    ]);
+  }
+
+  /**
+   * Folder settings popover. Hosts folder-scoped settings (conversation order,
+   * font size, spacing, and subfolder indent). Settings live next to the feature
+   * they control so users don't have to dig into the popup to tune them.
+   */
+  private showFolderSettingsMenu(event: MouseEvent): void {
+    event.stopPropagation();
+
+    if (this.activeImportExportMenu && !this.activeImportExportMenu.isConnected) {
+      this.activeImportExportMenu = null;
+      this.removeActiveImportExportMenuCloseHandler();
+    }
+
+    if (this.activeImportExportMenu) {
+      this.closeActiveImportExportMenu();
+      return;
+    }
+
+    const menu = document.createElement('div');
+    menu.className = 'gv-folder-menu gv-folder-settings-menu';
+    menu.style.position = 'fixed';
+    menu.style.left = `${event.clientX}px`;
+    menu.style.top = `${event.clientY}px`;
+
+    menu.appendChild(this.createConversationSortSettingsRow());
+
+    const steppers: Array<{
+      labelKey: string;
+      storageKey: string;
+      min: number;
+      max: number;
+      defaultValue: number;
+      unit?: string;
+    }> = [
+      {
+        labelKey: 'folder_item_font_size',
+        storageKey: StorageKeys.GV_FOLDER_ITEM_FONT_SIZE,
+        min: 12,
+        max: 18,
+        defaultValue: 13,
+        unit: 'px',
+      },
+      {
+        labelKey: 'folderSpacing',
+        storageKey: StorageKeys.GV_FOLDER_SPACING,
+        min: 0,
+        max: 16,
+        defaultValue: 2,
+      },
+      {
+        labelKey: 'folderTreeIndent',
+        storageKey: StorageKeys.GV_FOLDER_TREE_INDENT,
+        min: -8,
+        max: 32,
+        defaultValue: -8,
+      },
+    ];
+
+    steppers.forEach((config) => {
+      menu.appendChild(this.createSettingsStepperRow(config));
+    });
+
+    // Swallow clicks that originated inside the settings menu so a stepper press
+    // can't bubble up to the document-level "click outside → close" handler. This
+    // is a belt-and-suspenders layer on top of per-button stopPropagation, since
+    // some browsers re-target clicks when the focused element becomes disabled
+    // mid-event.
+    menu.addEventListener('click', (e) => e.stopPropagation());
+
+    document.body.appendChild(menu);
+    this.activeImportExportMenu = menu;
+
+    const closeMenu = (e: MouseEvent) => {
+      if (!menu.contains(e.target as Node)) {
+        this.closeActiveImportExportMenu();
+      }
+    };
+    this.activeImportExportMenuCloseHandler = closeMenu;
+    this.activeImportExportMenuListenerTimeout = window.setTimeout(() => {
+      document.addEventListener('click', closeMenu);
+      this.activeImportExportMenuListenerTimeout = null;
+    }, 0);
+  }
+
+  private createConversationSortSettingsRow(): HTMLElement {
+    const row = document.createElement('div');
+    row.className = 'gv-folder-settings-row gv-folder-sort-settings-row';
+
+    const label = document.createElement('span');
+    label.className = 'gv-folder-settings-label';
+    label.textContent = this.t('folder_sort');
+
+    const options = document.createElement('div');
+    options.className = 'gv-folder-sort-options';
+    options.setAttribute('role', 'group');
+    options.setAttribute('aria-label', this.t('folder_sort'));
+
+    const buttons = new Map<ConversationSortMode, HTMLButtonElement>();
+    const render = () => {
+      buttons.forEach((button, mode) => {
+        const active = this.conversationSortMode === mode;
+        button.classList.toggle('is-active', active);
+        button.setAttribute('aria-pressed', String(active));
+      });
+    };
+
+    (['manual', 'recent'] as const).forEach((mode) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'gv-folder-sort-option';
+      button.textContent = this.t(mode === 'manual' ? 'folder_sort_manual' : 'folder_sort_recent');
+      button.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.setConversationSortMode(mode);
+        render();
+      });
+      buttons.set(mode, button);
+      options.appendChild(button);
+    });
+
+    render();
+    row.append(label, options);
+    return row;
+  }
+
+  private createSettingsStepperRow(config: {
+    labelKey: string;
+    storageKey: string;
+    min: number;
+    max: number;
+    defaultValue: number;
+    unit?: string;
+  }): HTMLElement {
+    const { labelKey, storageKey, min, max, defaultValue, unit } = config;
+    const clamp = (n: number) =>
+      Math.min(max, Math.max(min, Math.round(Number.isFinite(n) ? n : defaultValue)));
+
+    const row = document.createElement('div');
+    row.className = 'gv-folder-settings-row';
+
+    const label = document.createElement('span');
+    label.className = 'gv-folder-settings-label';
+    label.textContent = this.t(labelKey);
+
+    const stepper = document.createElement('div');
+    stepper.className = 'gv-folder-stepper';
+
+    const minus = document.createElement('button');
+    minus.className = 'gv-folder-stepper-btn';
+    minus.type = 'button';
+    minus.innerHTML = `<mat-icon role="img" class="mat-icon notranslate google-symbols mat-ligature-font mat-icon-no-color" aria-hidden="true">remove</mat-icon>`;
+    minus.title = this.t('folder_item_font_size_decrease');
+
+    const value = document.createElement('span');
+    value.className = 'gv-folder-stepper-value';
+
+    const plus = document.createElement('button');
+    plus.className = 'gv-folder-stepper-btn';
+    plus.type = 'button';
+    plus.innerHTML = `<mat-icon role="img" class="mat-icon notranslate google-symbols mat-ligature-font mat-icon-no-color" aria-hidden="true">add</mat-icon>`;
+    plus.title = this.t('folder_item_font_size_increase');
+
+    let current = defaultValue;
+
+    const render = () => {
+      value.textContent = unit ? `${current}${unit}` : `${current}`;
+      minus.disabled = current <= min;
+      plus.disabled = current >= max;
+    };
+
+    const persist = (next: number) => {
+      current = clamp(next);
+      render();
+      try {
+        void chrome.storage.sync.set({ [storageKey]: current });
+      } catch (err) {
+        console.warn(`[FolderManager] Failed to save ${storageKey}:`, err);
+      }
+    };
+
+    minus.addEventListener('click', (e) => {
+      e.stopPropagation();
+      persist(current - 1);
+    });
+    plus.addEventListener('click', (e) => {
+      e.stopPropagation();
+      persist(current + 1);
+    });
+
+    try {
+      void chrome.storage.sync.get({ [storageKey]: defaultValue }).then((res) => {
+        const raw = (res as Record<string, unknown>)?.[storageKey];
+        const n = typeof raw === 'number' ? raw : Number(raw);
+        current = Number.isFinite(n) ? clamp(n) : defaultValue;
+        render();
+      });
+    } catch {
+      // Fall through to default render below.
+    }
+    render();
+
+    stepper.appendChild(minus);
+    stepper.appendChild(value);
+    stepper.appendChild(plus);
+
+    row.appendChild(label);
+    row.appendChild(stepper);
+    return row;
   }
 
   /**
@@ -7377,6 +10404,7 @@ export class FolderManager {
         | {
             ok?: boolean;
             error?: string;
+            highlights?: { synced?: boolean; count?: number; empty?: boolean };
             data?: {
               folders?: { data?: FolderData };
               prompts?: { items?: PromptItem[] };
@@ -7393,6 +10421,10 @@ export class FolderManager {
       }
 
       if (!response.data) {
+        if (response.highlights?.synced) {
+          this.showNotification(this.t('syncSuccess'), 'success');
+          return;
+        }
         this.showNotification(this.t('syncNoData') || 'No data in cloud', 'info');
         return;
       }
@@ -7458,7 +10490,7 @@ export class FolderManager {
 
       // Merge folder data
       const localFolders = this.data;
-      const mergedFolders = this.mergeFolderData(localFolders, cloudFolderData);
+      const mergedFolders = mergeFolderData(localFolders, cloudFolderData);
 
       // Merge prompts (simple ID-based merge)
       const mergedPrompts = this.mergePrompts(localPrompts, cloudPromptItems);
@@ -7577,43 +10609,6 @@ export class FolderManager {
     });
 
     return { messages: mergedMessages };
-  }
-
-  /**
-   * Merge two FolderData objects (local + cloud)
-   * Uses folder/conversation IDs to deduplicate
-   */
-  private mergeFolderData(local: FolderData, cloud: FolderData): FolderData {
-    // Merge folders by ID
-    const folderMap = new Map<string, Folder>();
-    local.folders.forEach((f) => folderMap.set(f.id, f));
-    cloud.folders.forEach((f) => {
-      if (!folderMap.has(f.id)) {
-        folderMap.set(f.id, f);
-      }
-      // If exists, keep local version (local takes priority)
-    });
-
-    // Merge folderContents
-    const mergedContents: FolderData['folderContents'] = { ...local.folderContents };
-    Object.entries(cloud.folderContents).forEach(([folderId, conversations]) => {
-      if (!mergedContents[folderId]) {
-        mergedContents[folderId] = conversations;
-      } else {
-        // Merge conversations in folder by conversationId
-        const existingIds = new Set(mergedContents[folderId].map((c) => c.conversationId));
-        conversations.forEach((conv) => {
-          if (!existingIds.has(conv.conversationId)) {
-            mergedContents[folderId].push(conv);
-          }
-        });
-      }
-    });
-
-    return {
-      folders: Array.from(folderMap.values()),
-      folderContents: mergedContents,
-    };
   }
 
   /**

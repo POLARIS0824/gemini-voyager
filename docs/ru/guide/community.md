@@ -29,11 +29,24 @@
   </a>
 </div>
 
+## 📱 Другие социальные платформы
+
+Меня также можно найти на этих платформах:
+
+<div style="margin: 1rem 0; display: flex; gap: 12px; flex-wrap: wrap;">
+  <a href="https://www.xiaohongshu.com/user/profile/5d366136000000001101950a" target="_blank" style="text-decoration: none;">
+    <img src="https://img.shields.io/badge/Xiaohongshu-@卡普迪姆-FF2442?style=for-the-badge" alt="Xiaohongshu">
+  </a>
+  <a href="https://space.bilibili.com/312249633" target="_blank" style="text-decoration: none;">
+    <img src="https://img.shields.io/badge/Bilibili-@卡普迪姆-FB7299?style=for-the-badge&logo=bilibili&logoColor=white" alt="Bilibili">
+  </a>
+</div>
+
 ## 🐙 GitHub Issues
 
 Если вы нашли ошибку или у вас есть конкретный запрос на функцию, пожалуйста, откройте issue на GitHub:
 
-- [Сообщить об ошибке](https://github.com/Nagi-ovo/gemini-voyager/issues/new?template=bug_report.yml)
-- [Предложить функцию](https://github.com/Nagi-ovo/gemini-voyager/issues/new?template=feature_request.yml)
+- [Сообщить об ошибке](https://github.com/Nagi-ovo/voyager/issues/new?template=bug_report.yml)
+- [Предложить функцию](https://github.com/Nagi-ovo/voyager/issues/new?template=feature_request.yml)
 
 Спасибо за поддержку Voyager! ❤️

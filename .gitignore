@@ -1,20 +1,33 @@
 node_modules/
+.build/
 /dist_chrome/
+/dist_chrome_dev/
+/dist_edge/
 /dist_firefox/
 /dist_safari/
-gemini-voyager-edge-*.zip
+voyager-edge-v*.zip
+final_body.md
+release_body.md
 
 # Vitest
 coverage/
 .vitest/
 
-# Generated Xcode projects (users generate these locally)
-/Gemini Voyager/
-*.xcodeproj/xcuserdata/
-*.xcworkspace/xcuserdata/
+# Xcode user state and build output
+**/*.xcodeproj/xcuserdata/
+**/*.xcworkspace/xcuserdata/
 DerivedData/
 safari/Models/Gemini*
+safari/Models/dmg_source/
 *.dmg
+*.cer
+*.crt
+*.p12
+*.pfx
+*.pem
+*.key
+*.mobileprovision
+*.provisionprofile
 
 .git-commit-message.txt
 
@@ -57,9 +70,13 @@ scripts/chrome-profile/
 .worktrees/
 
 # Local agent outputs
+.entire/
 .agent/
+.hermes/
 docs/plans/
 output/
 src/pages/content/printBridge/
 
 gemini-voyager-formal/
+
+.codegraph/

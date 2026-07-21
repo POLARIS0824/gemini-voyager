@@ -12,13 +12,15 @@
 
 最も簡単な方法で、自動更新に対応しています。
 
-**Chrome / Brave / Opera / Vivaldi：**
+**Chrome / Edge / Brave / Opera / Vivaldi：**
 
 [<img src="https://img.shields.io/badge/Chrome_ウェブストア-ダウンロード-4285F4?style=for-the-badge&logo=google-chrome&logoColor=white" alt="Chrome ウェブストアからインストール" height="40"/>](https://chromewebstore.google.com/detail/iifacdnjakkhjjiengaffnegbndgingi?utm_source=github&utm_medium=docs&utm_campaign=organic_growth&utm_content=ja)
 
 **Microsoft Edge：**
 
-[<img src="https://img.shields.io/badge/Microsoft_Edge-ダウンロード-0078D7?style=for-the-badge&logo=microsoft-edge&logoColor=white" alt="Microsoft Edge Add-ons からインストール" height="40"/>](https://microsoftedge.microsoft.com/addons/detail/gemini-voyager/gibmkggjijalcjinbdhcpklodjkhhlne)
+[<img src="https://img.shields.io/badge/Microsoft_Edge-ダウンロード-0078D7?style=for-the-badge&logo=microsoft-edge&logoColor=white" alt="Microsoft Edge Add-ons からインストール" height="40"/>](https://microsoftedge.microsoft.com/addons/detail/voyager/gibmkggjijalcjinbdhcpklodjkhhlne)
+
+> **Edge ユーザー：**モバイルやタブレットで Edge が必要なユーザーのため、Voyager は [Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/voyager/gibmkggjijalcjinbdhcpklodjkhhlne) 版の保守と公開を継続します。審査が遅れる場合は Chrome Web Store 版または GitHub の手動パッケージも利用できます。
 
 **Firefox：**
 
@@ -30,7 +32,7 @@
 
 **Chrome / Edge / Brave / Opera：**
 
-1. [GitHub Releases](https://github.com/Nagi-ovo/gemini-voyager/releases) から最新の `gemini-voyager-chrome-vX.Y.Z.zip` をダウンロードします。
+1. [GitHub Releases](https://github.com/Nagi-ovo/voyager/releases) から最新の `voyager-chrome-vX.Y.Z.zip` をダウンロードします。
 2. 解凍します。
 3. 拡張機能ページ (`chrome://extensions`) を開きます。
 4. **デベロッパーモード**（右上）をオンにします。
@@ -38,7 +40,7 @@
 
 **Firefox：**
 
-1. [Releases](https://github.com/Nagi-ovo/gemini-voyager/releases) から最新の `gemini-voyager-firefox-vX.Y.Z.xpi` をダウンロードします。
+1. [Releases](https://github.com/Nagi-ovo/voyager/releases) から最新の `voyager-firefox-vX.Y.Z.xpi` をダウンロードします。
 2. アドオン管理ページ (`about:addons`) を開きます。
 3. ダウンロードした `.xpi` ファイルをドラッグ＆ドロップしてインストールします（または右上の歯車アイコン ⚙️ -> **ファイルからアドオンをインストール**）。
 
@@ -55,8 +57,8 @@ Safari が直接配布に対応しました！署名済みアプリをダウン�
 
 > 💡 Safari ビルドが直接署名配布に対応しました。Xcode 変換は不要です！
 >
-> ⚠️ **制限事項**: Safari の特性上、(a) 透かしの削除 (b) 画像のエクスポート（PDF を推奨）はサポートされていません。
+> ✅ **Safari 正式サポート**：v1.6.0 以降、ウォーターマーク除去、画像エクスポート、Google Drive / iCloud 同期、応答完了通知、Sparkle 自動更新に対応しています。
 
 ---
 
-_コードに貢献したいですか？ 開発者の方は [貢献ガイド](https://github.com/Nagi-ovo/gemini-voyager/blob/main/.github/CONTRIBUTING.md) へどうぞ。_
+_コードに貢献したいですか？ 開発者の方は [貢献ガイド](https://github.com/Nagi-ovo/voyager/blob/main/.github/CONTRIBUTING.md) へどうぞ。_

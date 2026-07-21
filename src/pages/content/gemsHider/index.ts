@@ -1,5 +1,5 @@
 /**
- * Sidebar section hider for Gems and Notebooks.
+ * Sidebar section hider for Gems, Notebooks, and Voyager Folders.
  *
  * Gemini keeps shipping new sidebar section shells for project-like content.
  * This module keeps the same hide/show affordance across those variants while
@@ -10,6 +10,7 @@ import browser from 'webextension-polyfill';
 import { type StorageKey, StorageKeys } from '@/core/types/common';
 
 import { getTranslationSync } from '../../../utils/i18n';
+import { removeSidebarCollapseNudge, showSidebarCollapseNudgeOnce } from '../sidebarCollapseNudge';
 
 const STYLE_ID = 'gv-sidebar-section-hider-style';
 const HIDDEN_CLASS = 'gv-sidebar-section-hidden';
@@ -22,7 +23,7 @@ const PROCESSED_ATTR = 'data-gv-sidebar-section-hider';
 const SECTION_ID_ATTR = 'data-gv-sidebar-section-id';
 const ARROW_ICON_SELECTOR = '[data-test-id="arrow-icon"]';
 
-type SectionId = 'gems' | 'notebooks';
+type SectionId = 'gems' | 'notebooks' | 'folders';
 type TranslationKey = Parameters<typeof getTranslationSync>[0];
 
 interface HidableSectionConfig {
@@ -34,10 +35,28 @@ interface HidableSectionConfig {
   showTranslationKey: TranslationKey;
   hideFallback: string;
   showFallback: string;
+  toggleHostSelector?: string;
+  /**
+   * Where the hide-toggle button gets mounted.
+   *
+   * `'inline'` (default) inserts a real `<button>` into the toggle host element
+   * — used for folders, where the host is `.gv-folder-header-actions` (a plain
+   * div) so nested buttons are legal.
+   *
+   * `'absolute'` mounts a `<span role="button">` directly on the section
+   * element and positions it via CSS in the top-right corner. Used for Gemini's
+   * 2026 `<expandable-section>` shells, where the natural host
+   * `.expandable-section-header` is itself a `<button>` — nested interactive
+   * elements are invalid HTML and confuse keyboard navigation.
+   */
+  placement?: 'inline' | 'absolute';
 }
 
 const SECTION_CONFIGS: readonly HidableSectionConfig[] = [
   {
+    // Gemini's 2026 redesign removed the Gems section from the sidebar. We
+    // keep the config so older layouts still get the affordance; the new
+    // selector never matches on current Gemini.
     id: 'gems',
     containerSelector: '.gems-list-container',
     storageKey: StorageKeys.GEMS_HIDDEN,
@@ -46,20 +65,29 @@ const SECTION_CONFIGS: readonly HidableSectionConfig[] = [
     hideFallback: 'Hide Gems',
     showFallback: 'Show Gems',
   },
+  // Notebooks intentionally omitted: the same top-right slot is now used by
+  // the folder-anchor swap button (mounted from the folder manager). Keeping
+  // both would crowd the corner and the swap action subsumes the value of
+  // hiding the whole Notebooks section. The StorageKeys.NOTEBOOKS_HIDDEN key
+  // is preserved so any pre-existing hidden state simply stops applying — the
+  // section will naturally render again.
   {
-    id: 'notebooks',
-    containerSelector: '.project-sidenav-container',
-    requiredDescendantSelector: 'side-nav-entry-button[data-test-id="project-management-button"]',
-    storageKey: StorageKeys.NOTEBOOKS_HIDDEN,
-    hideTranslationKey: 'notebooksHide',
-    showTranslationKey: 'notebooksShow',
-    hideFallback: 'Hide Notebooks',
-    showFallback: 'Show Notebooks',
+    id: 'folders',
+    containerSelector: '.gv-folder-container:not(.gv-aistudio):not(.gv-multi-select-floating-host)',
+    requiredDescendantSelector: '.gv-folder-header',
+    storageKey: StorageKeys.FOLDERS_HIDDEN,
+    hideTranslationKey: 'foldersHide',
+    showTranslationKey: 'foldersShow',
+    hideFallback: 'Hide Folders',
+    showFallback: 'Show Folders',
+    toggleHostSelector: '.gv-folder-header-actions',
   },
 ] as const;
 
 let initialized = false;
 let observer: MutationObserver | null = null;
+let observerDebounceTimer: number | null = null;
+const observerPendingNodes = new Set<HTMLElement>();
 let languageChangeListener:
   | ((changes: Record<string, chrome.storage.StorageChange>, areaName: string) => void)
   | null = null;
@@ -109,7 +137,25 @@ function injectStyles(): void {
     }
 
     ${ARROW_ICON_SELECTOR}:hover .${TOGGLE_BTN_CLASS},
+    .gv-folder-header:hover .${TOGGLE_BTN_CLASS},
     .${TOGGLE_BTN_CLASS}:hover {
+      opacity: 1;
+      transform: scale(1);
+    }
+
+    /* Absolute-placement variant: mounted on the expandable-section itself
+     * (e.g. Notebooks) instead of nested inside the header button. Reveals on
+     * hover of the parent section. */
+    .${TOGGLE_BTN_CLASS}--absolute {
+      position: absolute;
+      top: 4px;
+      right: 8px;
+      margin-right: 0;
+      z-index: 2;
+    }
+    expandable-section:hover > .${TOGGLE_BTN_CLASS}--absolute,
+    .${TOGGLE_BTN_CLASS}--absolute:hover,
+    .${TOGGLE_BTN_CLASS}--absolute:focus-visible {
       opacity: 1;
       transform: scale(1);
     }
@@ -253,9 +299,26 @@ function getSectionText(section: HidableSectionConfig, kind: 'hide' | 'show'): s
   return getTranslationSync(translationKey) || fallback;
 }
 
-function createToggleButton(section: HidableSectionConfig): HTMLButtonElement {
-  const btn = document.createElement('button');
+/**
+ * Build the hide-toggle element.
+ *
+ * Inline mode returns a real `<button>` (current behavior for folders).
+ *
+ * Absolute mode returns a `<span role="button">` so the toggle can live inside
+ * an element that is itself a `<button>` (Gemini's `.expandable-section-header`)
+ * without producing invalid nested-button HTML. Keyboard support is added
+ * separately in `setupSectionHider`.
+ */
+function createToggleButton(section: HidableSectionConfig): HTMLElement {
+  const placement = section.placement ?? 'inline';
+  const useSpan = placement === 'absolute';
+  const btn = document.createElement(useSpan ? 'span' : 'button');
   btn.className = TOGGLE_BTN_CLASS;
+  if (useSpan) {
+    btn.classList.add(`${TOGGLE_BTN_CLASS}--absolute`);
+    btn.setAttribute('role', 'button');
+    btn.setAttribute('tabindex', '0');
+  }
   btn.setAttribute(SECTION_ID_ATTR, section.id);
 
   const label = getSectionText(section, 'hide');
@@ -328,6 +391,15 @@ async function getHiddenState(section: HidableSectionConfig): Promise<boolean> {
   return new Promise((resolve) => {
     try {
       chrome.storage?.local?.get({ [section.storageKey]: false }, (result) => {
+        // Check for chrome.runtime.lastError to avoid silent failures
+        if (chrome.runtime?.lastError) {
+          console.warn(
+            `[Gemini Voyager] getHiddenState error for ${section.id}:`,
+            chrome.runtime.lastError.message,
+          );
+          resolve(localStorage.getItem(section.storageKey) === 'true');
+          return;
+        }
         resolve(result?.[section.storageKey] === true);
       });
     } catch {
@@ -339,7 +411,16 @@ async function getHiddenState(section: HidableSectionConfig): Promise<boolean> {
 async function setHiddenState(section: HidableSectionConfig, hidden: boolean): Promise<void> {
   return new Promise((resolve) => {
     try {
-      chrome.storage?.local?.set({ [section.storageKey]: hidden }, () => resolve());
+      chrome.storage?.local?.set({ [section.storageKey]: hidden }, () => {
+        if (chrome.runtime?.lastError) {
+          console.warn(
+            `[Gemini Voyager] setHiddenState error for ${section.id}:`,
+            chrome.runtime.lastError.message,
+          );
+          localStorage.setItem(section.storageKey, String(hidden));
+        }
+        resolve();
+      });
     } catch {
       localStorage.setItem(section.storageKey, String(hidden));
       resolve();
@@ -348,6 +429,12 @@ async function setHiddenState(section: HidableSectionConfig, hidden: boolean): P
 }
 
 function applyState(sectionEl: HTMLElement, peekBar: HTMLDivElement, hidden: boolean): void {
+  // Guard: if either element was removed from the DOM (e.g. Gemini re-rendered
+  // the sidebar), skip applying state to avoid orphaned hidden elements.
+  if (!sectionEl.isConnected || !peekBar.isConnected) {
+    return;
+  }
+
   if (hidden) {
     sectionEl.classList.add(HIDDEN_CLASS);
     peekBar.classList.add('gv-visible');
@@ -392,10 +479,20 @@ async function setupSectionHider(
     return;
   }
 
-  const arrowIcon = sectionEl.querySelector(ARROW_ICON_SELECTOR);
+  const placement = section.placement ?? 'inline';
   const parent = sectionEl.parentElement;
-  if (!arrowIcon || !parent) {
+  if (!parent) {
     return;
+  }
+
+  // Inline mode needs an explicit host element to nest the button into.
+  // Absolute mode mounts the button directly on the section, but we still
+  // verify the requiredDescendantSelector matched (handled in caller) before
+  // proceeding so we don't paint a toggle on the wrong element.
+  let inlineHost: Element | null = null;
+  if (placement === 'inline') {
+    inlineHost = sectionEl.querySelector(section.toggleHostSelector ?? ARROW_ICON_SELECTOR);
+    if (!inlineHost) return;
   }
 
   const toggleBtn = createToggleButton(section);
@@ -405,21 +502,51 @@ async function setupSectionHider(
   sectionEl.classList.add(TARGET_CLASS);
   sectionEl.setAttribute(PROCESSED_ATTR, section.id);
 
-  arrowIcon.insertBefore(toggleBtn, arrowIcon.firstChild);
+  if (placement === 'absolute') {
+    // The button is `position: absolute` per CSS; mount it on the section
+    // (which has `position: relative` via TARGET_CLASS). Appending — instead
+    // of `insertBefore` on the header button — keeps it outside the native
+    // header `<button>`, avoiding nested-button HTML.
+    sectionEl.appendChild(toggleBtn);
+  } else {
+    inlineHost!.insertBefore(toggleBtn, inlineHost!.firstChild);
+  }
   parent.insertBefore(peekBar, sectionEl.nextSibling);
+
+  const handleHideRequest = async () => {
+    hasUserInteraction = true;
+    await setHiddenState(section, true);
+    applyState(sectionEl, peekBar, true);
+    void showSidebarCollapseNudgeOnce(peekBar);
+  };
 
   toggleBtn.addEventListener('click', async (event) => {
     event.stopPropagation();
     event.preventDefault();
-
-    hasUserInteraction = true;
-    await setHiddenState(section, true);
-    applyState(sectionEl, peekBar, true);
+    await handleHideRequest();
   });
+
+  // Span-as-button (absolute mode) needs explicit keyboard handling — native
+  // <button> Enter/Space activation isn't synthesized for span[role=button].
+  // Also stop pointerdown/mousedown bubbling so the underlying section header
+  // (which is itself a <button>) doesn't toggle expand/collapse on a stray
+  // drag-click that lands on the toggle.
+  if (placement === 'absolute') {
+    toggleBtn.addEventListener('keydown', async (event) => {
+      const ke = event as KeyboardEvent;
+      if (ke.key !== 'Enter' && ke.key !== ' ') return;
+      event.stopPropagation();
+      event.preventDefault();
+      await handleHideRequest();
+    });
+    toggleBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+    toggleBtn.addEventListener('mousedown', (e) => e.stopPropagation());
+  }
 
   peekBar.addEventListener('click', async () => {
     hasUserInteraction = true;
     hideTooltip();
+    removeSidebarCollapseNudge();
     await setHiddenState(section, false);
     applyState(sectionEl, peekBar, false);
   });
@@ -429,6 +556,7 @@ async function setupSectionHider(
       event.preventDefault();
       hasUserInteraction = true;
       hideTooltip();
+      removeSidebarCollapseNudge();
       await setHiddenState(section, false);
       applyState(sectionEl, peekBar, false);
     }
@@ -489,13 +617,23 @@ function initGemsHider(): void {
   setupSectionCandidates(document);
 
   observer = new MutationObserver((mutations) => {
-    mutations.forEach((mutation) => {
-      Array.from(mutation.addedNodes).forEach((node) => {
+    for (const mutation of mutations) {
+      for (const node of mutation.addedNodes) {
         if (node instanceof HTMLElement) {
-          setupSectionCandidates(node);
+          observerPendingNodes.add(node);
         }
-      });
-    });
+      }
+    }
+
+    if (observerDebounceTimer !== null) {
+      window.clearTimeout(observerDebounceTimer);
+    }
+    observerDebounceTimer = window.setTimeout(() => {
+      observerDebounceTimer = null;
+      const pendingNodes = Array.from(observerPendingNodes);
+      observerPendingNodes.clear();
+      pendingNodes.forEach((node) => setupSectionCandidates(node));
+    }, 100);
   });
 
   observer.observe(document.body, { childList: true, subtree: true });
@@ -510,6 +648,12 @@ function initGemsHider(): void {
 }
 
 function cleanup(): void {
+  if (observerDebounceTimer !== null) {
+    window.clearTimeout(observerDebounceTimer);
+    observerDebounceTimer = null;
+  }
+  observerPendingNodes.clear();
+
   if (observer) {
     observer.disconnect();
     observer = null;
@@ -524,6 +668,7 @@ function cleanup(): void {
   document.querySelectorAll(`.${TOGGLE_BTN_CLASS}`).forEach((element) => element.remove());
   document.querySelectorAll(`.${PEEK_BAR_CLASS}`).forEach((element) => element.remove());
   document.getElementById(TOOLTIP_ID)?.remove();
+  removeSidebarCollapseNudge();
   document.querySelectorAll(`.${HIDDEN_CLASS}`).forEach((element) => {
     element.classList.remove(HIDDEN_CLASS);
   });

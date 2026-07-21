@@ -15,6 +15,8 @@
  * - Returns processed image to complete the download
  */
 import { isExtensionContextInvalidatedError } from '@/core/utils/extensionContext';
+import { fetchImageViaExtensionRuntime } from '@/core/utils/runtimeImageFetch';
+import { WATERMARK_STORAGE_KEYS, resolveWatermarkSettings } from '@/core/utils/watermarkSettings';
 import { getTranslationSync } from '@/utils/i18n';
 import type { TranslationKey } from '@/utils/translations';
 
@@ -23,7 +25,18 @@ import { type StatusToastManager, createStatusToastManager } from './statusToast
 import { WatermarkEngine } from './watermarkEngine';
 
 let engine: WatermarkEngine | null = null;
+let enginePromise: Promise<WatermarkEngine> | null = null;
 const processingQueue = new Set<HTMLImageElement>();
+
+// Observers are kept at module scope so they can be disconnected on teardown
+// and so re-running startWatermarkRemover() can't stack duplicate observers.
+// Two of these watch document.body (subtree + attributes), so leaking them is
+// permanent page-wide overhead.
+let previewObserver: MutationObserver | null = null;
+let indicatorObserver: MutationObserver | null = null;
+let bridgeObserver: MutationObserver | null = null;
+let statusObserver: MutationObserver | null = null;
+const pendingDebounceTimeouts = new Set<ReturnType<typeof setTimeout>>();
 
 /**
  * Debounce function to limit execution frequency
@@ -31,8 +44,16 @@ const processingQueue = new Set<HTMLImageElement>();
 const debounce = <T extends (...args: unknown[]) => void>(func: T, wait: number): T => {
   let timeout: ReturnType<typeof setTimeout> | null = null;
   return ((...args: unknown[]) => {
-    if (timeout) clearTimeout(timeout);
-    timeout = setTimeout(() => func(...args), wait);
+    if (timeout) {
+      clearTimeout(timeout);
+      pendingDebounceTimeouts.delete(timeout);
+    }
+    timeout = setTimeout(() => {
+      if (timeout) pendingDebounceTimeouts.delete(timeout);
+      timeout = null;
+      func(...args);
+    }, wait);
+    pendingDebounceTimeouts.add(timeout);
   }) as T;
 };
 
@@ -41,25 +62,16 @@ const debounce = <T extends (...args: unknown[]) => void>(func: T, wait: number)
  * The background script has host_permissions that allow cross-origin requests
  */
 const fetchImageViaBackground = async (url: string): Promise<HTMLImageElement> => {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage({ type: 'gv.fetchImage', url }, (response) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-      if (!response || !response.ok) {
-        reject(new Error(response?.error || 'Failed to fetch image'));
-        return;
-      }
+  const response = await fetchImageViaExtensionRuntime(url);
+  if (!response) throw new Error('Failed to fetch image');
 
-      // Create image from base64 data
-      const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = () => reject(new Error('Failed to decode image'));
-      // Set crossOrigin before src to prevent canvas tainting in Firefox
-      img.crossOrigin = 'anonymous';
-      img.src = `data:${response.contentType};base64,${response.base64}`;
-    });
+  return await new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Failed to decode image'));
+    // Set crossOrigin before src to prevent canvas tainting in Firefox.
+    img.crossOrigin = 'anonymous';
+    img.src = `data:${response.contentType};base64,${response.base64}`;
   });
 };
 
@@ -99,54 +111,60 @@ const findGeminiImages = (): HTMLImageElement[] =>
  */
 const replaceWithNormalSize = (src: string): string => {
   // Use normal size image to fit watermark
-  return src.replace(/=s\d+[^?#]*/, '=s0');
+  return src.replace(/=[swh]\d+(?:-[wh]\d+)*/, '=s0');
 };
 
 /**
- * Add a visual indicator (🍌) to the native download button
- * The click goes through to the native button, which triggers the fetch interceptor
+ * Attach the 🍌 badge to a download button. The badge lives INSIDE the button
+ * because Gemini wraps it in `<gem-icon-button>` which has `overflow: hidden`,
+ * so any negative offset overhanging the wrapper would be clipped.
  */
-function addDownloadIndicator(imgElement: HTMLImageElement): void {
-  const container = imgElement.closest('generated-image,.generated-image-container');
-  if (!container) return;
+function attachIndicatorToButton(nativeButton: HTMLButtonElement): void {
+  // Idempotency: don't add a second indicator to the same button.
+  if (nativeButton.querySelector('.nanobanana-indicator')) return;
 
-  // Try to find Gemini's native download button area
-  const nativeDownloadIcon = container.querySelector(DOWNLOAD_ICON_SELECTOR);
-  const nativeButton = nativeDownloadIcon?.closest('button');
-
-  if (!nativeButton) return;
-
-  // Check if indicator already exists
-  if (container.querySelector('.nanobanana-indicator')) return;
-
-  // Create the banana indicator badge
   const indicator = document.createElement('span');
   indicator.className = 'nanobanana-indicator';
   indicator.textContent = '🍌';
   indicator.title =
     chrome.i18n.getMessage('nanobananaDownloadTooltip') ||
-    'NanoBanana: Downloads will have watermark removed';
+    'Image Refinement: Downloads will be processed automatically';
 
-  // Style it as a small badge on the button
   Object.assign(indicator.style, {
     position: 'absolute',
-    top: '-4px',
-    right: '-4px',
-    fontSize: '12px',
+    top: '2px',
+    right: '2px',
+    fontSize: '11px',
+    lineHeight: '1',
     pointerEvents: 'none', // Let clicks pass through to the native button
     zIndex: '10',
-    filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.3))',
+    filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.45))',
   });
 
-  // Make the button container relative for absolute positioning
-  const buttonContainer = nativeButton.parentElement;
-  if (buttonContainer) {
-    const currentPosition = getComputedStyle(buttonContainer).position;
-    if (currentPosition === 'static') {
-      (buttonContainer as HTMLElement).style.position = 'relative';
-    }
-    buttonContainer.appendChild(indicator);
+  // mdc-icon-button is `position: relative` by default; guard against future
+  // Gemini changes that might flip it to static.
+  if (getComputedStyle(nativeButton).position === 'static') {
+    nativeButton.style.position = 'relative';
   }
+  nativeButton.appendChild(indicator);
+}
+
+/**
+ * Add a visual indicator (🍌) to the native download button via the
+ * preview-image path. Looks up the button through the generated-image
+ * container; for the lightbox/expansion-dialog path, see
+ * decorateDownloadButtons() which walks every `<download-generated-image-button>`
+ * host (toolbar AND lightbox).
+ */
+function addDownloadIndicator(imgElement: HTMLImageElement): void {
+  const container = imgElement.closest('generated-image,.generated-image-container');
+  if (!container) return;
+
+  const nativeDownloadIcon = container.querySelector(DOWNLOAD_ICON_SELECTOR);
+  const nativeButton = nativeDownloadIcon?.closest('button');
+  if (!nativeButton) return;
+
+  attachIndicatorToButton(nativeButton as HTMLButtonElement);
 }
 
 /**
@@ -170,6 +188,7 @@ async function processImage(imgElement: HTMLImageElement): Promise<void> {
 
     // Replace image source with processed blob URL
     const processedUrl = URL.createObjectURL(processedBlob);
+    imgElement.dataset.watermarkOriginalSrc = originalSrc;
     imgElement.src = processedUrl;
     imgElement.dataset.watermarkProcessed = 'true';
     imgElement.dataset.processedUrl = processedUrl; // Store for reference
@@ -187,34 +206,67 @@ async function processImage(imgElement: HTMLImageElement): Promise<void> {
 }
 
 /**
- * Process all Gemini-generated images on the page
+ * Process all Gemini-generated images on the page (preview path)
  */
 const processAllImages = (): void => {
   const images = findGeminiImages();
   images.forEach(processImage);
 
-  // Also check existing processed images to see if they need an indicator
-  // (e.g. if the native buttons loaded after the image was processed)
-  const processedImages = document.querySelectorAll<HTMLImageElement>(
-    'img[data-watermark-processed="true"]',
-  );
-  processedImages.forEach((img) => {
-    addDownloadIndicator(img);
+  // Always re-run the indicator pass so blob-src previews and late-loading
+  // native buttons still pick up the 🍌 badge (idempotent).
+  decorateDownloadButtons();
+};
+
+/**
+ * Add the 🍌 indicator to every Gemini-generated image's download button.
+ *
+ * Walks `<download-generated-image-button>` hosts directly instead of going
+ * through the img element. This covers:
+ *  1. The in-message toolbar (host lives inside `<generated-image>`)
+ *  2. The lightbox / `<expansion-dialog>` rendered into `cdk-overlay-container`
+ *     — same custom element, but NOT inside any `generated-image` container.
+ *
+ * Also independent of the img src (blob: vs googleusercontent.com).
+ */
+export const decorateDownloadButtons = (): void => {
+  const hosts = document.querySelectorAll<HTMLElement>('download-generated-image-button');
+  hosts.forEach((host) => {
+    const button = host.querySelector<HTMLButtonElement>('button');
+    if (button) attachIndicatorToButton(button);
   });
 };
 
 /**
- * Setup MutationObserver to watch for new images
+ * Setup MutationObserver to watch for new images and run the preview pipeline.
  */
 const setupMutationObserver = (): void => {
+  if (previewObserver) return;
   const debouncedProcess = debounce(processAllImages, 100);
-  new MutationObserver(debouncedProcess).observe(document.body, {
+  previewObserver = new MutationObserver(debouncedProcess);
+  previewObserver.observe(document.body, {
     childList: true,
     subtree: true,
     attributes: true, // Watch for attribute changes (like native buttons appearing)
     attributeFilter: ['class', 'src'],
   });
   console.log('[Gemini Voyager] Watermark remover MutationObserver active');
+};
+
+/**
+ * Lighter MutationObserver used when only the download path is enabled: skips
+ * the canvas pipeline, only re-decorates download buttons.
+ */
+const setupIndicatorObserver = (): void => {
+  if (indicatorObserver) return;
+  const debouncedDecorate = debounce(decorateDownloadButtons, 100);
+  indicatorObserver = new MutationObserver(debouncedDecorate);
+  indicatorObserver.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['class', 'src'],
+  });
+  console.log('[Gemini Voyager] Watermark download-indicator observer active');
 };
 /**
  * DOM-based communication bridge ID (must match fetchInterceptor.js)
@@ -247,10 +299,11 @@ function notifyFetchInterceptor(enabled: boolean): void {
  * Uses MutationObserver to watch for requests in the bridge element
  */
 function setupFetchInterceptorBridge(): void {
+  if (bridgeObserver) return;
   const bridge = getBridgeElement();
 
   // Watch for requests from MAIN world via MutationObserver
-  const observer = new MutationObserver(async () => {
+  bridgeObserver = new MutationObserver(async () => {
     const requestData = bridge.dataset.request;
     if (requestData) {
       bridge.removeAttribute('data-request');
@@ -263,7 +316,7 @@ function setupFetchInterceptorBridge(): void {
     }
   });
 
-  observer.observe(bridge, { attributes: true, attributeFilter: ['data-request'] });
+  bridgeObserver.observe(bridge, { attributes: true, attributeFilter: ['data-request'] });
   console.log('[Gemini Voyager] Fetch interceptor bridge ready');
 }
 
@@ -275,6 +328,19 @@ async function processImageRequest(
   base64: string,
   bridge: HTMLElement,
 ): Promise<void> {
+  // Engine init is async (loads two PNG assets). The bridge observer is
+  // installed BEFORE the await on engine creation, so requests can land here
+  // before the engine is ready — queue on enginePromise instead of failing
+  // fast (otherwise users who click download right after the content script
+  // re-injects, e.g. after a /u/0/ → /u/1/ account switch, see the toast
+  // stuck for ~30s while the MAIN-world interceptor times out).
+  if (!engine && enginePromise) {
+    try {
+      await enginePromise;
+    } catch {
+      // engine init failed — fall through to the "not initialized" path
+    }
+  }
   if (!engine) {
     bridge.dataset.response = JSON.stringify({
       requestId,
@@ -313,31 +379,50 @@ export async function startWatermarkRemover(): Promise<void> {
     // Initialize bridge element first (so it exists when fetch interceptor loads)
     getBridgeElement();
 
-    // Check if feature is enabled
-    const result = await chrome.storage?.sync?.get({ geminiWatermarkRemoverEnabled: true });
-    const isEnabled = result?.geminiWatermarkRemoverEnabled !== false;
+    // Resolve the two split flags (with legacy fallback)
+    const result = await chrome.storage?.sync?.get([...WATERMARK_STORAGE_KEYS]);
+    const { download: downloadEnabled, preview: previewEnabled } = resolveWatermarkSettings(
+      result ?? null,
+    );
+    notifyFetchInterceptor(downloadEnabled);
 
-    // Notify MAIN world fetch interceptor about state
-    notifyFetchInterceptor(isEnabled);
-
-    if (!isEnabled) {
+    if (!downloadEnabled && !previewEnabled) {
       console.log('[Gemini Voyager] Watermark remover is disabled');
       return;
     }
 
-    // Setup status listener for UI feedback ASAP (avoid missing early signals)
+    // Setup status listener for UI feedback ASAP (avoid missing early signals).
+    // Both paths benefit from the toast/status pipeline when downloads happen.
     setupStatusListener();
     setupDownloadButtonTracking();
 
-    console.log('[Gemini Voyager] Initializing watermark remover...');
-    engine = await WatermarkEngine.create();
+    console.log(
+      `[Gemini Voyager] Initializing watermark remover (download=${downloadEnabled}, preview=${previewEnabled})`,
+    );
 
-    // Setup bridge to handle requests from fetch interceptor
-    setupFetchInterceptorBridge();
+    if (downloadEnabled) {
+      // Install the bridge observer BEFORE awaiting engine init so requests
+      // that arrive during the asset-loading window (typically 100ms-2s, and
+      // larger after a hard navigation like an account switch) are not lost.
+      // processImageRequest waits on enginePromise if the engine isn't ready.
+      setupFetchInterceptorBridge();
+    }
 
-    // Process preview images
-    processAllImages();
-    setupMutationObserver();
+    enginePromise = WatermarkEngine.create();
+    engine = await enginePromise;
+
+    if (previewEnabled) {
+      // Heavy path: replace each image's src with a watermark-stripped blob.
+      // The 🍌 indicator is attached as part of processImage().
+      processAllImages();
+      setupMutationObserver();
+    } else if (downloadEnabled) {
+      // Light path: only attach the 🍌 indicator to download buttons so users
+      // know the download will be unwatermarked, without running the canvas
+      // pipeline on every preview image.
+      decorateDownloadButtons();
+      setupIndicatorObserver();
+    }
 
     console.log('[Gemini Voyager] Watermark remover ready');
   } catch (error) {
@@ -348,13 +433,53 @@ export async function startWatermarkRemover(): Promise<void> {
   }
 }
 
+/**
+ * Fully tear down the watermark remover. Safe to call when nothing was started.
+ * Wired into the content-script beforeunload teardown so the two document.body
+ * subtree observers don't outlive the page; also written to be a complete stop
+ * (observers + MAIN-world interceptor + document listeners) so it can be reused
+ * for SPA teardown/restart without leaving the interceptor thinking it's enabled.
+ */
+export function stopWatermarkRemover(): void {
+  for (const observer of [previewObserver, indicatorObserver, bridgeObserver, statusObserver]) {
+    observer?.disconnect();
+  }
+  previewObserver = null;
+  indicatorObserver = null;
+  bridgeObserver = null;
+  statusObserver = null;
+  for (const timeout of pendingDebounceTimeouts) clearTimeout(timeout);
+  pendingDebounceTimeouts.clear();
+
+  // Tell the MAIN-world fetch interceptor the feature is off, so it stops
+  // intercepting and doesn't wait on bridge responses that will never come.
+  // Only if the bridge already exists — don't create one just to disable it
+  // (stop runs on every page's beforeunload, including where it never started).
+  const existingBridge = document.getElementById(GV_BRIDGE_ID);
+  if (existingBridge) {
+    existingBridge.dataset.enabled = 'false';
+  }
+
+  // Remove the global download-button tracking listeners.
+  if (downloadCaptureHandler) {
+    document.removeEventListener('pointerdown', downloadCaptureHandler, true);
+    document.removeEventListener('click', downloadCaptureHandler, true);
+    downloadCaptureHandler = null;
+  }
+  downloadTrackingReady = false;
+}
+
 let statusToastManager: StatusToastManager | null = null;
 let downloadTrackingReady = false;
+let downloadCaptureHandler: ((event: Event) => void) | null = null;
 let lastImmediateToastAt = 0;
 let sequenceCounter = 0;
 
 const LARGE_WARNING_AUTO_DISMISS_MS = 8000;
 const PROCESSING_FALLBACK_AUTO_DISMISS_MS = 35000;
+// Gemini can spend more than 10s walking the download chain on slow networks
+// before the final rd-gg/rd-gg-dl image request appears.
+const DOWNLOAD_INTENT_TTL_MS = 60000;
 
 type DownloadToastSequence = {
   id: number;
@@ -378,7 +503,14 @@ const t = (key: TranslationKey, fallback: string): string => {
   return value === key ? fallback : value;
 };
 
+function markDownloadIntent(): void {
+  const bridge = getBridgeElement();
+  bridge.dataset.downloadIntentExpiresAt = String(Date.now() + DOWNLOAD_INTENT_TTL_MS);
+}
+
 function showImmediateDownloadToast(button: HTMLButtonElement): void {
+  markDownloadIntent();
+
   const now = Date.now();
   if (now - lastImmediateToastAt < 300) return;
   lastImmediateToastAt = now;
@@ -394,7 +526,10 @@ function showImmediateDownloadToast(button: HTMLButtonElement): void {
   }
 
   const sequenceId = ++sequenceCounter;
-  const downloadToastId = manager.addToast(downloadMessage, 'info', { autoDismissMs: 3000 });
+  const downloadToastId = manager.addToast(downloadMessage, 'info', {
+    pending: true,
+    autoDismissMs: 3000,
+  });
 
   const processingTimer = setTimeout(() => {
     if (!activeSequence || activeSequence.id !== sequenceId) return;
@@ -423,20 +558,22 @@ function setupDownloadButtonTracking(): void {
   if (downloadTrackingReady) return;
   downloadTrackingReady = true;
 
-  const captureAnchor = (event: Event): void => {
+  downloadCaptureHandler = (event: Event): void => {
     const button = findNativeDownloadButton(event.target);
     if (!button) return;
+
     showImmediateDownloadToast(button);
   };
 
-  document.addEventListener('pointerdown', captureAnchor, true);
-  document.addEventListener('click', captureAnchor, true);
+  document.addEventListener('pointerdown', downloadCaptureHandler, true);
+  document.addEventListener('click', downloadCaptureHandler, true);
 }
 
 /**
  * Setup listener for status events from fetchInterceptor
  */
 function setupStatusListener(): void {
+  if (statusObserver) return;
   const bridge = getBridgeElement();
   const manager = getStatusToastManager();
   const downloadMessage = t('downloadingOriginal', '正在下载原始图片');
@@ -500,6 +637,7 @@ function setupStatusListener(): void {
             }
             if (!activeSequence.downloadToastId) {
               activeSequence.downloadToastId = manager.addToast(downloadMessage, 'info', {
+                pending: true,
                 autoDismissMs: 3000,
               });
             }
@@ -510,6 +648,7 @@ function setupStatusListener(): void {
           if (activeSequence) {
             if (!activeSequence.downloadToastId) {
               activeSequence.downloadToastId = manager.addToast(downloadLargeMessage, 'info', {
+                pending: true,
                 autoDismissMs: 3000,
               });
             } else {
@@ -549,13 +688,13 @@ function setupStatusListener(): void {
     }
   };
 
-  const observer = new MutationObserver(() => {
+  statusObserver = new MutationObserver(() => {
     const statusData = bridge.dataset.status;
     if (!statusData) return;
     handleStatus(statusData);
   });
 
-  observer.observe(bridge, { attributes: true, attributeFilter: ['data-status'] });
+  statusObserver.observe(bridge, { attributes: true, attributeFilter: ['data-status'] });
   if (bridge.dataset.status) {
     handleStatus(bridge.dataset.status);
   }

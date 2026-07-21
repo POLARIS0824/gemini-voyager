@@ -1,9 +1,11 @@
 # Patrocinar o Projeto
 
 > [!NOTE]
-> Se o Voyager for útil para você, compartilhe no X, Reddit, YouTube, etc. Cada partilha ajuda mais pessoas a descobrir o projeto e a melhorar a experiência com Gemini. Obrigado.
+> Se o Voyager for útil para você, compartilhe no X, Reddit, YouTube, etc., ou recomende-o a blogueiros, YouTubers ou a quem possa gostar. Cada partilha ajuda mais pessoas a descobrir o projeto e a melhorar a experiência com Gemini. Obrigado.
 
 Se o Voyager melhora a sua produtividade diária, considere patrocinar o projeto. O seu apoio ajuda-nos a manter o desenvolvimento ativo, corrigir bugs e adicionar novas funcionalidades.
+
+Este site não exibe Google Ads e a extensão não tem versão paga; também recusei financiamento de serviços de relay de API, porque não consigo confirmar como tratam os dados dos utilizadores. A intenção é simples: construir uma ferramenta que eu mesmo uso todos os dias e recomendaria a um amigo —— mantendo a sinceridade em meio ao barulho.
 
 ## Formas de Apoiar
 
@@ -23,7 +25,7 @@ Uma forma simples de oferecer um café como agradecimento.
 
 É grátis e ajuda imenso! Dê uma estrela ao nosso repositório para nos ajudar a alcançar mais pessoas.
 
-[<img src="https://img.shields.io/github/stars/Nagi-ovo/gemini-voyager?style=social" alt="GitHub stars" height="30"/>](https://github.com/Nagi-ovo/gemini-voyager)
+[<img src="/badges/github-stars.svg" alt="GitHub stars" height="30"/>](https://github.com/Nagi-ovo/voyager)
 
 ## Para onde vai o dinheiro?
 

@@ -88,7 +88,7 @@ async function fetchGitHubSponsors(token) {
       query: `
         query($login: String!, $cursor: String) {
           user(login: $login) {
-            sponsorshipsAsMaintainer(first: 100, after: $cursor, includePrivate: true, activeOnly: false, orderBy: {field: CREATED_AT, direction: DESC}) {
+            sponsorshipsAsMaintainer(first: 100, after: $cursor, includePrivate: false, activeOnly: true, orderBy: {field: CREATED_AT, direction: DESC}) {
               nodes {
                 sponsorEntity {
                   ... on User {
@@ -286,7 +286,7 @@ async function buildSvg({ githubSponsors, afdianSponsors, friends }) {
   const height = boardHeight + outerPadding * 2;
 
   const svg = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" role="img">
-    <title>Gemini Voyager Sponsors</title>
+    <title>Voyager Sponsors</title>
     <defs>
       ${defs.join('\n')}
     </defs>

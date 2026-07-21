@@ -12,13 +12,15 @@ Escolha o seu caminho.
 
 A forma mais simples de começar. As atualizações são automáticas.
 
-**Chrome / Brave / Opera / Vivaldi:**
+**Chrome / Edge / Brave / Opera / Vivaldi:**
 
 [<img src="https://img.shields.io/badge/Chrome_Web_Store-Download-4285F4?style=for-the-badge&logo=google-chrome&logoColor=white" alt="Instalar da Chrome Web Store" height="40"/>](https://chromewebstore.google.com/detail/iifacdnjakkhjjiengaffnegbndgingi?utm_source=github&utm_medium=docs&utm_campaign=organic_growth&utm_content=pt)
 
 **Microsoft Edge:**
 
-[<img src="https://img.shields.io/badge/Microsoft_Edge-Download-0078D7?style=for-the-badge&logo=microsoft-edge&logoColor=white" alt="Instalar do Microsoft Edge Add-ons" height="40"/>](https://microsoftedge.microsoft.com/addons/detail/gemini-voyager/gibmkggjijalcjinbdhcpklodjkhhlne)
+[<img src="https://img.shields.io/badge/Microsoft_Edge-Download-0078D7?style=for-the-badge&logo=microsoft-edge&logoColor=white" alt="Instalar do Microsoft Edge Add-ons" height="40"/>](https://microsoftedge.microsoft.com/addons/detail/voyager/gibmkggjijalcjinbdhcpklodjkhhlne)
+
+> **Usuários do Edge:** o Voyager continuará mantendo e publicando a versão do [Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/voyager/gibmkggjijalcjinbdhcpklodjkhhlne) para quem precisa do Edge em celulares ou tablets. Se a revisão atrasar, a Chrome Web Store e os pacotes manuais do GitHub continuam disponíveis.
 
 **Firefox:**
 
@@ -30,7 +32,7 @@ O processo de revisão da Web Store pode ser lento. Se quiser a versão de ponta
 
 **Para Chrome / Edge / Brave / Opera:**
 
-1. Descarregue o último `gemini-voyager-chrome-vX.Y.Z.zip` das [Releases do GitHub](https://github.com/Nagi-ovo/gemini-voyager/releases).
+1. Descarregue o último `voyager-chrome-vX.Y.Z.zip` das [Releases do GitHub](https://github.com/Nagi-ovo/voyager/releases).
 2. Descompacte o ficheiro.
 3. Abra a página de Extensões do seu navegador (`chrome://extensions`).
 4. Ative o **Modo de programador** (canto superior direito).
@@ -38,7 +40,7 @@ O processo de revisão da Web Store pode ser lento. Se quiser a versão de ponta
 
 **Para Firefox:**
 
-1. Descarregue o último `gemini-voyager-firefox-vX.Y.Z.xpi` das [Releases](https://github.com/Nagi-ovo/gemini-voyager/releases).
+1. Descarregue o último `voyager-firefox-vX.Y.Z.xpi` das [Releases](https://github.com/Nagi-ovo/voyager/releases).
 2. Abra o Gestor de Add-ons (`about:addons`).
 3. Arraste e largue o ficheiro `.xpi` para instalar (ou clique no ícone de engrenagem ⚙️ -> **Instalar Add-on de Ficheiro**).
 
@@ -55,8 +57,8 @@ O Safari agora suporta distribuição direta! Descarregue a aplicação pré-ass
 
 > 💡 A versão do Safari está agora diretamente assinada para distribuição — não é necessária conversão com Xcode!
 >
-> ⚠️ **Limitações**: Devido à natureza do Safari, (a) a remoção de marca d'água (b) a exportação de imagens (PDF recomendado) não são suportadas.
+> ✅ **Suporte oficial ao Safari**: desde a v1.6.0, há suporte para remoção de marca d'água, exportação de imagens, sincronização com Google Drive/iCloud, notificações de resposta e atualizações pelo Sparkle.
 
 ---
 
-_Configuração de desenvolvimento? Se é um programador à procura de contribuir, consulte o nosso [Guia de Contribuição](https://github.com/Nagi-ovo/gemini-voyager/blob/main/.github/CONTRIBUTING.md)._
+_Configuração de desenvolvimento? Se é um programador à procura de contribuir, consulte o nosso [Guia de Contribuição](https://github.com/Nagi-ovo/voyager/blob/main/.github/CONTRIBUTING.md)._

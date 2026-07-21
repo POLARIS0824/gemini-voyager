@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { fixBrokenBoldTags } from '../index';
+import { fixBrokenBoldTags, startMarkdownPatcher } from '../index';
 
 describe('fixBrokenBoldTags', () => {
   let container: HTMLDivElement;
@@ -24,6 +24,26 @@ describe('fixBrokenBoldTags', () => {
     container.innerHTML = '**One** and **Two**';
     fixBrokenBoldTags(container);
     expect(container.innerHTML).toBe('<strong>One</strong> and <strong>Two</strong>');
+  });
+
+  it('debounces mutation scans on the streaming path', async () => {
+    vi.useFakeTimers();
+    const stop = startMarkdownPatcher();
+    try {
+      const streamed = document.createElement('div');
+      streamed.textContent = 'Streamed **bold text**';
+      container.appendChild(streamed);
+      await Promise.resolve();
+
+      await vi.advanceTimersByTimeAsync(99);
+      expect(streamed.querySelector('strong')).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(streamed.querySelector('strong')?.textContent).toBe('bold text');
+    } finally {
+      stop();
+      vi.useRealTimers();
+    }
   });
 
   it('handles split-node bolding (interrupted by element)', () => {
@@ -83,6 +103,30 @@ describe('fixBrokenBoldTags', () => {
   });
 
   // ===== Issue #507: Consecutive bold groups across split nodes =====
+
+  describe('skip-zone semantics (issue #753 check-order regression)', () => {
+    it('leaves ** inside code blocks untouched', () => {
+      container.innerHTML = '<pre><code>const glob = "**/*.ts";</code></pre>';
+      fixBrokenBoldTags(container);
+      expect(container.querySelector('strong')).toBeNull();
+      expect(container.textContent).toBe('const glob = "**/*.ts";');
+    });
+
+    it('leaves ** inside editable areas untouched', () => {
+      container.innerHTML = '<div contenteditable="true">typing **bold** draft</div>';
+      fixBrokenBoldTags(container);
+      expect(container.querySelector('strong')).toBeNull();
+      expect(container.textContent).toBe('typing **bold** draft');
+    });
+
+    it('still bolds ** outside skip zones when siblings are inside them', () => {
+      container.innerHTML = '<code>**ignored**</code> plain **bold** tail';
+      fixBrokenBoldTags(container);
+      const strong = container.querySelector('strong');
+      expect(strong?.textContent).toBe('bold');
+      expect(container.querySelector('code')?.textContent).toBe('**ignored**');
+    });
+  });
 
   describe('consecutive split-node bolds (#507)', () => {
     it('two split-node bolds with short connector: **A** elem "**和**" elem **B**', () => {

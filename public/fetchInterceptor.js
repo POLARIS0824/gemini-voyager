@@ -15,6 +15,10 @@
 
   /** Timeout for watermark processing in milliseconds */
   const WATERMARK_PROCESSING_TIMEOUT_MS = 30000;
+  const DOWNLOAD_INTENT_ATTRIBUTE = 'data-download-intent-expires-at';
+  const NOTEBOOK_PATH_PATTERN = /^\/(?:u\/\d+\/)?notebooks?(?:\/|$)/;
+
+  const isNotebookRoute = () => NOTEBOOK_PATH_PATTERN.test(window.location.pathname);
 
   // Prevent double injection
   if (window.__gvFetchInterceptorInstalled) {
@@ -26,21 +30,55 @@
   console.log('[Gemini Voyager] Fetch interceptor loading (MAIN world)...');
 
   /**
-   * Pattern to match Gemini download URLs
-   * Only matches rd-gg-dl paths (dl = download) to avoid intercepting normal image display
-   * Matches both googleusercontent.com and ggpht.com domains
+   * Gemini's image download is a multi-step chain on `googleusercontent.com`:
+   *
+   *   /gg-dl/...=d-I        → text body containing the next URL (~450B)
+   *   /...usercontent.google.com/rd-gg-dl/...=s0-d-I  → another text body
+   *   /rd-gg-dl/...=s0-d-I  → the actual image bytes
+   *
+   * We intercept ONLY the final image step. Intercepting the text-body steps
+   * would consume `consumeDownloadIntent()` on the first hop and feed the
+   * watermark pipeline a 450-byte text blob (which fails to decode as an
+   * image), so they MUST pass through untouched.
+   *
+   *   /rd-gg-dl/  — current image endpoint
+   *   /rd-gg/     — older image endpoint, still occasionally seen
    */
   const GEMINI_DOWNLOAD_PATTERN =
-    /https:\/\/[^/]+(\.googleusercontent\.com|\.ggpht\.com)\/rd-gg-dl\//;
+    /https:\/\/[^/]+(\.googleusercontent\.com|\.ggpht\.com)\/(?:rd-gg-dl|rd-gg)\//;
   const CSP_BLOCKED_TELEMETRY_PATTERNS = [/^https:\/\/www\.googletagmanager\.com\/td\?/i];
-  const GOOGLE_SIZE_PATTERN = /=[swh]\d+[^?#]*/;
+  /**
+   * Matches Google's size token `=sNNN` / `=wNNN` / `=hNNN`. The size number is
+   * captured tightly (without trailing flags like `-d-I`) so a URL such as
+   * `=s0-d-I` keeps its download flag when we replace the size.
+   */
+  const GOOGLE_SIZE_PATTERN = /=[swh]\d+/;
+  /**
+   * Matches a URL that already requests the original size (`=s0` optionally
+   * followed by a `-flag` suffix). Such URLs should not be rewritten.
+   */
+  const ORIGINAL_SIZE_PATTERN = /=s0(?:-[A-Za-z0-9]+)?(?=[?#]|$)/;
+  /**
+   * Matches Google's download parameter `=d` / `=d-I`. URLs ending in this
+   * already serve the original-sized image so we must not append `-s0`.
+   */
+  const GOOGLE_DOWNLOAD_PARAM_PATTERN = /=d(?:-[A-Za-z0-9]+)?(?=[?#]|$)/;
 
   /**
    * Replace size parameter with =s0 for original size
    * Gemini uses =sNNN format for resized images, =s0 means original
    */
   const replaceWithOriginalSize = (src) => {
-    // Match common Google size patterns and replace with =s0 (but keep the rest of the URL)
+    // Already requesting original (e.g. `=s0`, `=s0-d-I`). Leave it alone.
+    if (ORIGINAL_SIZE_PATTERN.test(src)) {
+      return src;
+    }
+    // `=d` / `=d-I` URLs already serve the original-sized image; leave them untouched
+    // to avoid producing an invalid URL like `...=d-I?alr=yes-s0`.
+    if (GOOGLE_DOWNLOAD_PARAM_PATTERN.test(src)) {
+      return src;
+    }
+    // Replace size token while preserving any trailing flags (e.g. `=s512-d-I` → `=s0-d-I`).
     if (GOOGLE_SIZE_PATTERN.test(src)) {
       return src.replace(GOOGLE_SIZE_PATTERN, '=s0');
     }
@@ -90,6 +128,19 @@
     return bridge.dataset.enabled === 'true';
   };
 
+  /**
+   * Only user-initiated native download clicks should use the heavier
+   * watermark-removal download pipeline. Gemini may fetch rd-gg-dl URLs while
+   * an image is still being generated, and treating those as downloads creates
+   * confusing progress/success notifications.
+   */
+  const consumeDownloadIntent = () => {
+    const bridge = getBridgeElement();
+    const expiresAt = Number(bridge.dataset.downloadIntentExpiresAt || 0);
+    bridge.removeAttribute(DOWNLOAD_INTENT_ATTRIBUTE);
+    return Number.isFinite(expiresAt) && expiresAt >= Date.now();
+  };
+
   // Store original fetch
   const originalFetch = window.fetch;
 
@@ -99,6 +150,12 @@
   // Promise, which breaks Angular's zone.js change detection and causes link-block elements
   // to render with empty href attributes.
   window.fetch = function (...args) {
+    // Gemini is a SPA, so the interceptor may have been installed before navigating from a
+    // chat to a Notebook route. Keep every Notebook request on the untouched native path.
+    if (isNotebookRoute()) {
+      return originalFetch.apply(this, args);
+    }
+
     const url = typeof args[0] === 'string' ? args[0] : args[0]?.url;
 
     // Gemini page regularly triggers GTM telemetry requests that are blocked by page CSP.
@@ -111,6 +168,11 @@
 
     // Check if this is a Gemini download request (specifically rd-gg-dl for downloads)
     if (url && typeof url === 'string' && GEMINI_DOWNLOAD_PATTERN.test(url)) {
+      const shouldProcessDownload = isWatermarkRemoverEnabled() && consumeDownloadIntent();
+      if (!shouldProcessDownload) {
+        return originalFetch.apply(this, args);
+      }
+
       // Replace with original size URL
       const origSizeUrl = replaceWithOriginalSize(url);
 
@@ -134,107 +196,105 @@
         });
       }
 
-      // Only process watermark removal if enabled — use async IIFE only for this path
-      if (isWatermarkRemoverEnabled()) {
-        return (async () => {
-          console.log('[Gemini Voyager] Intercepting download for watermark removal');
+      // Use async IIFE only for the user-initiated watermark removal path.
+      return (async () => {
+        console.log('[Gemini Voyager] Intercepting download for watermark removal');
 
-          // Declare response and blob outside try block so they're accessible in catch
-          let response, blob;
+        // Declare response and blob outside try block so they're accessible in catch
+        let response, blob;
 
-          try {
-            // Check content length first (via HEAD request) to show appropriate message
-            // But we'll just show "downloading" first and update if large
-            updateStatus('DOWNLOADING');
+        try {
+          // Check content length first (via HEAD request) to show appropriate message
+          // But we'll just show "downloading" first and update if large
+          updateStatus('DOWNLOADING');
 
-            // Fetch the original size image
-            response = await originalFetch.apply(this, args);
+          // Fetch the original size image
+          response = await originalFetch.apply(this, args);
 
-            if (!response.ok) {
-              updateStatus('ERROR', { message: `HTTP Error: ${response.status}` });
-              return response;
-            }
+          if (!response.ok) {
+            updateStatus('ERROR', { message: `HTTP Error: ${response.status}` });
+            return response;
+          }
 
-            // Check content length for large files (5MB) - update status
-            const contentLength = response.headers.get('content-length');
-            if (contentLength && parseInt(contentLength, 10) > 5 * 1024 * 1024) {
-              updateStatus('DOWNLOADING_LARGE');
-            }
+          // Check content length for large files (5MB) - update status
+          const contentLength = response.headers.get('content-length');
+          if (contentLength && parseInt(contentLength, 10) > 5 * 1024 * 1024) {
+            updateStatus('DOWNLOADING_LARGE');
+          }
 
-            // Clone response to read blob
-            blob = await response.blob();
+          // Clone response to read blob
+          blob = await response.blob();
 
-            // Step 2: Processing
-            updateStatus('PROCESSING');
+          // Step 2: Processing
+          updateStatus('PROCESSING');
 
-            // Send blob to content script for watermark removal via DOM bridge
-            const processedBlob = await new Promise((resolve, reject) => {
-              const requestId = 'gv_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-              const bridge = getBridgeElement();
+          // Send blob to content script for watermark removal via DOM bridge
+          const processedBlob = await new Promise((resolve, reject) => {
+            const requestId = 'gv_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            const bridge = getBridgeElement();
 
-              // Watch for response via MutationObserver (works across worlds in Firefox)
-              const observer = new MutationObserver(() => {
-                const response = bridge.dataset.response;
-                if (response) {
-                  try {
-                    const data = JSON.parse(response);
-                    if (data.requestId === requestId) {
-                      observer.disconnect();
-                      bridge.removeAttribute('data-response');
+            // Watch for response via MutationObserver (works across worlds in Firefox)
+            const observer = new MutationObserver(() => {
+              const response = bridge.dataset.response;
+              if (response) {
+                try {
+                  const data = JSON.parse(response);
+                  if (data.requestId === requestId) {
+                    observer.disconnect();
+                    bridge.removeAttribute('data-response');
 
-                      if (data.error) reject(new Error(data.error));
-                      else
-                        fetch(data.base64)
-                          .then((r) => r.blob())
-                          .then(resolve)
-                          .catch(reject);
-                    }
-                  } catch (e) {
-                    console.warn('[Gemini Voyager] Failed to parse bridge response:', e);
+                    if (data.error) reject(new Error(data.error));
+                    else
+                      fetch(data.base64)
+                        .then((r) => r.blob())
+                        .then(resolve)
+                        .catch(reject);
                   }
+                } catch (e) {
+                  console.warn('[Gemini Voyager] Failed to parse bridge response:', e);
                 }
-              });
-              observer.observe(bridge, { attributes: true, attributeFilter: ['data-response'] });
-
-              // Send request via DOM bridge
-              const reader = new FileReader();
-              reader.onloadend = () => {
-                bridge.dataset.request = JSON.stringify({ requestId, base64: reader.result });
-              };
-              reader.onerror = () => reject(new Error('Failed to read blob'));
-              reader.readAsDataURL(blob);
-
-              // Timeout for watermark processing
-              setTimeout(() => {
-                observer.disconnect();
-                reject(new Error('Processing timeout'));
-              }, WATERMARK_PROCESSING_TIMEOUT_MS);
+              }
             });
+            observer.observe(bridge, { attributes: true, attributeFilter: ['data-response'] });
 
-            updateStatus('SUCCESS');
+            // Send request via DOM bridge
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              bridge.dataset.request = JSON.stringify({ requestId, base64: reader.result });
+            };
+            reader.onerror = () => reject(new Error('Failed to read blob'));
+            reader.readAsDataURL(blob);
 
-            // Return processed response
-            return new Response(processedBlob, {
+            // Timeout for watermark processing
+            setTimeout(() => {
+              observer.disconnect();
+              reject(new Error('Processing timeout'));
+            }, WATERMARK_PROCESSING_TIMEOUT_MS);
+          });
+
+          updateStatus('SUCCESS');
+
+          // Return processed response
+          return new Response(processedBlob, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: response.headers,
+          });
+        } catch (error) {
+          console.warn('[Gemini Voyager] Watermark processing failed, using original:', error);
+          updateStatus('ERROR', { message: error.message || 'Unknown error' });
+          // Return the original blob if available, otherwise fall through to originalFetch
+          if (blob && response) {
+            return new Response(blob, {
               status: response.status,
               statusText: response.statusText,
               headers: response.headers,
             });
-          } catch (error) {
-            console.warn('[Gemini Voyager] Watermark processing failed, using original:', error);
-            updateStatus('ERROR', { message: error.message || 'Unknown error' });
-            // Return the original blob if available, otherwise fall through to originalFetch
-            if (blob && response) {
-              return new Response(blob, {
-                status: response.status,
-                statusText: response.statusText,
-                headers: response.headers,
-              });
-            }
-            // If blob/response not available (error before fetch completed), fall through
-            return originalFetch.apply(this, args);
           }
-        })();
-      }
+          // If blob/response not available (error before fetch completed), fall through
+          return originalFetch.apply(this, args);
+        }
+      })();
     }
 
     // Pass through: return the ORIGINAL Promise directly (no async wrapping)

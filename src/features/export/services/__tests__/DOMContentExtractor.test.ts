@@ -6,6 +6,51 @@ import { describe, expect, it } from 'vitest';
 import { DOMContentExtractor } from '../DOMContentExtractor';
 
 describe('DOMContentExtractor', () => {
+  it('exports non-image user uploads as filename placeholders', () => {
+    const user = document.createElement('div');
+    user.innerHTML = `
+      <user-query-file-carousel>
+        <user-query-file-preview>
+          <div data-test-id="uploaded-file">
+            <button class="new-file-preview-file" aria-label="Agent notes &amp; review.pdf">
+              <span>PDF</span>
+              <span>Agent notes &amp; review</span>
+            </button>
+          </div>
+        </user-query-file-preview>
+      </user-query-file-carousel>
+      <p class="query-text-line">Please review this file</p>
+    `;
+
+    const extracted = DOMContentExtractor.extractUserContent(user);
+
+    expect(extracted.attachments).toEqual([{ name: 'Agent notes & review.pdf', type: 'pdf' }]);
+    expect(extracted.text).toContain('📎 Agent notes & review.pdf');
+    expect(extracted.text).toContain('Please review this file');
+    expect(extracted.html).toContain('class="gv-export-attachment"');
+    expect(extracted.html).toContain('Agent notes &amp; review.pdf');
+    expect(extracted.hasImages).toBe(false);
+  });
+
+  it('does not duplicate image uploads as file placeholders', () => {
+    const user = document.createElement('div');
+    user.innerHTML = `
+      <user-query-file-preview>
+        <div data-test-id="uploaded-file">
+          <button class="new-file-preview-file" aria-label="photo.png">Image</button>
+          <img src="https://example.com/photo.png" alt="Photo" />
+        </div>
+      </user-query-file-preview>
+    `;
+
+    const extracted = DOMContentExtractor.extractUserContent(user);
+
+    expect(extracted.hasImages).toBe(true);
+    expect(extracted.attachments).toEqual([]);
+    expect(extracted.text).toContain('![Photo](https://example.com/photo.png)');
+    expect(extracted.text).not.toContain('📎 photo.png');
+  });
+
   it('should strip Gemini inline source chips (link icons) from assistant export', () => {
     const assistant = document.createElement('div');
     assistant.innerHTML = `
@@ -72,6 +117,46 @@ describe('DOMContentExtractor', () => {
     expect(extracted.html).not.toContain('mat-icon');
   });
 
+  it('preserves Gemini KaTeX radical image nodes nested in lists', () => {
+    const assistant = document.createElement('div');
+    assistant.innerHTML = `
+      <message-content>
+        <div class="markdown">
+          <ul>
+            <li>
+              <b>积的开方：</b>
+              <span class="math-inline" data-math="\\sqrt{ab} = \\sqrt{a}">
+                <span class="katex">
+                  <span class="katex-html" aria-hidden="true">
+                    <span class="base">
+                      <span class="mord sqrt">
+                        <span class="vlist-t">
+                          <span class="vlist">
+                            <span class="hide-tail">
+                              <img class="katex-svg" style="display:block;position:absolute;width:100%;height:inherit;" src="data:image/svg+xml,%3Csvg%3E%3C/svg%3E" />
+                            </span>
+                          </span>
+                        </span>
+                      </span>
+                    </span>
+                  </span>
+                </span>
+              </span>
+            </li>
+          </ul>
+        </div>
+      </message-content>
+    `;
+
+    const extracted = DOMContentExtractor.extractAssistantContent(assistant);
+
+    expect(extracted.hasFormulas).toBe(true);
+    expect(extracted.text).toContain('$\\sqrt{ab} = \\sqrt{a}$');
+    expect(extracted.html).toContain('class="katex-svg"');
+    expect(extracted.html).toContain('data:image/svg+xml');
+    expect(extracted.html).toContain('hide-tail');
+  });
+
   it('should extract assistant images as markdown and html', () => {
     const assistant = document.createElement('div');
     assistant.innerHTML = `
@@ -133,5 +218,148 @@ describe('DOMContentExtractor', () => {
 
     expect(extracted.html).toContain('src="https://example.com/a%22b.png"');
     expect(extracted.html).toContain('alt="A &quot;quoted&quot; image"');
+  });
+
+  describe('YouTube video covers', () => {
+    // Mirrors Gemini's live DOM: .attachment-container.youtube > … > youtube-block
+    // > single-video > … > img.thumbnail, plus the <iframe> player.
+    const youtubeCard = `
+      <message-content>
+        <div class="markdown">
+          <p>Here is a relevant clip.</p>
+          <div class="attachment-container youtube">
+            <response-element>
+              <youtube-block>
+                <attribution-container>
+                  <single-video class="youtube-item">
+                    <default-player>
+                      <div class="single-video-container">
+                        <div class="single-video-thumbnail">
+                          <img class="thumbnail" src="https://i.ytimg.com/vi/ttkd0t5qTD4/hqdefault.jpg" alt="Sample Video" />
+                        </div>
+                        <iframe class="single-video-player" src="https://www.youtube.com/embed/ttkd0t5qTD4"></iframe>
+                      </div>
+                    </default-player>
+                  </single-video>
+                </attribution-container>
+              </youtube-block>
+            </response-element>
+          </div>
+        </div>
+      </message-content>
+    `;
+
+    it('emits the cover thumbnail as a clickable image in markdown', () => {
+      const assistant = document.createElement('div');
+      assistant.innerHTML = youtubeCard;
+
+      const extracted = DOMContentExtractor.extractAssistantContent(assistant);
+
+      expect(extracted.hasImages).toBe(true);
+      expect(extracted.text).toContain('Here is a relevant clip.');
+      expect(extracted.text).toContain(
+        '[![Sample Video](https://i.ytimg.com/vi/ttkd0t5qTD4/hqdefault.jpg)](https://www.youtube.com/watch?v=ttkd0t5qTD4)',
+      );
+    });
+
+    it('emits the cover as a linked <img> in the html output', () => {
+      const assistant = document.createElement('div');
+      assistant.innerHTML = youtubeCard;
+
+      const extracted = DOMContentExtractor.extractAssistantContent(assistant);
+
+      expect(extracted.html).toMatch(
+        /<a href="https:\/\/www\.youtube\.com\/watch\?v=ttkd0t5qTD4"><img src="https:\/\/i\.ytimg\.com\/vi\/ttkd0t5qTD4\/hqdefault\.jpg" alt="Sample Video" \/><\/a>/,
+      );
+    });
+
+    it('does not duplicate the cover (processNodes + fallback pass dedupe)', () => {
+      const assistant = document.createElement('div');
+      assistant.innerHTML = youtubeCard;
+
+      const extracted = DOMContentExtractor.extractAssistantContent(assistant);
+
+      expect(extracted.text.split('hqdefault.jpg').length - 1).toBe(1);
+    });
+
+    it('derives the video id from an embed iframe when the thumbnail src lacks one', () => {
+      const assistant = document.createElement('div');
+      assistant.innerHTML = `
+        <message-content>
+          <div class="markdown">
+            <youtube-block>
+              <single-video>
+                <div class="single-video-thumbnail">
+                  <img class="thumbnail" src="https://lh3.googleusercontent.com/opaque-thumb" alt="No-Id Thumb" />
+                </div>
+                <iframe src="https://www.youtube.com/embed/dQw4w9WgXcQ"></iframe>
+              </single-video>
+            </youtube-block>
+          </div>
+        </message-content>
+      `;
+
+      const extracted = DOMContentExtractor.extractAssistantContent(assistant);
+
+      // Falls back to a stable hqdefault cover built from the embed id.
+      expect(extracted.text).toContain(
+        '[![No-Id Thumb](https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg)](https://www.youtube.com/watch?v=dQw4w9WgXcQ)',
+      );
+    });
+  });
+
+  describe('Canvas export support', () => {
+    it('extracts injected canvas-export-section content correctly', () => {
+      const assistant = document.createElement('div');
+      assistant.innerHTML = `
+        <message-content>
+          <div class="markdown">
+            <p>Here is my canvas doc:</p>
+            <div class="gv-canvas-export-section">
+              <h3>📄 Canvas Document: Doc Title</h3>
+              <div class="gv-canvas-content"># Heading 1\nThis is canvas content.</div>
+            </div>
+          </div>
+        </message-content>
+      `;
+
+      const extracted = DOMContentExtractor.extractAssistantContent(assistant);
+
+      expect(extracted.text).toContain('Here is my canvas doc:');
+      expect(extracted.text).toContain('### 📄 Canvas Document: Doc Title');
+      expect(extracted.text).toContain('# Heading 1\nThis is canvas content.');
+
+      expect(extracted.html).toContain('gv-canvas-export-section');
+      expect(extracted.html).toContain('<h3>📄 Canvas Document: Doc Title</h3>');
+      expect(extracted.html).toContain(
+        '<pre style="white-space: pre-wrap;"># Heading 1\nThis is canvas content.</pre>',
+      );
+    });
+  });
+
+  describe('Generated UI screenshot export', () => {
+    it('exports injected generated UI screenshots as images', () => {
+      const assistant = document.createElement('div');
+      assistant.innerHTML = `
+        <message-content>
+          <div class="markdown">
+            <p>Here is the app:</p>
+            <div class="gv-generated-ui-screenshot-section">
+              <img src="data:image/png;base64,abc123" alt="Gemini interactive UI screenshot">
+            </div>
+          </div>
+        </message-content>
+      `;
+
+      const extracted = DOMContentExtractor.extractAssistantContent(assistant);
+
+      expect(extracted.hasImages).toBe(true);
+      expect(extracted.text).toContain(
+        '![Gemini interactive UI screenshot](data:image/png;base64,abc123)',
+      );
+      expect(extracted.html).toContain(
+        '<img src="data:image/png;base64,abc123" alt="Gemini interactive UI screenshot" />',
+      );
+    });
   });
 });

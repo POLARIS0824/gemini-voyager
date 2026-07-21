@@ -4,8 +4,8 @@ gitChangelog: false
 
 hero:
   name: 'Voyager'
-  text: 'O sistema operativo que faltava ao Gemini.'
-  tagline: 'Adoramos o Gemini. Só queríamos que fosse perfeito.'
+  text: 'O sistema operativo que faltava aos seus chatbots de IA.'
+  tagline: 'Gemini · Claude · ChatGPT — finalmente, completo.'
   image:
     src: /logo.png
     alt: Logótipo do Voyager
@@ -55,7 +55,7 @@ features:
     title: Efeitos Visuais
     details: Defina o ambiente. Alterne entre neve, chuva e pétalas de sakura na janela popup.
   - icon: 🍌
-    title: Remoção de Marca de Água NanoBanana
+    title: Image Refinement
     details: Remoção de marca de água sem perdas. Mantenha os momentos de IA puros.
   - icon: 📐
     title: Cópia de Fórmulas
@@ -96,18 +96,18 @@ features:
   <h3 style="margin: 0 0 8px; font-weight: 600; font-size: 1.05em;">Cada instalação é um voto de confiança</h3>
   <p style="margin: 0 0 16px; opacity: 0.78; font-size: 0.95em;">Números ao vivo da Chrome Web Store e GitHub. Obrigado por viajar connosco, companheiros Exploradores.</p>
   <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
-    <img src="https://img.shields.io/github/stars/Nagi-ovo/gemini-voyager?style=flat-square&logo=github" alt="Estrelas GitHub">
-    <img src="https://img.shields.io/github/forks/Nagi-ovo/gemini-voyager?style=flat-square&logo=github" alt="Forks GitHub">
-    <img src="https://img.shields.io/github/v/release/Nagi-ovo/gemini-voyager?style=flat-square&logo=github" alt="Último Lançamento">
-    <img src="https://img.shields.io/github/downloads/Nagi-ovo/gemini-voyager/total?style=flat-square&logo=github" alt="Downloads GitHub">
+    <img src="/badges/github-stars.svg" alt="Estrelas GitHub">
+    <img src="/badges/github-forks.svg" alt="Forks GitHub">
+    <img src="/badges/github-release.svg" alt="Último Lançamento">
+    <img src="/badges/github-downloads.svg" alt="Downloads GitHub">
     <img src="https://img.shields.io/chrome-web-store/users/iifacdnjakkhjjiengaffnegbndgingi?style=flat-square&logo=google-chrome" alt="Utilizadores Chrome Web Store">
     <img src="https://img.shields.io/chrome-web-store/rating/iifacdnjakkhjjiengaffnegbndgingi?style=flat-square&logo=google-chrome" alt="Avaliação Chrome Web Store">
-    <img src="https://img.shields.io/badge/Edge-✓-0078D7?style=flat-square&logo=microsoft-edge" alt="Edge Add-ons">
+    <img src="https://img.shields.io/badge/edge%20users-50k%2B-0078D7?style=flat-square&logo=microsoftedge&logoColor=white" alt="Edge Add-ons Users">
     <img src="https://img.shields.io/amo/users/gemini-voyager?style=flat-square&logo=firefox" alt="Utilizadores Firefox Add-ons">
     <img src="https://img.shields.io/amo/rating/gemini-voyager?style=flat-square&logo=firefox" alt="Avaliação Firefox Add-ons">
   </div>
   <div style="margin-top: 16px; display: flex; justify-content: center; flex-wrap: wrap; gap: 12px;">
-    <a href="https://trendshift.io/repositories/16094" target="_blank"><img src="https://trendshift.io/api/badge/repositories/16094" alt="Nagi-ovo%2Fgemini-voyager | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+    <a href="https://trendshift.io/repositories/16094" target="_blank"><img src="https://trendshift.io/api/badge/repositories/16094" alt="Nagi-ovo%2Fvoyager | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
   </div>
 </div>
 
@@ -119,8 +119,8 @@ features:
 
 <div class="vp-doc" style="text-align: center; margin: 4rem auto 3rem; max-width: 1000px; padding: 0 16px;">
   <h3 style="margin: 0 0 24px; font-weight: 600; font-size: 1.2em;">Agradecimentos Especiais</h3>
-  <a href="https://github.com/Nagi-ovo/gemini-voyager">
-    <img src="https://raw.githubusercontent.com/Nagi-ovo/gemini-voyager/main/docs/public/assets/sponsors.svg" width="1000px" style="margin: 0 auto;" />
+  <a href="https://github.com/Nagi-ovo/voyager">
+    <img src="https://raw.githubusercontent.com/Nagi-ovo/voyager/main/docs/public/assets/sponsors.svg" width="1000px" style="margin: 0 auto;" />
   </a>
   <p style="margin-top: 24px; font-size: 1.05em; opacity: 0.86;">✨ Estamos ao vivo no Product Hunt! Adoraríamos ouvir as suas opiniões e feedback. ❤️</p>
   <div style="margin-top: 12px; display: flex; justify-content: center;">
@@ -131,6 +131,13 @@ features:
 <div class="vp-doc" style="text-align: center; margin: 3.5rem auto 2rem; max-width: 720px; padding: 0 16px;">
   <p style="font-size: 1.05em; font-weight: 600; opacity: 0.86; margin: 0 0 12px;">"Não é apenas uma ferramenta. É uma bicicleta para a mente."</p>
   <a href="./guide/getting-started" style="font-weight: 600; text-decoration: none;">Veja o que é possível →</a>
+</div>
+
+<!-- Fable 5 Verified badge source: https://github.com/yetone/alma-releases/issues/56 (@yetone). -->
+<div class="vp-doc" style="text-align: center; margin: 0 auto 2rem; padding: 0 16px;">
+  <a href="https://github.com/yetone/alma-releases/issues/56" target="_blank" rel="noopener noreferrer" title="Fable 5 Verified badge by @yetone" aria-label="Fable 5 Verified badge by @yetone">
+    <img src="/assets/fable-5-verified.png" alt="Fable 5 Verified" width="360" style="display: inline-block;">
+  </a>
 </div>
 
 <p align="center">

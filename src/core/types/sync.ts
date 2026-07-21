@@ -2,9 +2,11 @@
  * Sync-related type definitions for Google Drive sync feature
  * Provides type safety for sync state management and data transfer
  */
+import type { PluginStateMap } from '@/features/plugins/storage/pluginState';
 import type { StarredMessagesData } from '@/pages/content/timeline/starredTypes';
 
 import type { FolderData } from './folder';
+import type { HighlightExportPayloadV1 } from './highlight';
 
 /**
  * Sync mode configuration
@@ -13,6 +15,8 @@ import type { FolderData } from './folder';
  * - auto: Sync happens automatically on startup and periodically
  */
 export type SyncMode = 'disabled' | 'manual' | 'auto';
+
+export type SyncProvider = 'googleDrive' | 'icloud';
 
 /**
  * Platform identifier for sync operations
@@ -31,6 +35,8 @@ export interface SyncAccountScope {
  * Current sync state for UI display
  */
 export interface SyncState {
+  /** Cloud storage provider. iCloud is available only in the Safari build. */
+  provider: SyncProvider;
   /** Current sync mode setting */
   mode: SyncMode;
   /** Timestamp of last successful sync/download (null if never synced) - Gemini */
@@ -89,6 +95,14 @@ export interface SettingsExportPayload {
   version?: string;
   data: Record<string, unknown>;
 }
+
+/** Plugin installation, enablement, and declared plugin-setting values. */
+export interface PluginStateExportPayload {
+  format: 'gemini-voyager.plugins.v1';
+  exportedAt: string;
+  version?: string;
+  data: PluginStateMap;
+}
 /**
  * Re-export starred message types from their canonical source
  * These are used for Google Drive sync
@@ -141,6 +155,15 @@ export interface TimelineHierarchyExportPayload {
 }
 
 /**
+ * Highlight export payload format.
+ *
+ * Kept as an alias to the canonical annotation contract rather than embedding
+ * highlights in SyncData. Older Voyager versions therefore ignore the separate
+ * Drive file without trying to deserialize an unknown aggregate field.
+ */
+export type HighlightExportPayload = HighlightExportPayloadV1;
+
+/**
  * Data payload synced to Google Drive
  * Uses embedded export formats for compatibility with import/export feature
  */
@@ -155,6 +178,8 @@ export interface SyncData {
   prompts: PromptExportPayload;
   /** UI settings/preferences in export format */
   settings?: SettingsExportPayload;
+  /** Plugin installation/enablement/settings in a separate Drive file */
+  plugins?: PluginStateExportPayload;
   /** Starred messages in export format */
   starred?: StarredExportPayload;
   /** Fork metadata in export format */
@@ -178,6 +203,7 @@ export const SyncStorageKeys = {
  * Default sync state for initial load
  */
 export const DEFAULT_SYNC_STATE: SyncState = {
+  provider: 'googleDrive',
   mode: 'disabled',
   lastSyncTime: null,
   lastUploadTime: null,
@@ -197,7 +223,8 @@ export type SyncMessageType =
   | 'gv.sync.upload'
   | 'gv.sync.download'
   | 'gv.sync.getState'
-  | 'gv.sync.setMode';
+  | 'gv.sync.setMode'
+  | 'gv.sync.setProvider';
 
 /**
  * Message payload for sync operations
@@ -206,6 +233,7 @@ export interface SyncMessage {
   type: SyncMessageType;
   payload?: {
     mode?: SyncMode;
+    provider?: SyncProvider;
     data?: SyncData;
     interactive?: boolean;
     platform?: SyncPlatform;

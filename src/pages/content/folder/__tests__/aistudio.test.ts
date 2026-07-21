@@ -34,6 +34,66 @@ function createPromptRow(
   return { root, row, host: li, anchor };
 }
 
+function createHistoryPopoverPromptLink(
+  promptId: string,
+  title: string,
+  href: string = `/prompts/${promptId}`,
+): {
+  overlay: HTMLElement;
+  row: HTMLElement;
+  anchor: HTMLAnchorElement;
+} {
+  const overlay = document.createElement('div');
+  overlay.className = 'cdk-overlay-pane';
+  const row = document.createElement('div');
+  row.setAttribute('role', 'listitem');
+  const anchor = document.createElement('a');
+  anchor.setAttribute('href', href);
+  anchor.textContent = title;
+  row.appendChild(anchor);
+  overlay.appendChild(row);
+  document.body.appendChild(overlay);
+  return { overlay, row, anchor };
+}
+
+function createLibraryPromptRow(
+  promptId: string,
+  title: string,
+): {
+  table: HTMLTableElement;
+  row: HTMLTableRowElement;
+  anchor: HTMLAnchorElement;
+  moreButton: HTMLButtonElement;
+} {
+  let table = document.querySelector('table.mat-mdc-table') as HTMLTableElement | null;
+  if (!table) {
+    table = document.createElement('table');
+    table.className = 'mat-mdc-table';
+    document.body.appendChild(table);
+  }
+
+  const row = document.createElement('tr');
+  row.className = 'mat-mdc-row';
+
+  const nameCell = document.createElement('td');
+  const anchor = document.createElement('a');
+  anchor.className = 'name-link';
+  anchor.setAttribute('href', `/prompts/${promptId}`);
+  anchor.textContent = title;
+  nameCell.appendChild(anchor);
+  row.appendChild(nameCell);
+
+  const actionCell = document.createElement('td');
+  const moreButton = document.createElement('button');
+  moreButton.setAttribute('aria-label', 'More options');
+  moreButton.textContent = 'more_vert';
+  actionCell.appendChild(moreButton);
+  row.appendChild(actionCell);
+
+  table.appendChild(row);
+  return { table, row, anchor, moreButton };
+}
+
 type AIStudioManagerInternals = {
   data: {
     folders: Array<{
@@ -57,6 +117,8 @@ type AIStudioManagerInternals = {
   };
   historyRoot: HTMLElement | null;
   observePromptList: () => void;
+  observeLibraryTable: () => void;
+  bindDraggablesInLibraryTable: () => void;
   syncConversationTitlesFromPromptList: () => Promise<void>;
   save: () => Promise<void>;
   render: () => void;
@@ -84,6 +146,52 @@ describe('AIStudio prompt binding performance guards', () => {
 
     expect(mutationAddsPromptLinks([hitMutation])).toBe(true);
     expect(mutationAddsPromptLinks([missMutation])).toBe(false);
+  });
+
+  it('detects body-level history popover prompt link additions', () => {
+    const { overlay } = createHistoryPopoverPromptLink('hover123', 'Hover Prompt Title');
+
+    const mutation = {
+      addedNodes: [overlay],
+    } as unknown as MutationRecord;
+
+    expect(mutationAddsPromptLinks([mutation])).toBe(true);
+  });
+
+  it('detects absolute AI Studio prompt links in popovers', () => {
+    const overlay = document.createElement('div');
+    overlay.className = 'cdk-overlay-pane';
+    const anchor = document.createElement('a');
+    anchor.href = 'https://aistudio.google.com/prompts/absolute123';
+    anchor.textContent = 'Absolute Prompt Title';
+    overlay.appendChild(anchor);
+
+    const mutation = {
+      addedNodes: [overlay],
+    } as unknown as MutationRecord;
+
+    expect(mutationAddsPromptLinks([mutation])).toBe(true);
+  });
+
+  it('detects account-prefixed AI Studio prompt links in popovers', () => {
+    const { overlay: relativeOverlay } = createHistoryPopoverPromptLink(
+      'accountRelative123',
+      'Account Relative Prompt',
+      '/u/1/prompts/accountRelative123',
+    );
+    const absoluteOverlay = document.createElement('div');
+    absoluteOverlay.className = 'cdk-overlay-pane';
+    const absoluteAnchor = document.createElement('a');
+    absoluteAnchor.href = 'https://aistudio.google.com/u/2/prompts/accountAbsolute123';
+    absoluteAnchor.textContent = 'Account Absolute Prompt';
+    absoluteOverlay.appendChild(absoluteAnchor);
+
+    expect(
+      mutationAddsPromptLinks([{ addedNodes: [relativeOverlay] } as unknown as MutationRecord]),
+    ).toBe(true);
+    expect(
+      mutationAddsPromptLinks([{ addedNodes: [absoluteOverlay] } as unknown as MutationRecord]),
+    ).toBe(true);
   });
 
   it('parses fallback URL payloads used by Firefox native drag data', () => {
@@ -170,6 +278,134 @@ describe('AIStudio prompt binding performance guards', () => {
       conversationId: 'abc124',
       title: 'Native prompt title',
     });
+  });
+
+  it('preserves titles when dragging from the body-level history popover', () => {
+    const { row, anchor } = createHistoryPopoverPromptLink('hover456', 'Hover Prompt Title');
+    const manager = new AIStudioFolderManager();
+    const bindDraggablesInPromptList = (
+      manager as unknown as {
+        bindDraggablesInPromptList: (scope?: ParentNode | null) => void;
+      }
+    ).bindDraggablesInPromptList.bind(manager);
+
+    bindDraggablesInPromptList(document.body);
+
+    expect(anchor.dataset.gvDragBound).toBe('1');
+    expect(row.draggable).toBe(true);
+
+    const transfer: DragDataTransferMock = {
+      effectAllowed: '',
+      setData: vi.fn(),
+      setDragImage: vi.fn(),
+    };
+    const dragstart = new Event('dragstart', { bubbles: true, cancelable: true }) as DragEvent;
+    Object.defineProperty(dragstart, 'dataTransfer', {
+      value: transfer,
+      configurable: true,
+    });
+
+    anchor.dispatchEvent(dragstart);
+
+    const jsonPayload = (transfer.setData.mock.calls as Array<[string, string]>).find(
+      ([type]) => type === 'application/json',
+    )?.[1];
+    expect(jsonPayload).toBeTruthy();
+    expect(JSON.parse(jsonPayload || '{}')).toMatchObject({
+      conversationId: 'hover456',
+      title: 'Hover Prompt Title',
+      url: expect.stringMatching(/\/prompts\/hover456$/),
+    });
+  });
+
+  it('preserves titles when dragging from account-prefixed history popovers', () => {
+    const { row, anchor } = createHistoryPopoverPromptLink(
+      'accountHover456',
+      'Account Hover Prompt Title',
+      '/u/1/prompts/accountHover456',
+    );
+    const manager = new AIStudioFolderManager();
+    const bindDraggablesInPromptList = (
+      manager as unknown as {
+        bindDraggablesInPromptList: (scope?: ParentNode | null) => void;
+      }
+    ).bindDraggablesInPromptList.bind(manager);
+
+    bindDraggablesInPromptList(document.body);
+
+    expect(anchor.dataset.gvDragBound).toBe('1');
+    expect(row.draggable).toBe(true);
+
+    const transfer: DragDataTransferMock = {
+      effectAllowed: '',
+      setData: vi.fn(),
+      setDragImage: vi.fn(),
+    };
+    const dragstart = new Event('dragstart', { bubbles: true, cancelable: true }) as DragEvent;
+    Object.defineProperty(dragstart, 'dataTransfer', {
+      value: transfer,
+      configurable: true,
+    });
+
+    anchor.dispatchEvent(dragstart);
+
+    const jsonPayload = (transfer.setData.mock.calls as Array<[string, string]>).find(
+      ([type]) => type === 'application/json',
+    )?.[1];
+    expect(jsonPayload).toBeTruthy();
+    expect(JSON.parse(jsonPayload || '{}')).toMatchObject({
+      conversationId: 'accountHover456',
+      title: 'Account Hover Prompt Title',
+      url: expect.stringMatching(/\/u\/1\/prompts\/accountHover456$/),
+    });
+  });
+
+  it('supports multi-select on AI Studio library rows', async () => {
+    vi.useFakeTimers();
+    const first = createLibraryPromptRow('library111', 'First Library Prompt');
+    const second = createLibraryPromptRow('library222', 'Second Library Prompt');
+    const manager = new AIStudioFolderManager();
+    const internals = manager as unknown as AIStudioManagerInternals;
+
+    internals.bindDraggablesInLibraryTable();
+
+    first.row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(first.row.classList.contains('gv-library-row-selected')).toBe(true);
+    expect(
+      document.querySelector(
+        '[data-multi-select-floating-host="true"] [data-selection-count="true"]',
+      )?.textContent,
+    ).toBe('1 selected');
+
+    second.row.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+
+    expect(second.row.classList.contains('gv-library-row-selected')).toBe(true);
+    expect(
+      document.querySelector(
+        '[data-multi-select-floating-host="true"] [data-selection-count="true"]',
+      )?.textContent,
+    ).toBe('2 selected');
+  });
+
+  it('does not re-bind library rows when the floating multi-select host changes', async () => {
+    createLibraryPromptRow('library333', 'Loop Guard Prompt');
+    const manager = new AIStudioFolderManager();
+    const internals = manager as unknown as AIStudioManagerInternals;
+    const bindSpy = vi.fn();
+
+    internals.bindDraggablesInLibraryTable = bindSpy;
+    internals.observeLibraryTable();
+
+    const floatingHost = document.createElement('div');
+    floatingHost.dataset.multiSelectFloatingHost = 'true';
+    document.body.appendChild(floatingHost);
+    floatingHost.appendChild(document.createElement('button'));
+
+    await Promise.resolve();
+
+    expect(bindSpy).not.toHaveBeenCalled();
   });
 });
 

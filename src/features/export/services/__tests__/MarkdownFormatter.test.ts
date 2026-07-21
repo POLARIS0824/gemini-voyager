@@ -60,6 +60,26 @@ describe('MarkdownFormatter', () => {
       expect(markdown).toContain('Can you help me with TypeScript?');
     });
 
+    it('includes uploaded file names from the live user message DOM', () => {
+      const userElement = document.createElement('div');
+      userElement.innerHTML = `
+        <user-query-file-preview>
+          <div data-test-id="uploaded-file">
+            <button class="new-file-preview-file" aria-label="meeting-notes.pdf">PDF</button>
+          </div>
+        </user-query-file-preview>
+        <p class="query-text-line">Summarize it</p>
+      `;
+
+      const markdown = MarkdownFormatter.format(
+        [{ user: '', assistant: 'Done', starred: false, userElement }],
+        mockMetadata,
+      );
+
+      expect(markdown).toContain('📎 meeting-notes.pdf');
+      expect(markdown).toContain('Summarize it');
+    });
+
     it('should include assistant content', () => {
       const markdown = MarkdownFormatter.format(mockTurns, mockMetadata);
 
@@ -125,6 +145,30 @@ describe('MarkdownFormatter', () => {
       const filename = MarkdownFormatter.generateFilename();
 
       expect(filename.endsWith('.md')).toBe(true);
+    });
+  });
+
+  describe('image URLs', () => {
+    it('extracts and rewrites inline data images', () => {
+      const dataUrl = 'data:image/png;base64,aGVsbG8=';
+      const markdown = `![Interactive UI](${dataUrl})`;
+
+      expect(MarkdownFormatter.extractImageUrls(markdown)).toEqual([dataUrl]);
+
+      const rewritten = MarkdownFormatter.rewriteImageUrls(
+        markdown,
+        new Map([[dataUrl, 'assets/img-001.png']]),
+      );
+
+      expect(rewritten).toBe('![Interactive UI](assets/img-001.png)');
+    });
+
+    it('degrades inline data images for Safari markdown export', () => {
+      const markdown = 'Screenshot: ![Interactive UI](data:image/png;base64,aGVsbG8=)';
+
+      expect(MarkdownFormatter.degradeImageMarkdownForSafari(markdown)).toContain(
+        '[Image unavailable in Safari export: Interactive UI]',
+      );
     });
   });
 });

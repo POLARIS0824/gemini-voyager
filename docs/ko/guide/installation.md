@@ -12,13 +12,15 @@
 
 가장 간단한 시작 방법입니다. 업데이트가 자동으로 이루어집니다.
 
-**Chrome / Brave / Opera / Vivaldi:**
+**Chrome / Edge / Brave / Opera / Vivaldi:**
 
 [<img src="https://img.shields.io/badge/Chrome_Web_Store-Download-4285F4?style=for-the-badge&logo=google-chrome&logoColor=white" alt="Chrome 웹 스토어에서 설치" height="40"/>](https://chromewebstore.google.com/detail/iifacdnjakkhjjiengaffnegbndgingi?utm_source=github&utm_medium=docs&utm_campaign=organic_growth&utm_content=ko)
 
 **Microsoft Edge:**
 
-[<img src="https://img.shields.io/badge/Microsoft_Edge-Download-0078D7?style=for-the-badge&logo=microsoft-edge&logoColor=white" alt="Microsoft Edge 추가 기능에서 설치" height="40"/>](https://microsoftedge.microsoft.com/addons/detail/gemini-voyager/gibmkggjijalcjinbdhcpklodjkhhlne)
+[<img src="https://img.shields.io/badge/Microsoft_Edge-Download-0078D7?style=for-the-badge&logo=microsoft-edge&logoColor=white" alt="Microsoft Edge 추가 기능에서 설치" height="40"/>](https://microsoftedge.microsoft.com/addons/detail/voyager/gibmkggjijalcjinbdhcpklodjkhhlne)
+
+> **Edge 사용자:** 모바일이나 태블릿에서 Edge가 필요한 사용자를 위해 Voyager는 [Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/voyager/gibmkggjijalcjinbdhcpklodjkhhlne) 버전을 계속 유지하고 배포합니다. 심사가 지연되면 Chrome Web Store 버전이나 GitHub 수동 패키지를 사용할 수 있습니다.
 
 **Firefox:**
 
@@ -30,7 +32,7 @@
 
 **Chrome / Edge / Brave / Opera의 경우:**
 
-1. [GitHub Releases](https://github.com/Nagi-ovo/gemini-voyager/releases)에서 최신 `gemini-voyager-chrome-vX.Y.Z.zip`을 다운로드합니다.
+1. [GitHub Releases](https://github.com/Nagi-ovo/voyager/releases)에서 최신 `voyager-chrome-vX.Y.Z.zip`을 다운로드합니다.
 2. 파일의 압축을 풉니다.
 3. 브라우저의 확장 프로그램 페이지(`chrome://extensions`)를 엽니다.
 4. 우측 상단의 **개발자 모드**를 활성화합니다.
@@ -38,7 +40,7 @@
 
 **Firefox의 경우:**
 
-1. [Releases](https://github.com/Nagi-ovo/gemini-voyager/releases)에서 최신 `gemini-voyager-firefox-vX.Y.Z.xpi`를 다운로드합니다.
+1. [Releases](https://github.com/Nagi-ovo/voyager/releases)에서 최신 `voyager-firefox-vX.Y.Z.xpi`를 다운로드합니다.
 2. 부가 기능 관리자(`about:addons`)를 엽니다.
 3. `.xpi` 파일을 드래그 앤 드롭하여 설치합니다 (또는 톱니바퀴 아이콘 ⚙️ -> **파일에서 부가 기능 설치** 클릭).
 
@@ -55,8 +57,8 @@ Safari가 이제 직접 배포를 지원합니다! 사전 서명된 앱을 다�
 
 > 💡 Safari 빌드가 직접 서명 배포를 지원합니다 — Xcode 변환이 필요 없습니다!
 >
-> ⚠️ **제한 사항**: Safari의 특성상 (a) 워터마크 제거 (b) 이미지 내보내기(PDF 권장)는 지원되지 않습니다.
+> ✅ **Safari 공식 지원**: v1.6.0부터 워터마크 제거, 이미지 내보내기, Google Drive/iCloud 동기화, 응답 완료 알림, Sparkle 자동 업데이트를 지원합니다.
 
 ---
 
-_개발 설정이 궁금하신가요? 기여를 원하는 개발자라면 [기여 가이드](https://github.com/Nagi-ovo/gemini-voyager/blob/main/.github/CONTRIBUTING.md)를 확인해 보세요._
+_개발 설정이 궁금하신가요? 기여를 원하는 개발자라면 [기여 가이드](https://github.com/Nagi-ovo/voyager/blob/main/.github/CONTRIBUTING.md)를 확인해 보세요._

@@ -2,10 +2,12 @@
  * DOM Content Extractor
  * Extracts rich content from Gemini's DOM structure preserving formatting
  */
+import type { ExportAttachment } from '../types/export';
 
 export interface ExtractedContent {
   text: string;
   html: string;
+  attachments: ExportAttachment[];
   hasImages: boolean;
   hasFormulas: boolean;
   hasTables: boolean;
@@ -50,6 +52,7 @@ export class DOMContentExtractor {
     const result: ExtractedContent = {
       text: '',
       html: '',
+      attachments: [],
       hasImages: false,
       hasFormulas: false,
       hasTables: false,
@@ -59,6 +62,9 @@ export class DOMContentExtractor {
     // Check for images
     const images = element.querySelectorAll('user-query-file-preview img, .preview-image');
     result.hasImages = images.length > 0;
+
+    const attachments = this.extractUserAttachments(element);
+    result.attachments = attachments;
 
     // Extract text from query-text-line paragraphs
     const textLines = element.querySelectorAll('.query-text-line');
@@ -83,10 +89,19 @@ export class DOMContentExtractor {
       imageMarkdown.push(`![${alt}](${src})`);
     });
 
+    attachments.forEach((attachment) => {
+      htmlParts.push(
+        `<div class="gv-export-attachment"><span class="gv-export-attachment-icon" aria-hidden="true">📄</span><span class="gv-export-attachment-name">${this.escapeHtml(attachment.name)}</span></div>`,
+      );
+    });
+
     // Combine image markdown and text
     const allTextParts: string[] = [];
     if (imageMarkdown.length > 0) {
       allTextParts.push(imageMarkdown.join('\n\n'));
+    }
+    if (attachments.length > 0) {
+      allTextParts.push(attachments.map(({ name }) => `📎 ${name}`).join('\n'));
     }
     if (textParts.length > 0) {
       allTextParts.push(textParts.join('\n'));
@@ -113,6 +128,7 @@ export class DOMContentExtractor {
     const result: ExtractedContent = {
       text: '',
       html: '',
+      attachments: [],
       hasImages: false,
       hasFormulas: false,
       hasTables: false,
@@ -255,6 +271,10 @@ export class DOMContentExtractor {
     });
     // Note: tables and code-blocks were already processed via processNodes()
 
+    // YouTube covers not reached by processNodes (e.g. attachment areas rendered
+    // outside the markdown container). Deduped via the processedByGV marker.
+    this.processYouTubeCovers(messageContent, htmlParts, textParts, result);
+
     result.html = htmlParts.join('\n');
     // Clean up multiple newlines but preserve intentional spacing
     let combinedText = textParts
@@ -278,6 +298,55 @@ export class DOMContentExtractor {
     result.text = combinedText;
 
     return result;
+  }
+
+  /**
+   * Extract non-image uploads from Gemini's user-query-file-preview elements.
+   * Image previews are already exported as images above, so they are not duplicated.
+   */
+  private static extractUserAttachments(element: HTMLElement): ExportAttachment[] {
+    const uploadedFiles = Array.from(
+      element.querySelectorAll<HTMLElement>(
+        'user-query-file-preview [data-test-id="uploaded-file"]',
+      ),
+    );
+    const candidates =
+      uploadedFiles.length > 0
+        ? uploadedFiles
+        : Array.from(
+            element.querySelectorAll<HTMLElement>('user-query-file-preview .new-file-preview-file'),
+          );
+    const attachments: ExportAttachment[] = [];
+    const seen = new Set<string>();
+
+    candidates.forEach((candidate) => {
+      const labelledElement = candidate.matches('[aria-label]')
+        ? candidate
+        : candidate.querySelector<HTMLElement>('[aria-label]');
+      const name =
+        labelledElement?.getAttribute('aria-label')?.trim() ||
+        candidate.getAttribute('title')?.trim() ||
+        this.normalizeText(candidate.textContent ?? '').replace(
+          /^(?:PDF|DOCX?|PPTX?|XLSX?|CSV|TXT|ZIP|FILE)\s+/i,
+          '',
+        );
+
+      if (!name) return;
+
+      const type = name.match(/\.([a-z0-9]{1,12})$/i)?.[1].toLowerCase() ?? 'file';
+      const preview = candidate.closest('user-query-file-preview') ?? candidate;
+      const isImage =
+        /^(?:avif|bmp|gif|heic|heif|jpe?g|png|svg|tiff?|webp)$/i.test(type) &&
+        !!preview.querySelector('img');
+      const key = `${name}\u0000${type}`;
+
+      if (isImage || seen.has(key)) return;
+
+      seen.add(key);
+      attachments.push({ name, type });
+    });
+
+    return attachments;
   }
 
   /**
@@ -313,6 +382,20 @@ export class DOMContentExtractor {
       // Skip certain elements
       if (this.shouldSkipElement(child)) {
         if (this.DEBUG) console.log('[DOMContentExtractor] Skipping element:', tagName);
+        continue;
+      }
+
+      // Canvas Export Section (Injected Canvas document content)
+      if (child.classList.contains('gv-canvas-export-section')) {
+        const headingEl = child.querySelector('h3');
+        const contentEl = child.querySelector('.gv-canvas-content');
+        const headingText = headingEl?.textContent || 'Canvas Document';
+        const contentText = contentEl?.textContent || '';
+
+        htmlParts.push(
+          `<div class="gv-canvas-export-section"><h3>${this.escapeHtml(headingText)}</h3><pre style="white-space: pre-wrap;">${this.escapeHtml(contentText)}</pre></div>`,
+        );
+        textParts.push(`\n### ${headingText}\n\n${contentText}\n`);
         continue;
       }
 
@@ -464,6 +547,18 @@ export class DOMContentExtractor {
         }
       }
 
+      // YouTube video cards — export the cover thumbnail (linked to the video).
+      // The <iframe> player can't be exported, so the cover image stands in.
+      if (
+        child.querySelector(
+          '.attachment-container.youtube img.thumbnail, youtube-block img.thumbnail, single-video img.thumbnail',
+        )
+      ) {
+        if (this.processYouTubeCovers(child, htmlParts, textParts, flags)) {
+          continue;
+        }
+      }
+
       // Horizontal rule
       if (tagName === 'hr') {
         htmlParts.push('<hr>');
@@ -492,6 +587,7 @@ export class DOMContentExtractor {
       // Lists
       if (tagName === 'ul' || tagName === 'ol') {
         const listContent = this.extractList(child as HTMLElement);
+        if (listContent.hasFormulas) flags.hasFormulas = true;
         htmlParts.push(listContent.html);
         textParts.push(`\n${listContent.text}\n`);
         continue;
@@ -523,6 +619,79 @@ export class DOMContentExtractor {
         textParts.push(text);
       }
     }
+  }
+
+  /**
+   * Extract YouTube video cover thumbnails as clickable cover images.
+   *
+   * Gemini renders a video as
+   *   `.attachment-container.youtube > … > youtube-block > single-video > … > img.thumbnail`
+   * plus an `<iframe>` player that can't be exported. The custom elements
+   * (youtube-block / single-video / default-player) stop processNodes' generic
+   * recursion, so the cover is otherwise dropped. Here we emit the cover image
+   * linked to the watch URL so it survives Markdown / PDF / image exports.
+   *
+   * Deduped across call sites via a `processedByGV` marker on the <img>.
+   * Returns true if at least one cover was emitted.
+   */
+  private static processYouTubeCovers(
+    scope: Element,
+    htmlParts: string[],
+    textParts: string[],
+    flags: Pick<ExtractedContent, 'hasImages' | 'hasFormulas' | 'hasTables' | 'hasCode'>,
+  ): boolean {
+    const thumbs = scope.querySelectorAll<HTMLImageElement>(
+      '.attachment-container.youtube img.thumbnail, youtube-block img.thumbnail, single-video img.thumbnail',
+    );
+    const videoIdFrom = (u: string | null | undefined): string => {
+      const m = (u || '').match(/(?:\/vi\/|[?&]v=|youtu\.be\/|embed\/)([\w-]{11})/);
+      return m ? m[1] : '';
+    };
+    let emitted = false;
+    for (const imgEl of Array.from(thumbs)) {
+      const marked = imgEl as Element & { processedByGV?: boolean };
+      if (marked.processedByGV) continue;
+      let src = imgEl.src || imgEl.getAttribute('src') || '';
+      if (!src || src === 'about:blank') continue;
+      marked.processedByGV = true;
+
+      const card =
+        imgEl.closest('single-video, youtube-block, .attachment-container.youtube') ||
+        imgEl.parentElement ||
+        scope;
+      let videoId = videoIdFrom(src);
+      if (!videoId) {
+        const ref = card.querySelector('a[href*="youtu"], iframe[src*="youtube"]') as
+          | HTMLAnchorElement
+          | HTMLIFrameElement
+          | null;
+        videoId = videoIdFrom(
+          (ref as HTMLAnchorElement | null)?.href || (ref as HTMLIFrameElement | null)?.src,
+        );
+      }
+      // Prefer a stable cover URL when we know the id and the live src isn't a ytimg URL.
+      if (videoId && !/ytimg\.com|img\.youtube\.com/.test(src)) {
+        src = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+      }
+      const watchUrl = videoId ? `https://www.youtube.com/watch?v=${videoId}` : '';
+      const titleRaw =
+        (imgEl.alt && imgEl.alt.trim()) ||
+        card.querySelector('.video-title, [class*="title"]')?.textContent?.trim() ||
+        'YouTube video';
+      const title = this.normalizeText(titleRaw);
+
+      flags.hasImages = true;
+      const imgHtml = `<img src="${this.escapeHtmlAttribute(src)}" alt="${this.escapeHtmlAttribute(title)}" />`;
+      htmlParts.push(
+        watchUrl ? `<a href="${this.escapeHtmlAttribute(watchUrl)}">${imgHtml}</a>` : imgHtml,
+      );
+      const mdAlt = title.replace(/\]/g, '\\]');
+      textParts.push(
+        watchUrl ? `\n[![${mdAlt}](${src})](${watchUrl})\n` : `\n![${mdAlt}](${src})\n`,
+      );
+      emitted = true;
+    }
+    return emitted;
   }
 
   /**
@@ -802,12 +971,13 @@ export class DOMContentExtractor {
   private static extractList(
     element: HTMLElement,
     depth: number = 0,
-  ): { html: string; text: string } {
+  ): { html: string; text: string; hasFormulas: boolean } {
     const isOrdered = element.tagName === 'OL';
     const items = Array.from(element.querySelectorAll(':scope > li'));
     const indent = '  '.repeat(depth); // 2 spaces per level
 
     const textLines: string[] = [];
+    let hasFormulas = false;
     items.forEach((item, index) => {
       // Create a temporary container with only direct children (excluding nested lists)
       const tempContainer = document.createElement('div');
@@ -827,6 +997,7 @@ export class DOMContentExtractor {
 
       // Process inline content (handles formulas, emphasis, etc.)
       const processed = this.processInlineContent(tempContainer);
+      if (processed.hasFormulas) hasFormulas = true;
       const itemText = processed.text || this.normalizeText(tempContainer.textContent || '');
 
       const prefix = isOrdered ? `${index + 1}. ` : '- ';
@@ -836,6 +1007,7 @@ export class DOMContentExtractor {
       const nestedLists = item.querySelectorAll(':scope > ul, :scope > ol');
       nestedLists.forEach((nestedList) => {
         const nestedResult = this.extractList(nestedList as HTMLElement, depth + 1);
+        if (nestedResult.hasFormulas) hasFormulas = true;
         if (nestedResult.text) {
           textLines.push(nestedResult.text);
         }
@@ -846,6 +1018,7 @@ export class DOMContentExtractor {
     this.stripExportArtifacts(cleanList);
 
     return {
+      hasFormulas,
       html: cleanList.outerHTML,
       text: textLines.join('\n'),
     };

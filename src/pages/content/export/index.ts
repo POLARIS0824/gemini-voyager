@@ -21,12 +21,14 @@ import {
   type ExportFormat,
 } from '../../../features/export/types/export';
 import type {
+  CanvasDoc,
   ConversationMetadata,
   ChatTurn as ExportChatTurn,
 } from '../../../features/export/types/export';
 import { ExportDialog } from '../../../features/export/ui/ExportDialog';
 import { resolveExportErrorMessage } from '../../../features/export/ui/ExportErrorMessage';
 import { showExportToast } from '../../../features/export/ui/ExportToast';
+import { assistantHasCanvasDoc, extractAllCanvasDocs, isAnyCanvasOpen } from './canvasDocExtractor';
 import { filterOutDeepResearchImmersiveNodes, resolveConversationRoot } from './conversationDom';
 import {
   getConversationMenuContext,
@@ -34,8 +36,16 @@ import {
   injectConversationMenuExportButton,
   injectResponseMenuExportButton,
 } from './conversationMenuInjection';
+import { resolveExportLogoAnchor } from './exportLogoAnchor';
+import { mountPersistentExportToolbar } from './persistentExportToolbar';
 import { injectResponseActionCopyImageButtons } from './responseActionImageButton';
-import { copyImageBlobToClipboard, downloadImageBlob } from './responseImageCopy';
+import { showResponseActionCopyImageMenu } from './responseActionImageMenu';
+import {
+  copyImageBlobToClipboard,
+  copyImageBlobViaSafariNativePasteboard,
+  downloadImageBlob,
+} from './responseImageCopy';
+import { resolveUniqueExportTurnIds } from './selectionIds';
 import { groupSelectedMessagesByTurn, resolveInitialSelectedMessageIds } from './selectionUtils';
 import { resolveSidebarConversationTarget } from './sidebarConversationTarget';
 import {
@@ -45,8 +55,11 @@ import {
 
 // Storage key to persist export state across reloads (e.g. when clicking top node triggers refresh)
 const SESSION_KEY_PENDING_EXPORT = 'gv_export_pending';
-const CONVERSATION_MENU_SELECTOR = '.mat-mdc-menu-panel[role="menu"]';
-const CONVERSATION_MENU_TRIGGER_TEST_ID = 'actions-menu-button';
+const CONVERSATION_MENU_SELECTOR = '.mat-mdc-menu-panel[role="menu"], gem-menu';
+const CONVERSATION_MENU_TRIGGER_TEST_IDS = [
+  'actions-menu-button',
+  'conversation-actions-menu-icon-button',
+];
 const RESPONSE_MENU_TRIGGER_TEST_ID = 'more-menu-button';
 const MENU_INJECTION_RETRY_LIMIT = 8;
 const MENU_INJECTION_RETRY_DELAY_MS = 80;
@@ -58,8 +71,161 @@ const EXPORT_PRELOAD_WAIT_OPTIONS = {
   maxSamples: 10,
 } as const;
 const FINAL_EXPORT_PREPARE_DELAY_MS = 120;
+const GENERATED_UI_FRAME_SELECTOR = 'iframe[src*="gemini-code-immersive"]';
+const GENERATED_UI_SCREENSHOT_MESSAGE_TYPE = 'gv.generatedUi.captureVisibleTab';
+const GENERATED_UI_CAPTURE_PERMISSION_MESSAGE_TYPE = 'gv.generatedUi.ensureCapturePermission';
+const GENERATED_UI_SCREENSHOT_SECTION_CLASS = 'gv-generated-ui-screenshot-section';
 let conversationMenuObserver: MutationObserver | null = null;
 let responseActionObserver: MutationObserver | null = null;
+let cachedCanvasDocs: CanvasDoc[] | null = null;
+
+/** Remove all injected Canvas export sections from the DOM after export completes */
+function removeCanvasExportSections(): void {
+  document.querySelectorAll('.gv-canvas-export-section').forEach((el) => el.remove());
+}
+
+function removeGeneratedUiScreenshotSections(): void {
+  document.querySelectorAll(`.${GENERATED_UI_SCREENSHOT_SECTION_CLASS}`).forEach((el) => {
+    // PDFPrintService owns the print container lifecycle after window.print().
+    if (el.closest('#gv-pdf-print-container')) return;
+    el.remove();
+  });
+}
+
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('image_load_failed'));
+    img.src = src;
+  });
+}
+
+async function cropViewportScreenshot(dataUrl: string, rect: DOMRect): Promise<string | null> {
+  const img = await loadImage(dataUrl);
+  const scaleX = img.naturalWidth / window.innerWidth;
+  const scaleY = img.naturalHeight / window.innerHeight;
+  const left = Math.max(0, rect.left);
+  const top = Math.max(0, rect.top);
+  const right = Math.min(window.innerWidth, rect.right);
+  const bottom = Math.min(window.innerHeight, rect.bottom);
+  const width = Math.floor((right - left) * scaleX);
+  const height = Math.floor((bottom - top) * scaleY);
+  if (width <= 0 || height <= 0) return null;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  if (!context) return null;
+  context.drawImage(img, left * scaleX, top * scaleY, width, height, 0, 0, width, height);
+  return canvas.toDataURL('image/png');
+}
+
+function insertGeneratedUiScreenshot(frame: HTMLIFrameElement, dataUrl: string): void {
+  const section = document.createElement('div');
+  section.className = GENERATED_UI_SCREENSHOT_SECTION_CLASS;
+  const img = document.createElement('img');
+  img.src = dataUrl;
+  img.alt = 'Gemini interactive UI screenshot';
+  section.appendChild(img);
+
+  const anchor =
+    (frame.closest('.attachment-container') as HTMLElement | null) ||
+    (frame.closest('response-element') as HTMLElement | null);
+  if (anchor?.parentElement) {
+    anchor.insertAdjacentElement('afterend', section);
+    return;
+  }
+
+  const container =
+    (frame.closest('message-content') as HTMLElement | null)?.querySelector(
+      '.markdown, .markdown-main-panel',
+    ) ||
+    (frame.closest('.markdown, .markdown-main-panel, message-content') as HTMLElement | null) ||
+    frame.parentElement;
+  container?.appendChild(section);
+}
+
+async function captureVisibleTab(): Promise<string | null> {
+  try {
+    const response = (await chrome.runtime.sendMessage({
+      type: GENERATED_UI_SCREENSHOT_MESSAGE_TYPE,
+    })) as { ok?: boolean; dataUrl?: string; error?: string };
+    if (response?.ok && typeof response.dataUrl === 'string') return response.dataUrl;
+    console.warn(
+      '[Gemini Voyager] Generated UI screenshot capture failed:',
+      response?.error || 'empty_response',
+      response,
+    );
+  } catch (error) {
+    console.warn('[Gemini Voyager] Generated UI screenshot capture failed:', error);
+  }
+  return null;
+}
+
+async function ensureGeneratedUiScreenshotPermission(): Promise<void> {
+  if (!document.querySelector(GENERATED_UI_FRAME_SELECTOR)) return;
+  try {
+    // Must run from export click handlers, before preload/capture awaits erase the gesture.
+    const response = (await chrome.runtime.sendMessage({
+      type: GENERATED_UI_CAPTURE_PERMISSION_MESSAGE_TYPE,
+    })) as { ok?: boolean };
+    if (!response?.ok) {
+      console.warn('[Gemini Voyager] Generated UI screenshot permission was not granted.');
+    }
+  } catch (error) {
+    console.warn('[Gemini Voyager] Generated UI screenshot permission request failed:', error);
+  }
+}
+
+async function captureGeneratedUiScreenshots(): Promise<void> {
+  removeGeneratedUiScreenshotSections();
+  const frames = Array.from(
+    document.querySelectorAll<HTMLIFrameElement>(GENERATED_UI_FRAME_SELECTOR),
+  );
+  if (frames.length === 0) return;
+
+  const hiddenOverlays = Array.from(
+    document.querySelectorAll<HTMLElement>('.gv-export-progress-overlay'),
+  );
+  const previousDisplay = hiddenOverlays.map((overlay) => overlay.style.display);
+  hiddenOverlays.forEach((overlay) => {
+    overlay.style.display = 'none';
+  });
+
+  try {
+    for (const frame of frames) {
+      frame.scrollIntoView({ block: 'center', inline: 'nearest' });
+      await new Promise((resolve) => window.setTimeout(resolve, 120));
+      const screenshot = await captureVisibleTab();
+      if (!screenshot) continue;
+      const rect = frame.getBoundingClientRect();
+      const cropped = await cropViewportScreenshot(screenshot, rect);
+      if (cropped) {
+        insertGeneratedUiScreenshot(frame, cropped);
+      } else {
+        console.warn('[Gemini Voyager] Generated UI screenshot crop failed:', {
+          bottom: rect.bottom,
+          height: rect.height,
+          left: rect.left,
+          right: rect.right,
+          top: rect.top,
+          viewportHeight: window.innerHeight,
+          viewportWidth: window.innerWidth,
+          width: rect.width,
+        });
+      }
+    }
+  } catch (error) {
+    console.warn('[Gemini Voyager] Generated UI screenshot export failed:', error);
+    // Link/text fallback still exports if screenshot capture is unavailable.
+  } finally {
+    hiddenOverlays.forEach((overlay, index) => {
+      overlay.style.display = previousDisplay[index] || '';
+    });
+  }
+}
 
 interface PendingExportState {
   format: ExportFormat;
@@ -70,15 +236,6 @@ interface PendingExportState {
   url: string;
   status: 'clicking';
   timestamp: number;
-}
-
-function hashString(input: string): string {
-  let h = 2166136261 >>> 0;
-  for (let i = 0; i < input.length; i++) {
-    h ^= input.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return (h >>> 0).toString(36);
 }
 
 function isExportFormat(value: unknown): value is ExportFormat {
@@ -252,29 +409,17 @@ function getAssistantSelectors(): string[] {
 function dedupeByTextAndOffset(elements: HTMLElement[], firstTurnOffset: number): HTMLElement[] {
   const seen = new Set<string>();
   const out: HTMLElement[] = [];
-  for (const el of elements) {
-    const offsetFromStart = (el.offsetTop || 0) - firstTurnOffset;
+  const offsetsAreZero = elements.every((el) => (el.offsetTop || 0) === 0);
+
+  for (let idx = 0; idx < elements.length; idx++) {
+    const el = elements[idx];
+    const offsetFromStart = offsetsAreZero ? idx : (el.offsetTop || 0) - firstTurnOffset;
     const key = `${normalizeText(el.textContent || '')}|${Math.round(offsetFromStart)}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(el);
   }
   return out;
-}
-
-function ensureTurnId(el: Element, index: number): string {
-  const asEl = el as HTMLElement & {
-    dataset?: DOMStringMap & { turnId?: string };
-  };
-  let id = asEl.dataset?.turnId || '';
-  if (!id) {
-    const basis = normalizeText(asEl.textContent || '') || `user-${index}`;
-    id = `u-${index}-${hashString(basis)}`;
-    try {
-      if (asEl.dataset) asEl.dataset.turnId = id;
-    } catch {}
-  }
-  return id;
 }
 
 function readStarredSet(): Set<string> {
@@ -372,6 +517,7 @@ function collectChatPairs(): ChatTurn[] {
 
   const firstOffset = (users[0] as HTMLElement).offsetTop || 0;
   users = dedupeByTextAndOffset(users, firstOffset);
+  const uniqueTurnIds = resolveUniqueExportTurnIds(users);
   const userOffsets = users.map((el) => (el as HTMLElement).offsetTop || 0);
 
   const assistantsAll = filterOutDeepResearchImmersiveNodes(
@@ -382,6 +528,9 @@ function collectChatPairs(): ChatTurn[] {
 
   const starredSet = readStarredSet();
   const pairs: ChatTurn[] = [];
+  const offsetsAreZero =
+    userOffsets.every((o) => o === 0) && assistantOffsets.every((o) => o === 0);
+
   for (let i = 0; i < users.length; i++) {
     const uEl = users[i] as HTMLElement;
     const uText = normalizeText(uEl.innerText || uEl.textContent || '');
@@ -390,16 +539,40 @@ function collectChatPairs(): ChatTurn[] {
     let aText = '';
     let aEl: HTMLElement | null = null;
     let bestIdx = -1;
-    let bestOff = Number.POSITIVE_INFINITY;
-    for (let k = 0; k < assistants.length; k++) {
-      const off = assistantOffsets[k];
-      if (off >= start && off < end) {
-        if (off < bestOff) {
-          bestOff = off;
+
+    if (!offsetsAreZero) {
+      let bestOff = Number.POSITIVE_INFINITY;
+      for (let k = 0; k < assistants.length; k++) {
+        const off = assistantOffsets[k];
+        if (off >= start && off < end) {
+          if (off < bestOff) {
+            bestOff = off;
+            bestIdx = k;
+          }
+        }
+      }
+    } else {
+      // Fallback: Pair by DOM tree document position when offsets are zero (e.g. when Canvas is open)
+      // An assistant belongs to this user if it is after this user and before the next user in the DOM
+      for (let k = 0; k < assistants.length; k++) {
+        const aElCandidate = assistants[k] as HTMLElement;
+        const isAfterUser = !!(
+          uEl.compareDocumentPosition(aElCandidate) & Node.DOCUMENT_POSITION_FOLLOWING
+        );
+        let isBeforeNextUser = true;
+        if (i + 1 < users.length) {
+          const nextUser = users[i + 1] as HTMLElement;
+          isBeforeNextUser = !!(
+            aElCandidate.compareDocumentPosition(nextUser) & Node.DOCUMENT_POSITION_FOLLOWING
+          );
+        }
+        if (isAfterUser && isBeforeNextUser) {
           bestIdx = k;
+          break;
         }
       }
     }
+
     if (bestIdx >= 0) {
       aEl = assistants[bestIdx] as HTMLElement;
       aText = extractAssistantText(aEl);
@@ -417,7 +590,7 @@ function collectChatPairs(): ChatTurn[] {
         }
       }
     }
-    const turnId = ensureTurnId(uEl, i);
+    const turnId = uniqueTurnIds[i];
     const starred = !!turnId && starredSet.has(turnId);
     if (uText || aText) {
       // Prefer a richer assistant container for downstream rich extraction
@@ -444,6 +617,42 @@ function collectChatPairs(): ChatTurn[] {
         assistantElement: finalAssistantEl,
         assistantHostElement: aEl || undefined,
       });
+      // Canvas document content injection: if this assistant response references
+      // a Canvas doc and the immersive-editor is open, append full Canvas content
+      // directly into the DOM element so DOMContentExtractor can pick it up.
+      // Guard against duplicate injection (collectChatPairs may be called multiple times).
+      // Canvas document content injection: if this assistant response references
+      // a Canvas doc, append full Canvas content directly into the DOM element
+      // so DOMContentExtractor can pick it up.
+      // Guard against duplicate injection (collectChatPairs may be called multiple times).
+      if (
+        aEl &&
+        assistantHasCanvasDoc(aEl) &&
+        (isAnyCanvasOpen() || (cachedCanvasDocs && cachedCanvasDocs.length > 0)) &&
+        finalAssistantEl &&
+        !finalAssistantEl.querySelector('.gv-canvas-export-section')
+      ) {
+        const canvasDocs =
+          cachedCanvasDocs && cachedCanvasDocs.length > 0
+            ? cachedCanvasDocs
+            : extractAllCanvasDocs();
+        if (canvasDocs.length > 0) {
+          const targetContainer =
+            finalAssistantEl.querySelector('.markdown, .markdown-main-panel') || finalAssistantEl;
+          for (const doc of canvasDocs) {
+            const section = document.createElement('div');
+            section.className = 'gv-canvas-export-section';
+            const heading = document.createElement('h3');
+            heading.textContent = `📄 Canvas Document: ${doc.title}`;
+            const content = document.createElement('div');
+            content.className = 'gv-canvas-content';
+            content.textContent = doc.content;
+            section.appendChild(heading);
+            section.appendChild(content);
+            targetContainer.appendChild(section);
+          }
+        }
+      }
     }
   }
   return pairs;
@@ -1182,6 +1391,12 @@ async function executeExportSequence(
   initialSelectedMessageId?: string,
   imageWidth?: number,
 ): Promise<void> {
+  // Cache Canvas documents at the very start of the export sequence,
+  // before we click the top node or cause any DOM updates/scrolling.
+  if (!paramState && isAnyCanvasOpen()) {
+    cachedCanvasDocs = extractAllCanvasDocs();
+  }
+
   const state: PendingExportState = paramState || {
     format,
     fontSize,
@@ -1312,6 +1527,9 @@ async function executeExportSequenceWithProgress(
     );
   } finally {
     hideProgress();
+    cachedCanvasDocs = null;
+    removeCanvasExportSections();
+    removeGeneratedUiScreenshotSections();
   }
 }
 
@@ -1329,6 +1547,7 @@ async function performFinalExport(
   const t = (key: TranslationKey) => dict[lang]?.[key] ?? dict.en?.[key] ?? key;
 
   await new Promise((r) => setTimeout(r, FINAL_EXPORT_PREPARE_DELAY_MS));
+  await captureGeneratedUiScreenshots();
 
   const pairs = collectChatPairs();
   const messages = buildExportMessagesFromPairs(pairs);
@@ -1644,14 +1863,20 @@ async function performFinalExport(
       return;
     }
 
-    const turnsForExport = buildTurnsForSelectedMessageIds(selectedIds, collectChatPairs());
+    await ensureGeneratedUiScreenshotPermission();
+    const selectedIdsForExport = new Set(selectedIds);
+    // Cleanup before capture/export so selection UI is not included in screenshots.
+    finish();
+    await captureGeneratedUiScreenshots();
+
+    const turnsForExport = buildTurnsForSelectedMessageIds(
+      selectedIdsForExport,
+      collectChatPairs(),
+    );
     if (turnsForExport.length === 0) {
       alert(t('export_select_mode_empty'));
       return;
     }
-
-    // Cleanup before export so selection UI isn't captured.
-    finish();
 
     const metadata: ConversationMetadata = {
       url: location.href,
@@ -1694,6 +1919,8 @@ async function performFinalExport(
       alert('Export error occurred.');
     } finally {
       hideProgress();
+      removeCanvasExportSections();
+      removeGeneratedUiScreenshotSections();
     }
   });
 
@@ -1854,9 +2081,16 @@ type ResponseCopyImageTexts = {
   failed: string;
   unsupported: string;
   targetMissing: string;
+  widthNarrow: string;
+  widthMedium: string;
+  widthWide: string;
 };
 
-function getResponseCopyImageTexts(lang: AppLanguage): ResponseCopyImageTexts {
+function getResponseCopyImageTexts(
+  lang: AppLanguage,
+  dict: Record<AppLanguage, Record<string, string>>,
+): ResponseCopyImageTexts {
+  const t = (key: TranslationKey) => dict[lang]?.[key] ?? dict.en?.[key] ?? key;
   if (lang === 'zh') {
     return {
       label: '复制回复为图片',
@@ -1865,6 +2099,9 @@ function getResponseCopyImageTexts(lang: AppLanguage): ResponseCopyImageTexts {
       failed: '复制回复图片失败',
       unsupported: '当前浏览器不支持复制图片到剪贴板',
       targetMissing: '未找到可复制的回复内容',
+      widthNarrow: t('export_image_width_narrow'),
+      widthMedium: t('export_image_width_medium'),
+      widthWide: t('export_image_width_wide'),
     };
   }
 
@@ -1876,6 +2113,9 @@ function getResponseCopyImageTexts(lang: AppLanguage): ResponseCopyImageTexts {
       failed: '複製回覆圖片失敗',
       unsupported: '目前瀏覽器不支援將圖片複製到剪貼簿',
       targetMissing: '找不到可複製的回覆內容',
+      widthNarrow: t('export_image_width_narrow'),
+      widthMedium: t('export_image_width_medium'),
+      widthWide: t('export_image_width_wide'),
     };
   }
 
@@ -1886,6 +2126,9 @@ function getResponseCopyImageTexts(lang: AppLanguage): ResponseCopyImageTexts {
     failed: 'Failed to copy response image',
     unsupported: 'Clipboard image copy is not supported in this browser',
     targetMissing: 'Unable to locate response content',
+    widthNarrow: t('export_image_width_narrow'),
+    widthMedium: t('export_image_width_medium'),
+    widthWide: t('export_image_width_wide'),
   };
 }
 
@@ -1921,13 +2164,15 @@ function isUnsupportedClipboardError(error: unknown): boolean {
 async function handleResponseCopyImageClick(
   trigger: HTMLElement,
   getCurrentLanguage: () => AppLanguage,
+  dict: Record<AppLanguage, Record<string, string>>,
+  imageWidth: number = DEFAULT_IMAGE_EXPORT_WIDTH,
 ): Promise<void> {
   if (trigger.dataset.gvCopyImageBusy === '1') {
     return;
   }
   trigger.dataset.gvCopyImageBusy = '1';
 
-  const texts = getResponseCopyImageTexts(getCurrentLanguage());
+  const texts = getResponseCopyImageTexts(getCurrentLanguage(), dict);
   const messageId = resolveAssistantMessageIdFromMenuTrigger(trigger);
   let blobForFallback: Blob | null = null;
   try {
@@ -1951,13 +2196,17 @@ async function handleResponseCopyImageClick(
     };
 
     const blob = await ImageExportService.renderConversationBlob(turnsForExport, metadata, {
-      imageWidth: DEFAULT_IMAGE_EXPORT_WIDTH,
+      imageWidth,
     });
     blobForFallback = blob;
     await copyImageBlobToClipboard(blob);
     showExportToast(texts.copied);
   } catch (error) {
     if (isSafari() && blobForFallback) {
+      if (await copyImageBlobViaSafariNativePasteboard(blobForFallback)) {
+        showExportToast(texts.copied);
+        return;
+      }
       downloadImageBlob(blobForFallback, buildResponseImageFilename());
       showExportToast(texts.downloaded, { autoDismissMs: 3200 });
       return;
@@ -1970,38 +2219,64 @@ async function handleResponseCopyImageClick(
     showExportToast(texts.failed, { autoDismissMs: 3200 });
   } finally {
     delete trigger.dataset.gvCopyImageBusy;
+    removeCanvasExportSections();
   }
 }
 
-function applyResponseActionCopyImageButtons(getCurrentLanguage: () => AppLanguage): void {
-  const texts = getResponseCopyImageTexts(getCurrentLanguage());
+function applyResponseActionCopyImageButtons(
+  getCurrentLanguage: () => AppLanguage,
+  dict: Record<AppLanguage, Record<string, string>>,
+): void {
+  const texts = getResponseCopyImageTexts(getCurrentLanguage(), dict);
   injectResponseActionCopyImageButtons(document, {
     label: texts.label,
     tooltip: texts.label,
     onClick: (button) => {
-      void handleResponseCopyImageClick(button, getCurrentLanguage);
+      showResponseActionCopyImageMenu({
+        anchor: button,
+        translations: {
+          narrow: texts.widthNarrow,
+          medium: texts.widthMedium,
+          wide: texts.widthWide,
+        },
+        onSelect: (width) => {
+          void handleResponseCopyImageClick(button, getCurrentLanguage, dict, width);
+        },
+      });
     },
   });
 }
 
 function setupResponseActionCopyImageObserver({
   getCurrentLanguage,
+  dict,
 }: {
   getCurrentLanguage: () => AppLanguage;
+  dict: Record<AppLanguage, Record<string, string>>;
 }): void {
-  applyResponseActionCopyImageButtons(getCurrentLanguage);
+  applyResponseActionCopyImageButtons(getCurrentLanguage, dict);
   if (responseActionObserver) return;
 
   const observer = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
       mutation.addedNodes.forEach((node) => {
         if (!(node instanceof HTMLElement)) return;
-        const texts = getResponseCopyImageTexts(getCurrentLanguage());
+        const texts = getResponseCopyImageTexts(getCurrentLanguage(), dict);
         injectResponseActionCopyImageButtons(node, {
           label: texts.label,
           tooltip: texts.label,
           onClick: (button) => {
-            void handleResponseCopyImageClick(button, getCurrentLanguage);
+            showResponseActionCopyImageMenu({
+              anchor: button,
+              translations: {
+                narrow: texts.widthNarrow,
+                medium: texts.widthMedium,
+                wide: texts.widthWide,
+              },
+              onSelect: (width) => {
+                void handleResponseCopyImageClick(button, getCurrentLanguage, dict, width);
+              },
+            });
           },
         });
       });
@@ -2118,12 +2393,13 @@ function setupConversationMenuExportObserver({
   const existingPanels = document.querySelectorAll<HTMLElement>(CONVERSATION_MENU_SELECTOR);
   existingPanels.forEach((panel) => window.setTimeout(() => tryInjectOnPanel(panel), 30));
 
+  const triggerSelector = [...CONVERSATION_MENU_TRIGGER_TEST_IDS, RESPONSE_MENU_TRIGGER_TEST_ID]
+    .map((id) => `[data-test-id="${id}"]`)
+    .join(', ');
   const onMenuTriggerInteraction = (event: Event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
-    const trigger = target.closest(
-      `[data-test-id="${CONVERSATION_MENU_TRIGGER_TEST_ID}"], [data-test-id="${RESPONSE_MENU_TRIGGER_TEST_ID}"]`,
-    ) as HTMLElement | null;
+    const trigger = target.closest(triggerSelector) as HTMLElement | null;
     if (!trigger) return;
 
     const panelIds = parseMenuTriggerPanelIds(trigger);
@@ -2188,11 +2464,88 @@ export async function startExportButton(): Promise<void> {
   });
   setupResponseActionCopyImageObserver({
     getCurrentLanguage: () => lang,
+    dict,
   });
 
-  const logo =
-    (await waitForElement('[data-test-id="logo"]', 6000)) || (await waitForElement('.logo', 2000));
-  if (!logo) return;
+  const t0 = (key: TranslationKey) => dict[lang]?.[key] ?? dict.en?.[key] ?? key;
+  // The lr26 UI removed the logo entirely; resolveExportLogoAnchor short-circuits
+  // there instead of waiting out the full timeout (which delayed this fallback
+  // toolbar by several seconds on every conversation load).
+  const logo = await resolveExportLogoAnchor(waitForElement);
+  if (!logo) {
+    // Fallback for lr26+ Gemini UI where the logo has been removed: mount a
+    // persistent top-right toolbar so users still have an always-visible
+    // export entry point. Menu injection (conversation ⋮ / response ⋮) still
+    // runs in parallel via the observers above.
+    let toolbarHandle: ReturnType<typeof mountPersistentExportToolbar> | null = null;
+
+    const readToolbarEnabled = async (): Promise<boolean> => {
+      try {
+        const stored = await new Promise<Record<string, unknown>>((resolve) => {
+          try {
+            chrome.storage?.sync?.get([StorageKeys.PERSISTENT_EXPORT_TOOLBAR_ENABLED], (items) =>
+              resolve(items || {}),
+            );
+          } catch {
+            resolve({});
+          }
+        });
+        const v = stored[StorageKeys.PERSISTENT_EXPORT_TOOLBAR_ENABLED];
+        return v !== false;
+      } catch {
+        return true;
+      }
+    };
+
+    const ensureToolbarVisibility = (enabled: boolean) => {
+      if (enabled && !toolbarHandle) {
+        toolbarHandle = mountPersistentExportToolbar({
+          label: t0('pm_export'),
+          tooltip: t0('exportChatJson'),
+          onClick: () => showExportDialog(dict, lang),
+        });
+      } else if (!enabled && toolbarHandle) {
+        toolbarHandle.remove();
+        toolbarHandle = null;
+      }
+    };
+
+    ensureToolbarVisibility(await readToolbarEnabled());
+
+    const onStorageChange = (
+      changes: Record<string, chrome.storage.StorageChange>,
+      area: string,
+    ) => {
+      if (area !== 'sync') return;
+      const nextRaw = changes[StorageKeys.LANGUAGE]?.newValue;
+      if (typeof nextRaw === 'string') {
+        const next = normalizeLang(nextRaw);
+        lang = next;
+        const lbl = dict[next]?.['pm_export'] ?? dict.en?.['pm_export'] ?? 'Export';
+        const ttl =
+          dict[next]?.['exportChatJson'] ?? dict.en?.['exportChatJson'] ?? 'Export chat history';
+        toolbarHandle?.setText(lbl, ttl);
+        applyResponseActionCopyImageButtons(() => lang, dict);
+      }
+      const toolbarChange = changes[StorageKeys.PERSISTENT_EXPORT_TOOLBAR_ENABLED];
+      if (toolbarChange && 'newValue' in toolbarChange) {
+        ensureToolbarVisibility(toolbarChange.newValue !== false);
+      }
+    };
+    try {
+      chrome.storage?.onChanged?.addListener(onStorageChange);
+      window.addEventListener(
+        'beforeunload',
+        () => {
+          try {
+            chrome.storage?.onChanged?.removeListener(onStorageChange);
+          } catch {}
+        },
+        { once: true },
+      );
+    } catch {}
+    return;
+  }
   const btn = ensureDropdownInjected(logo);
   if (!btn) return;
   if ((btn as Element & { _gvBound?: boolean })._gvBound) return;
@@ -2243,7 +2596,7 @@ export async function startExportButton(): Promise<void> {
       const lbl = btn.querySelector('.gv-export-dropdown-label');
       if (lbl) lbl.textContent = dict[next]?.['pm_export'] ?? dict.en?.['pm_export'] ?? 'Export';
 
-      applyResponseActionCopyImageButtons(() => lang);
+      applyResponseActionCopyImageButtons(() => lang, dict);
     }
   };
 
@@ -2368,6 +2721,7 @@ async function showExportDialog(
   dialog.show({
     onExport: async (format, fontSize, imageWidth) => {
       try {
+        await ensureGeneratedUiScreenshotPermission();
         if (format === 'image') {
           await saveImageExportWidth(imageWidth);
         }

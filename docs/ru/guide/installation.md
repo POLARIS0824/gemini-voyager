@@ -12,13 +12,15 @@
 
 Самый простой способ начать. Обновления происходят автоматически.
 
-**Chrome / Brave / Opera / Vivaldi:**
+**Chrome / Edge / Brave / Opera / Vivaldi:**
 
 [<img src="https://img.shields.io/badge/Chrome_Web_Store-Download-4285F4?style=for-the-badge&logo=google-chrome&logoColor=white" alt="Установить из Chrome Web Store" height="40"/>](https://chromewebstore.google.com/detail/iifacdnjakkhjjiengaffnegbndgingi?utm_source=github&utm_medium=docs&utm_campaign=organic_growth&utm_content=ru)
 
 **Microsoft Edge:**
 
-[<img src="https://img.shields.io/badge/Microsoft_Edge-Download-0078D7?style=for-the-badge&logo=microsoft-edge&logoColor=white" alt="Установить из Microsoft Edge Add-ons" height="40"/>](https://microsoftedge.microsoft.com/addons/detail/gemini-voyager/gibmkggjijalcjinbdhcpklodjkhhlne)
+[<img src="https://img.shields.io/badge/Microsoft_Edge-Download-0078D7?style=for-the-badge&logo=microsoft-edge&logoColor=white" alt="Установить из Microsoft Edge Add-ons" height="40"/>](https://microsoftedge.microsoft.com/addons/detail/voyager/gibmkggjijalcjinbdhcpklodjkhhlne)
+
+> **Пользователям Edge:** Voyager продолжит поддерживать и публиковать версию [Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/voyager/gibmkggjijalcjinbdhcpklodjkhhlne) для тех, кому нужен Edge на телефоне или планшете. Если проверка задержится, остаются Chrome Web Store и ручные пакеты GitHub.
 
 **Firefox:**
 
@@ -30,7 +32,7 @@
 
 **Для Chrome / Edge / Brave / Opera:**
 
-1. Скачайте последний `gemini-voyager-chrome-vX.Y.Z.zip` из [GitHub Releases](https://github.com/Nagi-ovo/gemini-voyager/releases).
+1. Скачайте последний `voyager-chrome-vX.Y.Z.zip` из [GitHub Releases](https://github.com/Nagi-ovo/voyager/releases).
 2. Распакуйте файл.
 3. Откройте страницу Расширений вашего браузера (`chrome://extensions`).
 4. Включите **Режим разработчика** (вверху справа).
@@ -38,7 +40,7 @@
 
 **Для Firefox:**
 
-1. Скачайте последний `gemini-voyager-firefox-vX.Y.Z.xpi` из [Releases](https://github.com/Nagi-ovo/gemini-voyager/releases).
+1. Скачайте последний `voyager-firefox-vX.Y.Z.xpi` из [Releases](https://github.com/Nagi-ovo/voyager/releases).
 2. Откройте Менеджер дополнений (`about:addons`).
 3. Перетащите файл `.xpi` для установки (или нажмите значок шестеренки ⚙️ -> **Установить дополнение из файла**).
 
@@ -55,8 +57,8 @@ Safari теперь поддерживает прямое распростран
 
 > 💡 Версия Safari теперь непосредственно подписана для распространения — конвертация в Xcode не требуется!
 >
-> ⚠️ **Ограничения**: Из-за особенностей Safari (a) удаление водяных знаков (b) экспорт изображений (рекомендуется PDF) не поддерживаются.
+> ✅ **Официальная поддержка Safari**: начиная с v1.6.0 поддерживаются удаление водяных знаков, экспорт изображений, синхронизация Google Drive/iCloud, уведомления о завершении ответа и обновления Sparkle.
 
 ---
 
-_Настройка для разработки? Если вы разработчик и хотите внести свой вклад, ознакомьтесь с нашим [Руководством по участию](https://github.com/Nagi-ovo/gemini-voyager/blob/main/.github/CONTRIBUTING.md)._
+_Настройка для разработки? Если вы разработчик и хотите внести свой вклад, ознакомьтесь с нашим [Руководством по участию](https://github.com/Nagi-ovo/voyager/blob/main/.github/CONTRIBUTING.md)._

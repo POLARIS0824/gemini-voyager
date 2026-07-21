@@ -4,8 +4,8 @@ gitChangelog: false
 
 hero:
   name: 'Voyager'
-  text: 'Gemini를 위한 완벽한 운영체제.'
-  tagline: '우리는 Gemini를 사랑합니다. 단지 그것이 완벽해지기를 원했습니다.'
+  text: 'AI 챗봇을 위한 완벽한 운영체제.'
+  tagline: 'Gemini · Claude · ChatGPT — 드디어, 완성되다.'
   image:
     src: /logo.png
     alt: Voyager 로고
@@ -55,7 +55,7 @@ features:
     title: 시각 효과
     details: 분위기를 바꿔보세요. 팝업에서 눈, 비, 벚꽃잎 효과를 전환할 수 있습니다.
   - icon: 🍌
-    title: NanoBanana 워터마크 제거
+    title: Image Refinement
     details: 무손실 워터마크 제거. AI가 만든 순간을 순수하게 유지하세요.
   - icon: 📐
     title: 수식 복사
@@ -96,18 +96,18 @@ features:
   <h3 style="margin: 0 0 8px; font-weight: 600; font-size: 1.05em;">모든 설치는 신뢰의 투표입니다</h3>
   <p style="margin: 0 0 16px; opacity: 0.78; font-size: 0.95em;">Chrome 웹 스토어와 GitHub의 실시간 수치입니다. 우리와 함께해주시는 동료 Voyager분들께 감사드립니다.</p>
   <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
-    <img src="https://img.shields.io/github/stars/Nagi-ovo/gemini-voyager?style=flat-square&logo=github" alt="GitHub Stars">
-    <img src="https://img.shields.io/github/forks/Nagi-ovo/gemini-voyager?style=flat-square&logo=github" alt="GitHub Forks">
-    <img src="https://img.shields.io/github/v/release/Nagi-ovo/gemini-voyager?style=flat-square&logo=github" alt="Latest Release">
-    <img src="https://img.shields.io/github/downloads/Nagi-ovo/gemini-voyager/total?style=flat-square&logo=github" alt="GitHub Downloads">
+    <img src="/badges/github-stars.svg" alt="GitHub Stars">
+    <img src="/badges/github-forks.svg" alt="GitHub Forks">
+    <img src="/badges/github-release.svg" alt="Latest Release">
+    <img src="/badges/github-downloads.svg" alt="GitHub Downloads">
     <img src="https://img.shields.io/chrome-web-store/users/iifacdnjakkhjjiengaffnegbndgingi?style=flat-square&logo=google-chrome" alt="Chrome Web Store Users">
     <img src="https://img.shields.io/chrome-web-store/rating/iifacdnjakkhjjiengaffnegbndgingi?style=flat-square&logo=google-chrome" alt="Chrome Web Store Rating">
-    <img src="https://img.shields.io/badge/Edge-✓-0078D7?style=flat-square&logo=microsoft-edge" alt="Edge Add-ons">
+    <img src="https://img.shields.io/badge/edge%20users-50k%2B-0078D7?style=flat-square&logo=microsoftedge&logoColor=white" alt="Edge Add-ons Users">
     <img src="https://img.shields.io/amo/users/gemini-voyager?style=flat-square&logo=firefox" alt="Firefox Add-ons Users">
     <img src="https://img.shields.io/amo/rating/gemini-voyager?style=flat-square&logo=firefox" alt="Firefox Add-ons Rating">
   </div>
   <div style="margin-top: 16px; display: flex; justify-content: center; flex-wrap: wrap; gap: 12px;">
-    <a href="https://trendshift.io/repositories/16094" target="_blank"><img src="https://trendshift.io/api/badge/repositories/16094" alt="Nagi-ovo%2Fgemini-voyager | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+    <a href="https://trendshift.io/repositories/16094" target="_blank"><img src="https://trendshift.io/api/badge/repositories/16094" alt="Nagi-ovo%2Fvoyager | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
   </div>
 </div>
 
@@ -119,8 +119,8 @@ features:
 
 <div class="vp-doc" style="text-align: center; margin: 4rem auto 3rem; max-width: 1000px; padding: 0 16px;">
   <h3 style="margin: 0 0 24px; font-weight: 600; font-size: 1.2em;">특별 감사</h3>
-  <a href="https://github.com/Nagi-ovo/gemini-voyager">
-    <img src="https://raw.githubusercontent.com/Nagi-ovo/gemini-voyager/main/docs/public/assets/sponsors.svg" width="1000px" style="margin: 0 auto;" />
+  <a href="https://github.com/Nagi-ovo/voyager">
+    <img src="https://raw.githubusercontent.com/Nagi-ovo/voyager/main/docs/public/assets/sponsors.svg" width="1000px" style="margin: 0 auto;" />
   </a>
   <p style="margin-top: 24px; font-size: 1.05em; opacity: 0.86;">✨ Product Hunt에 출시되었습니다! 여러분의 의견과 피드백을 환영합니다. ❤️</p>
   <div style="margin-top: 12px; display: flex; justify-content: center;">
@@ -131,6 +131,13 @@ features:
 <div class="vp-doc" style="text-align: center; margin: 3.5rem auto 2rem; max-width: 720px; padding: 0 16px;">
   <p style="font-size: 1.05em; font-weight: 600; opacity: 0.86; margin: 0 0 12px;">“단순한 도구가 아닙니다. 마음을 위한 자전거입니다.”</p>
   <a href="./guide/getting-started" style="font-weight: 600; text-decoration: none;">가능한 것들을 확인해 보세요 →</a>
+</div>
+
+<!-- Fable 5 Verified badge source: https://github.com/yetone/alma-releases/issues/56 (@yetone). -->
+<div class="vp-doc" style="text-align: center; margin: 0 auto 2rem; padding: 0 16px;">
+  <a href="https://github.com/yetone/alma-releases/issues/56" target="_blank" rel="noopener noreferrer" title="Fable 5 Verified badge by @yetone" aria-label="Fable 5 Verified badge by @yetone">
+    <img src="/assets/fable-5-verified.png" alt="Fable 5 Verified" width="360" style="display: inline-block;">
+  </a>
 </div>
 
 <p align="center">

@@ -409,13 +409,41 @@ describe('ConversationExportService', () => {
       expect(items[0].userElement).toBeUndefined();
     });
 
-    // Note: Testing DOMContentExtractor integration is skipped per ROI testing strategy.
-    // DOM operations (Content Scripts) are in the "Fragile" category.
-    // The extractUserContent/extractAssistantContent calls are covered by defensive programming.
+    it('includes structured attachment metadata without serializing DOM elements', async () => {
+      const userElement = document.createElement('div');
+      userElement.innerHTML = `
+        <user-query-file-preview>
+          <div data-test-id="uploaded-file">
+            <button class="new-file-preview-file" aria-label="research.pdf">PDF</button>
+          </div>
+        </user-query-file-preview>
+        <p class="query-text-line">Summarize this</p>
+      `;
+      const downloadSpy = vi.spyOn(
+        ConversationExportService as unknown as { downloadJSON: (...args: unknown[]) => unknown },
+        'downloadJSON',
+      );
+
+      const result = await ConversationExportService.export(
+        [{ user: '', assistant: 'Done', starred: false, userElement }],
+        mockMetadata,
+        { format: ExportFormat.JSON },
+      );
+
+      expect(result.success).toBe(true);
+      const payload = downloadSpy.mock.calls[0][0] as {
+        items: Array<Record<string, unknown>>;
+      };
+      expect(payload.items[0]).toMatchObject({
+        user: '📎 research.pdf\n\nSummarize this',
+        attachments: [{ name: 'research.pdf', type: 'pdf' }],
+      });
+      expect(payload.items[0].userElement).toBeUndefined();
+    });
   });
 
   describe('markdown zip packaging', () => {
-    it('degrades image markdown to text placeholders on Safari instead of zip packaging', async () => {
+    it('uses the normal image-packaging path on Safari', async () => {
       setUserAgentVendor(
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15',
         'Apple Computer, Inc.',
@@ -444,13 +472,9 @@ describe('ConversationExportService', () => {
       });
 
       expect(result.success).toBe(true);
-      expect(result.filename).toMatch(/\.md$/);
-      expect(downloadSpy).toHaveBeenCalledOnce();
-      expect(fetchSpy).not.toHaveBeenCalled();
-
-      const markdown = String(downloadSpy.mock.calls[0][0] ?? '');
-      expect(markdown).toContain('[Image unavailable in Safari export: chart]');
-      expect(markdown).not.toContain('![chart](https://example.com/chart.png)');
+      expect(result.filename).toMatch(/\.zip$/);
+      expect(downloadSpy).not.toHaveBeenCalled();
+      expect(fetchSpy).toHaveBeenCalledWith('https://example.com/chart.png');
     });
 
     it('should assign image filenames in source order even when fetch resolves out of order', async () => {
@@ -528,6 +552,43 @@ describe('ConversationExportService', () => {
       expect(typeof capturedAssetPayload).toBe('string');
       expect(capturedAssetPayload).toBeTruthy();
       expect(capturedAssetOptions).toMatchObject({ base64: true });
+    });
+
+    it('packages inline data images as zip assets instead of leaving base64 in markdown', async () => {
+      const dataUrl = 'data:image/png;base64,aGVsbG8=';
+
+      const finalFilename = await (
+        ConversationExportService as unknown as Record<string, (...args: unknown[]) => unknown>
+      ).downloadMarkdownOrZip(`![Interactive UI](${dataUrl})`, 'chat.md', 'chat.md');
+
+      expect(finalFilename).toBe('chat.zip');
+
+      const createObjectURLMock = global.URL.createObjectURL as unknown as {
+        mock: { calls: Array<[Blob]> };
+      };
+      const zipBlob = createObjectURLMock.mock.calls[0][0];
+      const zip = await JSZip.loadAsync(zipBlob);
+      const packagedMarkdown = await zip.file('chat.md')?.async('string');
+      const imageFile = zip.file('assets/img-001.png');
+
+      expect(packagedMarkdown).toBe('![Interactive UI](assets/img-001.png)');
+      expect(packagedMarkdown).not.toContain('data:image');
+      expect(imageFile).not.toBeNull();
+      expect(await imageFile?.async('string')).toBe('hello');
+    });
+
+    it('does not append -s0 to Google authuser query params', () => {
+      const toOriginalSizeUrl = (
+        ConversationExportService as unknown as Record<string, (url: string) => string>
+      ).toOriginalSizeUrl;
+      const result = toOriginalSizeUrl(
+        'https://lh3.googleusercontent.com/gg/export-image?authuser=2',
+      );
+      const parsed = new URL(result);
+
+      expect(result).not.toContain('authuser=2-s0');
+      expect(parsed.searchParams.get('authuser')).toBe('2');
+      expect(parsed.searchParams.get('s')).toBe('0');
     });
 
     it('should fallback to gv.fetchImageViaPage when direct and background fetch fail', async () => {

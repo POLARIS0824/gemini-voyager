@@ -4,8 +4,24 @@
     "description": "扩展程序名称"
   },
   "extDescription": {
-    "message": "通过时间线导航、文件夹组织、指令宝库和对话导出功能，全面提升您的 Gemini™ 使用体验。",
+    "message": "为 Gemini™、Claude™ 和 ChatGPT™ 打造更好用的工作空间：提示词、阅读工具、内容整理、导出等功能。",
     "description": "扩展程序描述"
+  },
+  "timelineStyle": {
+    "message": "时间线样式",
+    "description": "时间线视觉样式标签"
+  },
+  "timelineStyleDots": {
+    "message": "节点",
+    "description": "经典时间线节点样式"
+  },
+  "timelineStyleCompact": {
+    "message": "紧凑索引",
+    "description": "紧凑时间线索引样式"
+  },
+  "timelineCompactOpenPreview": {
+    "message": "打开时间线预览",
+    "description": "紧凑时间线索引的无障碍标签"
   },
   "scrollMode": {
     "message": "滚动模式",
@@ -71,6 +87,18 @@
     "message": "搜索 prompt 或标签",
     "description": "搜索占位符"
   },
+  "popupSettingsSearchPlaceholder": {
+    "message": "搜索设置",
+    "description": "Popup 设置搜索框占位符"
+  },
+  "popupSettingsSearchClear": {
+    "message": "清除搜索",
+    "description": "Popup 设置搜索清除按钮标签"
+  },
+  "popupSettingsSearchNoResults": {
+    "message": "没有匹配的设置",
+    "description": "Popup 设置搜索无结果状态"
+  },
   "pm_import": {
     "message": "导入",
     "description": "导入按钮"
@@ -134,6 +162,10 @@
   "pm_import_invalid": {
     "message": "文件格式不正确",
     "description": "导入失败"
+  },
+  "pm_import_empty": {
+    "message": "导入文件中没有 prompt",
+    "description": "导入文件有效但为空"
   },
   "pm_import_success": {
     "message": "已导入 {count} 条",
@@ -215,6 +247,46 @@
     "message": "切换到浅色模式",
     "description": "Theme toggle tooltip - switch to light"
   },
+  "pm_view_compact": {
+    "message": "切换为紧凑列表",
+    "description": "View-mode toggle tooltip - switch from comfortable cards to compact single-line rows"
+  },
+  "pm_view_comfortable": {
+    "message": "切换为舒适视图",
+    "description": "View-mode toggle tooltip - switch from compact rows to comfortable cards with markdown preview"
+  },
+  "pm_name_placeholder": {
+    "message": "备注名（可选）",
+    "description": "Placeholder for the optional prompt name/label input used as the compact-mode headline"
+  },
+  "pm_prompt_manager": {
+    "message": "提示词管理器",
+    "description": "Button label for returning from the starred library to Prompt Manager"
+  },
+  "pm_starred_library": {
+    "message": "收藏库",
+    "description": "Prompt Manager starred messages library title and entry button"
+  },
+  "pm_starred_search_placeholder": {
+    "message": "搜索收藏内容",
+    "description": "Search placeholder for starred messages in Prompt Manager"
+  },
+  "pm_starred_no_results": {
+    "message": "没有匹配的星标内容",
+    "description": "Empty state when starred search has no matches"
+  },
+  "pm_starred_untitled": {
+    "message": "未命名会话",
+    "description": "Fallback title for starred messages without a conversation title"
+  },
+  "pm_starred_open": {
+    "message": "打开星标内容",
+    "description": "Tooltip for opening a starred message from Prompt Manager"
+  },
+  "pm_starred_load_error": {
+    "message": "星标内容加载失败",
+    "description": "Error shown when starred messages cannot be loaded"
+  },
   "pm_theme_dark": {
     "message": "切换到深色模式",
     "description": "Theme toggle tooltip - switch to dark"
@@ -243,9 +315,17 @@
     "message": "更新源尚未同步，请几小时后再试",
     "description": "Safari 上 DMG 文件尚未上传到 GitHub releases 时显示"
   },
+  "fableVerifiedBadgeAlt": {
+    "message": "Fable 5 Verified",
+    "description": "Alt text for the Fable 5 Verified badge in the popup footer"
+  },
   "starProject": {
     "message": "为项目点亮 ⭐️",
     "description": "Github 引导"
+  },
+  "sponsorMe": {
+    "message": "为我赞助",
+    "description": "赞助引导"
   },
   "officialDocs": {
     "message": "官方文档",
@@ -262,6 +342,18 @@
   "folder_create": {
     "message": "创建文件夹",
     "description": "创建文件夹按钮提示"
+  },
+  "folder_search_placeholder": {
+    "message": "搜索文件夹和对话",
+    "description": "文件夹侧边栏搜索输入占位符"
+  },
+  "folder_search_mode_folder": {
+    "message": "仅文件夹",
+    "description": "仅文件夹搜索模式生效时显示的标记"
+  },
+  "folder_search_empty": {
+    "message": "没有匹配的文件夹或对话",
+    "description": "文件夹侧边栏搜索无匹配结果时的空状态"
   },
   "folder_name_prompt": {
     "message": "输入文件夹名称：",
@@ -343,6 +435,10 @@
     "message": "从文件夹中移除",
     "description": "移除对话按钮提示"
   },
+  "folder_remove_conversation_action": {
+    "message": "移除",
+    "description": "从文件夹移除对话确认按钮的短标签"
+  },
   "folder_remove_conversation_confirm": {
     "message": "从此文件夹中移除「{title}」？",
     "description": "移除对话确认"
@@ -382,6 +478,22 @@
   "chatFontSizeLarge": {
     "message": "大",
     "description": "大字体大小标签"
+  },
+  "chatLineHeight": {
+    "message": "对话间距",
+    "description": "对话消息间距调整标签"
+  },
+  "chatLineHeightTight": {
+    "message": "紧凑",
+    "description": "紧凑行间距标签"
+  },
+  "chatLineHeightLoose": {
+    "message": "宽松",
+    "description": "宽松行间距标签"
+  },
+  "chatParagraphSpacing": {
+    "message": "对话段落间距",
+    "description": "对话消息段落间距调整标签"
   },
   "sidebarWidth": {
     "message": "侧边栏宽度",
@@ -446,6 +558,74 @@
   "folder_cloud_sync": {
     "message": "从云端同步",
     "description": "云同步按钮提示"
+  },
+  "folder_cloud": {
+    "message": "云同步",
+    "description": "合并后的云按钮提示，点击弹出上传/同步选项"
+  },
+  "folder_settings": {
+    "message": "文件夹设置",
+    "description": "齿轮图标提示，打开文件夹相关设置"
+  },
+  "folder_sort": {
+    "message": "会话排序",
+    "description": "文件夹标题栏中的会话排序方式入口"
+  },
+  "folder_sort_manual": {
+    "message": "手动排序",
+    "description": "按照拖拽位置排列会话"
+  },
+  "folder_sort_recent": {
+    "message": "最近打开",
+    "description": "最近打开的会话优先显示"
+  },
+  "folder_sort_recent_drag_hint": {
+    "message": "请切换到“手动排序”后再调整文件夹内的会话顺序。",
+    "description": "最近打开模式下尝试文件夹内排序时的提示"
+  },
+  "folder_anchor_move_above_notebooks": {
+    "message": "将文件夹移到 Notebooks 上方",
+    "description": "Tooltip on the folder header swap button shown when folders are currently above Recents — clicking moves them above Notebooks instead."
+  },
+  "folder_anchor_move_above_recents": {
+    "message": "将文件夹移到 Recents 上方",
+    "description": "Tooltip on the folder header swap button shown when folders are currently above Notebooks — clicking moves them above Recents instead."
+  },
+  "folder_item_font_size": {
+    "message": "字号",
+    "description": "文件夹/对话字号步进器的标签"
+  },
+  "folder_item_font_size_decrease": {
+    "message": "减小",
+    "description": "字号步进器减号按钮提示"
+  },
+  "folder_item_font_size_increase": {
+    "message": "增大",
+    "description": "字号步进器加号按钮提示"
+  },
+  "folder_manage_in_library": {
+    "message": "到 Library 管理",
+    "description": "AI Studio 侧栏按钮，跳转到 /library 以拖拽管理对话"
+  },
+  "aistudio_hide_archived_nudge_title": {
+    "message": "整理你的 AI Studio Library",
+    "description": "邀请用户在 AI Studio 隐藏已归档对话的引导标题"
+  },
+  "aistudio_hide_archived_nudge_body": {
+    "message": "Voyager 可以把已经归入文件夹的对话从 Library 表格里隐藏，只留未归类的对话。",
+    "description": "引导卡说明 AI Studio 隐藏已归档功能"
+  },
+  "aistudio_hide_archived_nudge_enable": {
+    "message": "立即开启",
+    "description": "AI Studio 隐藏已归档引导卡的主按钮"
+  },
+  "aistudio_hide_archived_nudge_dismiss": {
+    "message": "暂不开启",
+    "description": "AI Studio 隐藏已归档引导卡的次按钮"
+  },
+  "aistudio_hide_archived_nudge_footnote": {
+    "message": "仅对 AI Studio 生效 —— Gemini 的偏好独立保存。",
+    "description": "AI Studio 隐藏已归档引导卡的脚注，说明配置分平台保存"
   },
   "folder_import": {
     "message": "导入文件夹",
@@ -563,9 +743,85 @@
     "message": "启用文件夹功能",
     "description": "启用或禁用文件夹功能"
   },
+  "enableFolderFloatingMode": {
+    "message": "使用悬浮文件夹面板",
+    "description": "Popup toggle that renders the folder feature as a floating window instead of injecting into Gemini's sidebar"
+  },
+  "enableFolderFloatingModeHint": {
+    "message": "以可拖动的悬浮窗形式展示文件夹，不再注入到侧边栏。",
+    "description": "Helper text under the floating folder mode toggle"
+  },
+  "openFloatingFolderOnStartup": {
+    "message": "进入时自动打开悬浮面板",
+    "description": "Popup toggle that controls whether floating folder mode opens the panel immediately when Gemini loads"
+  },
+  "openFloatingFolderOnStartupHint": {
+    "message": "关闭后，进入 Gemini 时只显示悬浮按钮，需要时点击按钮打开文件夹。",
+    "description": "Helper text under the floating folder startup toggle"
+  },
   "hideArchivedConversations": {
     "message": "隐藏已归档对话",
     "description": "从主列表隐藏已添加到文件夹的对话"
+  },
+  "showFolderSearch": {
+    "message": "显示文件夹搜索",
+    "description": "Popup toggle that shows or hides the folder sidebar search box"
+  },
+  "hideArchivedNudgeTitle": {
+    "message": "整理你的侧边栏",
+    "description": "Title of the first-archive onboarding nudge"
+  },
+  "hideArchivedNudgeBody": {
+    "message": "Voyager 支持自动隐藏已归档到文件夹的对话，让侧边栏只保留进行中的内容。对话不会被删除，随时可在文件夹中查看。",
+    "description": "Body text of the first-archive onboarding nudge"
+  },
+  "hideArchivedNudgeEnable": {
+    "message": "立即开启",
+    "description": "Primary button that turns on hide-archived"
+  },
+  "hideArchivedNudgeDismiss": {
+    "message": "暂不开启",
+    "description": "Secondary button that dismisses the nudge"
+  },
+  "hideArchivedNudgeFootnote": {
+    "message": "可在扩展弹窗 → 文件夹选项中关闭此功能。",
+    "description": "Footnote explaining where to toggle the setting later"
+  },
+  "floatingModeNudgeTitle": {
+    "message": "侧边栏不可用 — 在悬浮窗中打开文件夹？",
+    "description": "Title of the floating-mode fallback nudge"
+  },
+  "floatingModeNudgeBody": {
+    "message": "Voyager 未找到 Gemini 侧边栏，可能是页面布局发生了变化。你仍可以在悬浮窗中浏览文件夹。",
+    "description": "Body copy of the floating-mode fallback nudge"
+  },
+  "floatingModeNudgeEnable": {
+    "message": "打开悬浮窗",
+    "description": "Primary button that opens the floating folder panel"
+  },
+  "floatingModeNudgeDismiss": {
+    "message": "暂不",
+    "description": "Secondary button that dismisses the floating-mode nudge"
+  },
+  "floatingPanelTitle": {
+    "message": "文件夹",
+    "description": "Title shown in the floating folder panel header"
+  },
+  "floatingPanelClose": {
+    "message": "关闭",
+    "description": "Aria label for the floating panel close button"
+  },
+  "floatingPanelEmpty": {
+    "message": "还没有文件夹。",
+    "description": "Empty state shown when the user has no folders"
+  },
+  "floatingPanelUntitled": {
+    "message": "未命名",
+    "description": "Fallback label for conversations with no title"
+  },
+  "floatingFabLabel": {
+    "message": "打开悬浮文件夹",
+    "description": "Aria label and tooltip for the persistent floating-mode FAB"
   },
   "conversation_star": {
     "message": "星标对话",
@@ -711,6 +967,26 @@
     "message": "开启后，点击提示词会直接插入 Gemini 输入框。关闭时保持默认复制行为。",
     "description": "提示词点击插入行为说明"
   },
+  "promptDataMigration": {
+    "message": "提示词数据",
+    "description": "提示词管理器导入导出设置标签"
+  },
+  "promptDataMigrationHint": {
+    "message": "将已保存的提示词导出或导入为本地 JSON 文件。",
+    "description": "提示词管理器导入导出设置说明"
+  },
+  "promptExportSuccess": {
+    "message": "已导出 {count} 条提示词",
+    "description": "提示词导出成功提示"
+  },
+  "promptExportError": {
+    "message": "导出失败",
+    "description": "提示词导出失败提示"
+  },
+  "promptImportError": {
+    "message": "导入失败",
+    "description": "提示词导入失败提示"
+  },
   "customWebsites": {
     "message": "自定义网站",
     "description": "提示词管理器的自定义网站"
@@ -756,11 +1032,11 @@
     "description": "自定义网站重新加载/权限提示"
   },
   "starredHistory": {
-    "message": "星标历史",
+    "message": "收藏库",
     "description": "星标历史标题"
   },
   "viewStarredHistory": {
-    "message": "查看星标历史",
+    "message": "查看收藏库",
     "description": "查看星标历史按钮"
   },
   "noStarredMessages": {
@@ -863,6 +1139,14 @@
     "message": "将文件夹和提示词同步到 Google Drive",
     "description": "云同步描述"
   },
+  "cloudSyncDescriptionICloud": {
+    "message": "通过你的私人 iCloud 空间同步 Voyager 数据",
+    "description": "iCloud 同步描述"
+  },
+  "syncProvider": { "message": "存储服务" },
+  "syncProviderGoogleDrive": { "message": "Google Drive" },
+  "syncProviderICloud": { "message": "iCloud" },
+  "syncConnectGoogleDrive": { "message": "连接 Google Drive" },
   "preventAutoScroll": {
     "message": "防自动跳转",
     "description": "功能选项：防止每次输入后生成答案时自动滚到底部"
@@ -907,6 +1191,14 @@
     "message": "✓ 同步成功",
     "description": "同步成功消息"
   },
+  "syncSuccessHighlightsSkipped": {
+    "message": "✓ 已同步；高亮已跳过，请打开 Gemini 后重试",
+    "description": "因无法识别账号而跳过高亮时的同步成功消息"
+  },
+  "syncSuccessFoldersMissing": {
+    "message": "✓ 其他数据已同步；云端没有文件夹备份",
+    "description": "云端没有文件夹数据时的部分同步提示"
+  },
   "syncError": {
     "message": "✗ 同步失败：{error}",
     "description": "同步错误消息"
@@ -939,6 +1231,21 @@
     "message": "从云端下载合并",
     "description": "同步（合并）按钮"
   },
+  "syncOverwrite": {
+    "message": "覆盖下载",
+    "description": "覆盖下载按钮"
+  },
+  "syncOverwriteConfirm": {
+    "message": "确定要用云端数据覆盖本地数据吗？未上传的本地更改会丢失。",
+    "description": "覆盖本地同步数据前的确认"
+  },
+  "syncDeleteICloudBackup": { "message": "删除 iCloud 备份" },
+  "syncDeleteICloudConfirm": {
+    "message": "删除 iCloud 中的所有 Voyager 备份？本机数据会保留，此操作无法撤销。"
+  },
+  "syncDeletingICloudBackup": { "message": "正在删除 iCloud 备份…" },
+  "syncDeleteICloudSuccess": { "message": "✓ 已删除 {count} 个 iCloud 备份文件，本机数据未改变" },
+  "syncDeleteICloudFailed": { "message": "✗ 无法删除 iCloud 备份：{error}" },
   "syncMode": {
     "message": "同步模式",
     "description": "同步模式标签"
@@ -950,6 +1257,10 @@
   "syncNoData": {
     "message": "未在云端找到同步数据",
     "description": "Error message when no data is found in Drive"
+  },
+  "syncOverwriteMissingFolders": {
+    "message": "云端没有可用于覆盖的文件夹备份。本地文件夹已保持不变。",
+    "description": "Error message when overwrite is blocked because Drive has no folders payload"
   },
   "syncUploadFailed": {
     "message": "上传失败",
@@ -972,19 +1283,35 @@
     "description": "使用 Google 登录按钮"
   },
   "nanobananaOptions": {
-    "message": "NanoBanana 选项",
-    "description": "NanoBanana options section label"
+    "message": "Image Refinement 选项",
+    "description": "Image Refinement options section label"
   },
-  "enableNanobananaWatermarkRemover": {
-    "message": "去除 NanoBanana 水印",
-    "description": "启用自动去除生成图片水印功能"
+  "nanobananaDownloadLabel": {
+    "message": "下载时去除水印",
+    "description": "下载图片时自动去除水印（轻量，推荐）"
   },
-  "nanobananaWatermarkRemoverHint": {
-    "message": "自动移除 Gemini 生成图片上的可见水印",
-    "description": "水印去除功能提示"
+  "nanobananaDownloadHint": {
+    "message": "点击下载按钮时，保存的文件已自动去除水印。",
+    "description": "下载时去水印开关说明"
+  },
+  "nanobananaPreviewLabel": {
+    "message": "预览时去除水印",
+    "description": "对话中预览图也去除水印（开销较大，处理时图片可能会闪一下）"
+  },
+  "nanobananaPreviewHint": {
+    "message": "同时处理页面上预览的图片。速度更慢，处理过程中图片可能会短暂闪一下。",
+    "description": "预览时去水印开关说明"
+  },
+  "nanobananaBadgeRecommended": {
+    "message": "推荐",
+    "description": "下载时去水印开关旁的推荐标签"
+  },
+  "nanobananaBadgeUnstable": {
+    "message": "不稳定",
+    "description": "预览时去水印开关旁的不稳定标签"
   },
   "nanobananaDownloadTooltip": {
-    "message": "下载无水印图片 (NanoBanana)",
+    "message": "下载无水印图片 (Image Refinement)",
     "description": "Download button tooltip"
   },
   "deepResearchDownload": {
@@ -1067,6 +1394,14 @@
     "message": "即使输入框包含文字或附件也允许折叠",
     "description": "解释非空折叠功能的提示文本"
   },
+  "inputVimMode": {
+    "message": "输入 Vim Mode",
+    "description": "Toggle label for focusing and leaving the question input with Vim-style keys"
+  },
+  "inputVimModeHint": {
+    "message": "在提问框内用 i/Escape 切换插入/普通模式，用 v 选择，并支持 Vim 移动",
+    "description": "Hint for input Vim mode shortcuts"
+  },
   "ctrlEnterSend": {
     "message": "{modifier}+Enter 发送",
     "description": "Modifier+Enter 发送开关标签。{modifier} 在 macOS 上替换为 ⌘，其他平台替换为 Ctrl"
@@ -1074,6 +1409,22 @@
   "ctrlEnterSendHint": {
     "message": "按 {modifier}+Enter 发送消息，Enter 键仅换行",
     "description": "Modifier+Enter 发送功能提示。{modifier} 在 macOS 上替换为 ⌘，其他平台替换为 Ctrl"
+  },
+  "aistudioEnterSend": {
+    "message": "AI Studio Enter 发送",
+    "description": "AI Studio Enter 发送开关标签。{modifier} 在 macOS 上替换为 ⌘，其他平台替换为 Ctrl"
+  },
+  "aistudioEnterSendHint": {
+    "message": "在 AI Studio 中按 Enter 发送消息，{modifier}+Enter 换行",
+    "description": "AI Studio Enter 发送功能提示。{modifier} 在 macOS 上替换为 ⌘，其他平台替换为 Ctrl"
+  },
+  "safariEnterFix": {
+    "message": "修复 Safari 回车键",
+    "description": "Safari 回车键修复功能的开关标签"
+  },
+  "safariEnterFixHint": {
+    "message": "按一次 Enter 即可发送消息（修复 Safari 需要按两次 Enter 的问题）",
+    "description": "Safari 回车键修复功能的提示文本"
   },
   "draftAutoSave": {
     "message": "草稿自动保存",
@@ -1120,8 +1471,16 @@
     "description": "启用标签页标题同步开关标签"
   },
   "enableTabTitleUpdateHint": {
-    "message": "自动将浏览器标签页标题更新为当前对话的标题",
-    "description": "标签页标题同步功能提示"
+    "message": "Gemini 官方已在 2026 年 6 月实现此功能，因此 Voyager 已停用该开关。",
+    "description": "已停用的标签页标题同步功能说明"
+  },
+  "persistentExportToolbar": {
+    "message": "显示悬浮导出按钮",
+    "description": "右上角兜底导出工具栏开关标签"
+  },
+  "persistentExportToolbarHint": {
+    "message": "当 Gemini 顶栏不再提供导出入口时，在右上角添加一个导出按钮。关闭即可隐藏。",
+    "description": "右上角兜底导出工具栏开关提示"
   },
   "enableMermaidRendering": {
     "message": "启用 Mermaid 图表渲染",
@@ -1138,6 +1497,30 @@
   "enableQuoteReplyHint": {
     "message": "在对话中选中文字时显示悬浮按钮，用于引用所选内容",
     "description": "引用回复功能提示"
+  },
+  "enableHighlights": {
+    "message": "启用高亮",
+    "description": "高亮功能开关标签"
+  },
+  "enableHighlightsHint": {
+    "message": "高亮选中的回答文本、选择颜色，并记住你上次使用的颜色。",
+    "description": "高亮功能提示"
+  },
+  "showHighlightTimelineMarkers": {
+    "message": "在时间线显示高亮位置",
+    "description": "高亮时间线位置标记开关标签"
+  },
+  "showHighlightTimelineMarkersHint": {
+    "message": "为每条已保存的高亮显示彩色位置标记。关闭后高亮正文仍会保留。",
+    "description": "高亮时间线位置标记开关说明"
+  },
+  "hideInputHalo": {
+    "message": "隐藏输入框光晕",
+    "description": "输入框光晕开关标签"
+  },
+  "hideInputHaloHint": {
+    "message": "隐藏 Gemini 输入框背后的蓝色径向渐变光晕",
+    "description": "输入框光晕开关说明"
   },
   "contextSync": {
     "message": "上下文同步",
@@ -1199,14 +1582,6 @@
     "message": "失败",
     "description": "下载失败时的状态前缀"
   },
-  "recentsHide": {
-    "message": "隐藏最近项目",
-    "description": "隐藏最近预览区域的提示"
-  },
-  "recentsShow": {
-    "message": "显示最近项目",
-    "description": "显示最近预览区域的提示"
-  },
   "gemsHide": {
     "message": "隐藏 Gems",
     "description": "隐藏 Gems 列表区域的提示"
@@ -1222,6 +1597,26 @@
   "notebooksShow": {
     "message": "显示笔记本",
     "description": "显示笔记本列表区域的提示"
+  },
+  "foldersHide": {
+    "message": "隐藏文件夹",
+    "description": "Tooltip for hiding Folders section"
+  },
+  "foldersShow": {
+    "message": "显示文件夹",
+    "description": "Tooltip for showing Folders section"
+  },
+  "sidebarCollapseNudgeTitle": {
+    "message": "折叠后还能找回来",
+    "description": "Title of the one-time nudge shown after collapsing a sidebar section"
+  },
+  "sidebarCollapseNudgeBody": {
+    "message": "侧边栏会保留一条细栏，随时点击它即可重新展开这个区域。",
+    "description": "Body text of the one-time nudge shown after collapsing a sidebar section"
+  },
+  "sidebarCollapseNudgeDismiss": {
+    "message": "知道了",
+    "description": "Dismiss button for the one-time sidebar collapse nudge"
   },
   "setAsDefaultModel": {
     "message": "设为新对话的默认模型",
@@ -1239,6 +1634,42 @@
     "message": "已取消默认模型",
     "description": "Toast message when default model is cleared"
   },
+  "enableDefaultModelAutoApply": {
+    "message": "新对话时自动应用默认模型",
+    "description": "Toggle label for the default-model auto-apply kill switch in the popup"
+  },
+  "enableDefaultModelAutoApplyHint": {
+    "message": "开始新对话时自动切换到你已加星标的默认模型和思考强度。如果 Gemini 改版导致自动选择失灵，关闭此项即可。",
+    "description": "Hint text under the default-model auto-apply toggle"
+  },
+  "defaultModelAutoApplyFailed": {
+    "message": "默认模型连续 3 次自动应用失败，Gemini 菜单可能改版了，可以暂时关闭此功能。",
+    "description": "Toast body when the model locker hits its consecutive-failure threshold"
+  },
+  "defaultModelAutoApplyFailedAction": {
+    "message": "去设置里暂停",
+    "description": "Action button label on the auto-apply failure toast"
+  },
+  "defaultModelAutoApplyFailedFallback": {
+    "message": "请点击工具栏上的 Voyager 图标打开设置面板，然后关闭此功能。",
+    "description": "Fallback message shown when programmatic popup open fails (e.g. Firefox)"
+  },
+  "setAsDefaultThinkingLevel": {
+    "message": "设为默认思考强度",
+    "description": "Tooltip for setting default thinking level"
+  },
+  "cancelDefaultThinkingLevel": {
+    "message": "取消默认思考强度",
+    "description": "Tooltip for cancelling default thinking level"
+  },
+  "defaultThinkingLevelSet": {
+    "message": "已设置默认思考强度：$1",
+    "description": "Toast message when default thinking level is set"
+  },
+  "defaultThinkingLevelCleared": {
+    "message": "已取消默认思考强度",
+    "description": "Toast message when default thinking level is cleared"
+  },
   "sidebarAutoHide": {
     "message": "侧边栏自动收起",
     "description": "侧边栏自动收起开关标签"
@@ -1252,7 +1683,7 @@
     "description": "完全隐藏侧边栏开关标签"
   },
   "sidebarFullHideHint": {
-    "message": "收起时完全隐藏侧边栏，鼠标移到左边缘唤出",
+    "message": "收起时完全隐藏侧边栏",
     "description": "完全隐藏侧边栏功能提示"
   },
   "folderSpacing": {
@@ -1278,6 +1709,70 @@
   "folderTreeIndentSpacious": {
     "message": "更宽",
     "description": "较宽的子文件夹缩进标签"
+  },
+  "gemsSidebarCount": {
+    "message": "侧栏中显示的最近 Gems",
+    "description": "Popup slider label — how many recent gems to show in the sidebar above Notebooks. 0 hides the section entirely."
+  },
+  "gemsSidebarCountOff": {
+    "message": "关闭",
+    "description": "Narrow-end label on the gems count slider (count=0, section hidden)."
+  },
+  "gemsSidebarCountMany": {
+    "message": "更多",
+    "description": "Wide-end label on the gems count slider (count up to 10)."
+  },
+  "usageStatusTitle": {
+    "message": "Gemini 用量限额",
+    "description": "Accessible label / tooltip for the usage status pill near the composer."
+  },
+  "usageStatusDaily": {
+    "message": "5h",
+    "description": "Label for the rolling 5-hour usage window bar in the usage status pill."
+  },
+  "usageStatusWeekly": {
+    "message": "每周",
+    "description": "Label for the weekly usage limit bar in the usage status pill."
+  },
+  "usageStatusResets": {
+    "message": "重置于",
+    "description": "Tooltip prefix shown before the reset time on a usage bar."
+  },
+  "usageStatusRefresh": {
+    "message": "刷新",
+    "description": "Tooltip/aria-label for the refresh button on the usage status pill."
+  },
+  "usageStatusOpenHint": {
+    "message": "打开用量限额",
+    "description": "Tooltip on the usage status pill; clicking opens the Gemini usage page."
+  },
+  "usageStatusEmptyHint": {
+    "message": "点此获取用量",
+    "description": "Placeholder shown before the usage pill has loaded its first snapshot."
+  },
+  "usageStatusJustUpdated": {
+    "message": "刚刚更新",
+    "description": "Freshness stamp on the usage status pill when data is under a minute old."
+  },
+  "usageStatusMinutesAgo": {
+    "message": "{n} 分钟前更新",
+    "description": "Freshness stamp; {n} is a number of minutes. Keep the {n} placeholder literal."
+  },
+  "usageStatusHoursAgo": {
+    "message": "{n} 小时前更新",
+    "description": "Freshness stamp; {n} is a number of hours. Keep the {n} placeholder literal."
+  },
+  "usageStatusDaysAgo": {
+    "message": "{n} 天前更新",
+    "description": "Freshness stamp; {n} is a number of days. Keep the {n} placeholder literal."
+  },
+  "usageStatusToggle": {
+    "message": "用量状态栏",
+    "description": "Popup toggle label to enable the usage status pill."
+  },
+  "usageStatusToggleHint": {
+    "message": "在聊天框附近显示 5h 和每周用量限额",
+    "description": "Popup helper text under the usage status bar toggle."
   },
   "export_select_mode_select_all": {
     "message": "全选",
@@ -1407,13 +1902,13 @@
     "message": "如果 Voyager 帮到了你，欢迎推荐给朋友或发到社媒，记得 @ 作者哦！",
     "description": "Changelog modal recommendation message"
   },
+  "changelog_follow_cta": {
+    "message": "获取最新更新，欢迎关注我的社交媒体，新功能与即时修复都在这里第一时间发布。",
+    "description": "Changelog modal follow-me CTA headline"
+  },
   "changelog_social_xiaohongshu": {
     "message": "小红书",
     "description": "Xiaohongshu platform name for social links"
-  },
-  "changelog_social_zhihu": {
-    "message": "知乎",
-    "description": "Zhihu platform name for social links"
   },
   "changelog_docs_hint": {
     "message": "详细功能见文档",
@@ -1426,6 +1921,14 @@
   "changelog_rate_chrome_cta": {
     "message": "立即评分",
     "description": "Chrome Web Store rating CTA button text"
+  },
+  "changelog_rate_edge": {
+    "message": "觉得 Voyager 好用吗？在 Edge 加载项商店给个好评，能帮助更多人发现它！",
+    "description": "Edge Add-ons store rating prompt in changelog modal"
+  },
+  "changelog_rate_edge_cta": {
+    "message": "立即评分",
+    "description": "Edge Add-ons store rating CTA button text"
   },
   "changelog_badge_mode": {
     "message": "通过悬浮球上的 NEW 标记提醒，而非弹出此窗口",
@@ -1442,6 +1945,10 @@
   "forkConfirmBtn": {
     "message": "分叉",
     "description": "分叉确认按钮"
+  },
+  "forkMarkdownBtn": {
+    "message": "下载 MD",
+    "description": "Fork confirmation button for downloading a Markdown file"
   },
   "forkCancel": {
     "message": "取消",
@@ -1466,6 +1973,14 @@
   "forkPasteHint": {
     "message": "按回车发送以创建分叉",
     "description": "分叉粘贴提示文字"
+  },
+  "forkManualUploadHint": {
+    "message": "在 2 分钟内将 {filename} 拖入 Gemini 并发送，即可创建分叉。",
+    "description": "Fork manual Markdown upload hint text"
+  },
+  "forkManualUploadPrompt": {
+    "message": "我已上传 {filename}，这是上一段对话的上下文。请把附件作为背景资料，回答我下面的新问题。\n\n新问题：\n",
+    "description": "Prefilled prompt for manual Markdown upload forks"
   },
   "forkDeleteData": {
     "message": "删除此分支",
@@ -1531,6 +2046,10 @@
     "message": "失败 — 请先打开 Gemini",
     "description": "复制 AI 整理提示失败时的错误"
   },
+  "aiOrgNoConversations": {
+    "message": "未找到对话 — 请展开并滚动聊天列表后重试",
+    "description": "AI 整理未能读取到任何对话时的按钮文字"
+  },
   "aiOrgCopyHint": {
     "message": "复制所有对话和文件夹结构作为提示词。粘贴到 Gemini 中即可获得可导入的文件夹方案。",
     "description": "AI 整理复制按钮下方的提示文字"
@@ -1552,7 +2071,7 @@
     "description": "AI 指示部分的标题"
   },
   "aiOrgInstructionsBody": {
-    "message": "根据以上对话和文件夹结构，请将它们重新整理为合理的文件夹层级。输出一个使用以下格式的 JSON 文件，可以直接导入到 Gemini Voyager 扩展中（使用「合并」导入策略）。保留已有的合理文件夹，根据需要创建新文件夹，将未归类的对话移入合适的文件夹。每个文件夹需要一个唯一 ID（使用短随机字符串），每个对话必须保留其原始的 conversationId 和 url。",
+    "message": "根据以上对话和文件夹结构，请将它们重新整理为合理的文件夹层级。输出一个使用以下格式的 JSON 文件，可以直接导入到 Voyager 扩展中（使用「合并」导入策略）。保留已有的合理文件夹，根据需要创建新文件夹，将未归类的对话移入合适的文件夹。每个文件夹需要一个唯一 ID（使用短随机字符串），每个对话必须保留其原始的 conversationId 和 url。",
     "description": "AI 生成可导入文件夹结构的指示正文"
   },
   "showMessageTimestamps": {
@@ -1602,5 +2121,341 @@
   "folderAsProject_collapse": {
     "message": "折叠",
     "description": "Aria-label for the collapse button (screen readers)"
+  },
+  "folder_new_chat_in_folder": {
+    "message": "在此文件夹新建对话",
+    "description": "Folder context menu item to create a new chat and auto-assign it to this folder"
+  },
+  "canvasExportCopyMarkdown": {
+    "message": "复制为 Markdown",
+    "description": "Canvas 分享菜单项：将 Canvas 内容作为 Markdown 复制到剪贴板"
+  },
+  "canvasExportCopyMarkdownTooltip": {
+    "message": "将 Canvas 内容复制为 Markdown",
+    "description": "Canvas 复制为 Markdown 菜单项的提示"
+  },
+  "canvasExportCopied": {
+    "message": "已将 Canvas 复制为 Markdown",
+    "description": "复制成功后显示的提示"
+  },
+  "canvasExportEmpty": {
+    "message": "Canvas 内容为空",
+    "description": "Canvas 无内容可复制时显示的提示"
+  },
+  "canvasExportFailed": {
+    "message": "复制 Canvas 内容失败",
+    "description": "剪贴板复制 Markdown 失败时显示的提示"
+  },
+  "floatingPanelCreateFolder": {
+    "message": "新建文件夹",
+    "description": "Floating folder panel create folder action"
+  },
+  "floatingPanelCreateSubfolder": {
+    "message": "新建子文件夹",
+    "description": "Floating folder panel create subfolder action"
+  },
+  "floatingPanelFolderNamePlaceholder": {
+    "message": "文件夹名称",
+    "description": "Floating folder panel folder name input placeholder"
+  },
+  "floatingPanelRenameFolder": {
+    "message": "重命名",
+    "description": "Floating folder panel rename folder action"
+  },
+  "floatingPanelDeleteFolder": {
+    "message": "删除",
+    "description": "Floating folder panel delete folder action"
+  },
+  "floatingPanelDeleteConfirm": {
+    "message": "删除此文件夹及其所有内容？",
+    "description": "Floating folder panel delete folder confirmation"
+  },
+  "floatingPanelCancel": {
+    "message": "取消",
+    "description": "Floating folder panel cancel action"
+  },
+  "floatingPanelSave": {
+    "message": "保存",
+    "description": "Floating folder panel save action"
+  },
+  "floatingPanelPinFolder": {
+    "message": "置顶",
+    "description": "Floating folder panel pin folder action"
+  },
+  "floatingPanelUnpinFolder": {
+    "message": "取消置顶",
+    "description": "Floating folder panel unpin folder action"
+  },
+  "floatingPanelRemoveConversation": {
+    "message": "从文件夹中移除",
+    "description": "Floating folder panel remove conversation action"
+  },
+  "floatingPanelStarConversation": {
+    "message": "加星标",
+    "description": "Floating folder panel star conversation action"
+  },
+  "floatingPanelUnstarConversation": {
+    "message": "取消星标",
+    "description": "Floating folder panel unstar conversation action"
+  },
+  "floatingPanelColor": {
+    "message": "颜色",
+    "description": "Floating folder panel color section label"
+  },
+  "floatingPanelExpandFolder": {
+    "message": "展开",
+    "description": "Floating folder panel expand folder aria label"
+  },
+  "floatingPanelCollapseFolder": {
+    "message": "折叠",
+    "description": "Floating folder panel collapse folder aria label"
+  },
+  "floatingPanelCloudUpload": {
+    "message": "上传到云端",
+    "description": "Floating folder panel cloud upload button tooltip"
+  },
+  "floatingPanelCloudSync": {
+    "message": "从云端同步",
+    "description": "Floating folder panel cloud sync button tooltip"
+  },
+  "floatingPanelMoveHint": {
+    "message": "要添加对话：打开对话的 ⋮ 菜单 →“移动到文件夹”。",
+    "description": "Floating folder panel hint explaining how to add conversations through the native conversation menu"
+  },
+  "floatingPanelGestureHint": {
+    "message": "双击重命名 · 右键可置顶/改色/删除。",
+    "description": "Floating folder panel hint explaining folder gestures and context menu actions"
+  },
+  "responseCompleteNotification": {
+    "message": "Gemini 思考完成通知",
+    "description": "Gemini 回答完成系统通知开关"
+  },
+  "responseCompleteNotificationHint": {
+    "message": "当 Gemini 完整输出回答后，发送系统通知。",
+    "description": "Gemini 回答完成系统通知提示"
+  },
+  "responseCompleteNotificationHintSafari": {
+    "message": "在 Safari 上，此系统通知由 Gemini Voyager macOS App 发送。",
+    "description": "Safari 上 Gemini 回答完成通知提示"
+  },
+  "responseCompleteNotificationMessage": {
+    "message": "Gemini 思考完成",
+    "description": "Gemini 完成回答时的系统通知正文"
+  },
+  "responseCompleteForegroundToast": {
+    "message": "新回复已完成",
+    "description": "Gemini 回复在屏幕外完成时的前台提示文本"
+  },
+  "remoteAnnouncementNotification": {
+    "message": "远程公告通知",
+    "description": "维护者远程公告通知开关"
+  },
+  "remoteAnnouncementNotificationHint": {
+    "message": "Voyager 会在本地定时读取公开 GitHub JSON 公告，只显示文字/链接提醒。它不能远程注入或执行代码，也不能控制你的电脑。",
+    "description": "远程公告通知说明及安全边界"
+  },
+  "remoteAnnouncementSystemPermissionCta": {
+    "message": "启用系统提醒",
+    "description": "为远程公告授予可选系统通知权限的按钮文本"
+  },
+  "remoteAnnouncementDefaultTitle": {
+    "message": "Voyager 公告",
+    "description": "远程公告页面内提示的默认标题"
+  },
+  "remoteAnnouncementOpen": {
+    "message": "打开",
+    "description": "远程公告链接按钮"
+  },
+  "remoteAnnouncementDismiss": {
+    "message": "关闭",
+    "description": "远程公告关闭按钮"
+  },
+  "pluginsTitle": {
+    "message": "插件",
+    "description": "Popup section title for the plugin list"
+  },
+  "pluginsDescription": {
+    "message": "启用增强其他 AI 网站的插件。开启时会请求该网站的访问权限。",
+    "description": "Popup subtitle explaining the plugin list"
+  },
+  "pluginViewSource": {
+    "message": "源码",
+    "description": "Link label to a plugin source/repo"
+  },
+  "pluginPermissionDenied": {
+    "message": "网站权限被拒绝，插件无法运行。",
+    "description": "Shown when the user denies the site permission for a plugin"
+  },
+  "pluginUnsupportedPlatform": {
+    "message": "此浏览器不支持——无法授予该插件所需的网站权限。",
+    "description": "Shown when a plugin can't be enabled because the browser can't grant the site access it needs (e.g. Safari)"
+  },
+  "pluginsLoading": {
+    "message": "正在加载插件…",
+    "description": "Shown while the plugin catalog is loading"
+  },
+  "pluginsEmpty": {
+    "message": "暂无可用插件。",
+    "description": "Shown when no plugins are available"
+  },
+  "pluginsRefresh": {
+    "message": "刷新插件",
+    "description": "Tooltip for the refresh-marketplace-catalog button"
+  },
+  "usageCoachmarkTitle": {
+    "message": "新功能：用量额度",
+    "description": "Coachmark title introducing the usage pill"
+  },
+  "usageCoachmarkBody": {
+    "message": "在输入框旁随时查看你剩余的 Gemini 5 小时和每周额度。",
+    "description": "Coachmark body text introducing the usage pill"
+  },
+  "usageCoachmarkToggle": {
+    "message": "显示用量胶囊",
+    "description": "Inline toggle label in the usage-pill coachmark"
+  },
+  "folderSearchCoachmarkTitle": {
+    "message": "新增：文件夹搜索",
+    "description": "Coachmark title introducing folder search"
+  },
+  "folderSearchCoachmarkBody": {
+    "message": "直接在文件夹区域搜索文件夹和对话标题。",
+    "description": "Coachmark body text introducing folder search"
+  },
+  "folderSearchCoachmarkToggle": {
+    "message": "显示文件夹搜索",
+    "description": "Inline toggle label in the folder-search coachmark"
+  },
+  "conversationSortCoachmarkTitle": {
+    "message": "新增：会话排序",
+    "description": "Coachmark title introducing conversation sorting"
+  },
+  "conversationSortCoachmarkBody": {
+    "message": "“手动排序”会保留你拖拽调整后的顺序；“最近打开”会把刚访问的会话排到前面。可随时在文件夹设置中切换。",
+    "description": "Coachmark body explaining manual and recently opened conversation sorting"
+  },
+  "timelineCoachmarkTitle": {
+    "message": "新增：紧凑时间线",
+    "description": "Coachmark title introducing the compact timeline style"
+  },
+  "timelineCoachmarkBody": {
+    "message": "右侧只保留一列紧凑索引。悬浮即可在一个面板中查看所有消息。",
+    "description": "Coachmark body text introducing the compact timeline style"
+  },
+  "timelineCoachmarkToggle": {
+    "message": "使用紧凑索引",
+    "description": "Inline toggle label in the compact-timeline coachmark"
+  },
+  "coachmarkDismiss": {
+    "message": "完成",
+    "description": "Generic confirmation label for feature coachmarks"
+  },
+  "coachmarkNext": {
+    "message": "下一步",
+    "description": "Button label for advancing to the next feature coachmark"
+  },
+  "coachmarkClose": {
+    "message": "关闭",
+    "description": "Accessible label for the feature coachmark close button"
+  },
+  "themeColor": {
+    "message": "主题色",
+    "description": "Accent/theme colour picker title"
+  },
+  "themeColorDesc": {
+    "message": "为当前网站自定义 Voyager 的主题色。",
+    "description": "Accent colour picker description"
+  },
+  "themeColorReset": {
+    "message": "恢复默认",
+    "description": "Reset accent colour to default"
+  },
+  "promptCloudPull": {
+    "message": "拉取（合并）",
+    "description": "Button: pull (merge) prompts from Google Drive into local"
+  },
+  "promptCloudPush": {
+    "message": "上传（合并）",
+    "description": "Button: push (merge) local prompts up to Google Drive"
+  },
+  "promptCloudPullSuccess": {
+    "message": "已从云端合并 {count} 条提示词",
+    "description": "Toast: prompts merged from cloud (with {count})"
+  },
+  "promptCloudPushSuccess": {
+    "message": "已上传合并后的 {count} 条提示词到云端",
+    "description": "Toast: merged prompts uploaded to cloud (with {count})"
+  },
+  "promptCloudPullEmpty": {
+    "message": "云端还没有提示词",
+    "description": "Toast: no prompts in the cloud yet"
+  },
+  "promptCloudError": {
+    "message": "云端同步失败，请确认已登录 Google Drive。",
+    "description": "Toast: cloud prompt sync failed / not signed in"
+  },
+  "enablePromptManagerOnSite": {
+    "message": "在 {site} 上开启提示词管理器",
+    "description": "Top toggle label: enable Prompt Manager on the current plugin site ({site})"
+  },
+  "enablePromptManagerOnSiteHint": {
+    "message": "在此站点使用你保存的提示词。开启时需要授权访问该站点。",
+    "description": "Top toggle hint for enabling Prompt Manager on a third-party site"
+  },
+  "storageQuotaTitle": { "message": "存储空间" },
+  "storageQuotaManage": { "message": "管理存储" },
+  "storageQuotaLocal": { "message": "扩展本地数据" },
+  "storageQuotaSync": { "message": "同步设置" },
+  "storageQuotaHealthy": { "message": "空间充足" },
+  "storageQuotaAttention": { "message": "接近上限" },
+  "storageQuotaCritical": { "message": "即将存满" },
+  "storageQuotaWarningToast": {
+    "message": "Voyager 存储空间已使用 {percent}%。请打开扩展弹窗查看或清理数据。"
+  },
+  "storageQuotaUnknown": { "message": "无法读取用量" },
+  "storageQuotaBreakdown": { "message": "存储明细" },
+  "storageQuotaSoftLimit": { "message": "Voyager 软上限" },
+  "storageQuotaEffectiveLimit": {
+    "message": "当前实际上限：{size}。Voyager 会以它和所选软上限中的较低值为准。"
+  },
+  "storageQuotaCache": { "message": "可重建缓存" },
+  "storageQuotaHighlights": { "message": "高亮内容" },
+  "storageQuotaOther": { "message": "其他" },
+  "storageQuotaUnlock": { "message": "扩展本地空间" },
+  "storageQuotaSafariLimit": {
+    "message": "Safari 15 只能把本地存储从约 5 MB 提升到约 10 MB，仍然可能存满。"
+  },
+  "storageQuotaUnknownLimit": {
+    "message": "无法识别 Safari 版本；旧版本扩容后仍可能受限。"
+  },
+  "storageQuotaClearConfirm": {
+    "message": "清理“{category}”？只会删除这一类别的数据。"
+  },
+  "storageQuotaHighlightClearConfirm": {
+    "message": "删除所有已保存的高亮和批注？此操作无法撤销。"
+  },
+  "storageQuotaDraftClearConfirm": {
+    "message": "删除所有未发送的草稿？此操作无法撤销。"
+  },
+  "highlightAction": { "message": "高亮" },
+  "highlightSaved": { "message": "高亮已保存" },
+  "highlightSaveFailed": { "message": "无法保存高亮" },
+  "highlightDeleteFailed": { "message": "无法删除高亮" },
+  "highlightNotePlaceholder": { "message": "添加备注（可选）" },
+  "highlightColor": { "message": "高亮颜色" },
+  "highlightCustomColor": { "message": "自定义高亮颜色" },
+  "highlightTooLong": { "message": "选中内容过长，请缩小范围。" },
+  "highlightAriaLabel": { "message": "已保存的高亮。打开批注。" },
+  "highlightTimelineAriaLabel": { "message": "打开已保存的高亮" },
+  "savedLibraryAll": { "message": "全部" },
+  "savedLibraryStars": { "message": "星标" },
+  "savedLibraryHighlights": { "message": "高亮" },
+  "savedLibraryEmpty": { "message": "暂无收藏内容" },
+  "savedLibraryNoHighlights": { "message": "暂无高亮" },
+  "savedLibrarySearchPlaceholder": { "message": "搜索星标和高亮" },
+  "highlightImportSuccess": { "message": "已导入 {count} 条高亮" },
+  "highlightCloudSync": { "message": "同步高亮" },
+  "highlightCloudSyncHint": {
+    "message": "将高亮保存在按账号隔离的独立 Drive 文件中。开启 Drive 同步后默认包含高亮，并始终安全合并。"
   }
 }

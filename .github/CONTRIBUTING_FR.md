@@ -49,8 +49,8 @@ Bien que les outils d'IA soient d'excellents assistants, les contributions "pare
 
 ```bash
 # Cloner le dépôt
-git clone https://github.com/Nagi-ovo/gemini-voyager.git
-cd gemini-voyager
+git clone https://github.com/Nagi-ovo/voyager.git
+cd voyager
 
 # Installer les dépendances
 bun install
@@ -71,13 +71,23 @@ Avant de commencer, vérifiez si le ticket est déjà assigné à quelqu'un en r
 
 ### 2. Réclamer un Ticket
 
-Commentez `/claim` sur n'importe quel ticket non assigné pour vous l'assigner automatiquement. Un bot confirmera l'assignation.
+Pour un ticket non assigné **sans** le label `community-only`, commentez `/claim` pour vous l'assigner automatiquement. Un bot confirmera l'assignation.
 
-### 3. Libérer si Nécessaire
+### 3. Tickets réservés à la communauté
+
+Les tickets portant le label `community-only` sont réservés aux membres vérifiés de la communauté Voyager :
+
+1. Le membre de la communauté commente `/claim`.
+2. Un mainteneur vérifie son appartenance et commente `/approve @utilisateur`.
+3. Ne commencez l'implémentation ou n'ouvrez une PR qu'après l'assignation par le bot.
+
+Le label retire automatiquement `help wanted` et `good first issue`. Les autres contributeurs peuvent rejoindre le [Discord Voyager](https://discord.gg/TEUFxdMbGb) ou choisir un ticket sans `community-only`.
+
+### 4. Libérer si Nécessaire
 
 Si vous ne pouvez plus travailler sur un ticket, commentez `/unclaim` pour le libérer pour d'autres.
 
-### 4. Case à Cocher de Contribution
+### 5. Case à Cocher de Contribution
 
 Lors de la création de tickets, vous pouvez cocher la case "I am willing to contribute code" pour indiquer votre intérêt à implémenter la fonctionnalité ou le correctif.
 
@@ -109,7 +119,7 @@ bun install
 1. Exécutez `bun run dev` pour démarrer le build de développement
 2. Ouvrez Chrome et allez sur `chrome://extensions/`
 3. Activez le "Mode développeur"
-4. Cliquez sur "Charger l'extension non empaquetée" et sélectionnez le dossier `dist_chrome`
+4. Cliquez sur "Charger l'extension non empaquetée" et sélectionnez le dossier `dist_chrome_dev`
 
 ---
 
@@ -272,9 +282,9 @@ Voyager améliore l'expérience de chat Gemini AI avec :
 
 ## Obtenir de l'Aide
 
-- 💬 [GitHub Discussions](https://github.com/Nagi-ovo/gemini-voyager/discussions) - Poser des questions
-- 🐛 [Issues](https://github.com/Nagi-ovo/gemini-voyager/issues) - Signaler des bugs
-- 📖 [Documentation](https://gemini-voyager.vercel.app/) - Lire la documentation
+- 💬 [GitHub Discussions](https://github.com/Nagi-ovo/voyager/discussions) - Poser des questions
+- 🐛 [Issues](https://github.com/Nagi-ovo/voyager/issues) - Signaler des bugs
+- 📖 [Documentation](https://voyager.nagi.fun/) - Lire la documentation
 
 ---
 

@@ -5,7 +5,7 @@
 import { AppError, ErrorCode } from '@/core/errors/AppError';
 import type { Result } from '@/core/types/common';
 import type { ConversationReference, Folder, FolderData } from '@/core/types/folder';
-import { LOCK_KEYS, importExportLock } from '@/core/utils/concurrency';
+import { AsyncLockTimeoutError, LOCK_KEYS, importExportLock } from '@/core/utils/concurrency';
 import {
   EXTENSION_VERSION,
   type FormatVersion,
@@ -166,10 +166,69 @@ export class FolderImportExportService {
       }
     }
 
+    // Per-entry validation of folderContents — lenient: malformed conversation
+    // entries are dropped (and counted) instead of rejecting the whole import.
+    const { contents: sanitizedContents, skipped } = this.sanitizeFolderContents(
+      data.folderContents as Record<string, unknown>,
+    );
+    if (skipped > 0) {
+      console.warn(
+        `[FolderImportExport] Skipped ${skipped} malformed folderContents entr${skipped === 1 ? 'y' : 'ies'} during import validation`,
+      );
+    }
+
+    // Return a sanitized copy — never hand back (or mutate) the caller's object.
     return {
       success: true,
-      data: payload as FolderExportPayload,
+      data: {
+        ...(payload as FolderExportPayload),
+        data: {
+          folders: data.folders as Folder[],
+          folderContents: sanitizedContents,
+        },
+      },
     };
+  }
+
+  /**
+   * Sanitize a raw folderContents record. Keeps only entries whose
+   * `conversationId` and `title` are non-empty strings; everything else is
+   * skipped and counted. A non-array folder value is treated as an empty list
+   * (counted once). Pure — never mutates the input.
+   */
+  static sanitizeFolderContents(raw: Record<string, unknown>): {
+    contents: Record<string, ConversationReference[]>;
+    skipped: number;
+  } {
+    const contents: Record<string, ConversationReference[]> = {};
+    let skipped = 0;
+
+    for (const [folderId, value] of Object.entries(raw)) {
+      if (!Array.isArray(value)) {
+        contents[folderId] = [];
+        skipped++;
+        continue;
+      }
+
+      const valid: ConversationReference[] = [];
+      for (const entry of value) {
+        if (
+          entry &&
+          typeof entry === 'object' &&
+          typeof (entry as Record<string, unknown>).conversationId === 'string' &&
+          (entry as Record<string, unknown>).conversationId !== '' &&
+          typeof (entry as Record<string, unknown>).title === 'string' &&
+          (entry as Record<string, unknown>).title !== ''
+        ) {
+          valid.push(entry as ConversationReference);
+        } else {
+          skipped++;
+        }
+      }
+      contents[folderId] = valid;
+    }
+
+    return { contents, skipped };
   }
 
   /**
@@ -193,26 +252,28 @@ export class FolderImportExportService {
       }
     }
 
-    // Merge folder contents
+    // Merge folder contents. The spread above is a *shallow* copy — the arrays
+    // are still shared with `existing` — so each folder's list is copied before
+    // any append. mergeData must stay a pure function: mutating the caller's
+    // live data would also poison any backup snapshot taken from it.
     const mergedContents: Record<string, ConversationReference[]> = { ...existing.folderContents };
     let conversationsImported = 0;
     let duplicatesConversationsSkipped = 0;
 
     for (const [folderId, conversations] of Object.entries(imported.folderContents)) {
-      if (!mergedContents[folderId]) {
-        mergedContents[folderId] = [];
-      }
-
-      const existingConvIds = new Set(mergedContents[folderId].map((c) => c.conversationId));
+      const target = [...(mergedContents[folderId] ?? [])];
+      const existingConvIds = new Set(target.map((c) => c.conversationId));
 
       for (const conv of conversations) {
         if (!existingConvIds.has(conv.conversationId)) {
-          mergedContents[folderId].push(conv);
+          target.push(conv);
           conversationsImported++;
         } else {
           duplicatesConversationsSkipped++;
         }
       }
+
+      mergedContents[folderId] = target;
     }
 
     const merged: FolderData = {
@@ -265,13 +326,14 @@ export class FolderImportExportService {
         }
       }
 
-      // Create backup if requested
+      // Create backup if requested — a deep snapshot taken BEFORE any merge
+      // work. A shallow copy would share array references with the live data,
+      // and any later mutation would silently rewrite the "pre-import" backup,
+      // breaking restoreFromBackup. JSON round-trip is safe here: FolderData is
+      // JSON-serializable (it is stringified into sessionStorage below anyway).
       let backupData: FolderData | null = null;
       if (createBackup) {
-        backupData = {
-          folders: [...currentData.folders],
-          folderContents: { ...currentData.folderContents },
-        };
+        backupData = JSON.parse(JSON.stringify(currentData)) as FolderData;
       }
 
       let resultData: FolderData;
@@ -340,12 +402,23 @@ export class FolderImportExportService {
     currentData: FolderData,
     options: ImportOptions,
   ): Promise<Result<{ data: FolderData; stats: ImportResult }>> {
-    // Use lock to prevent concurrent imports
-    return await importExportLock.withLock(
-      LOCK_KEYS.FOLDER_IMPORT,
-      () => Promise.resolve(this.importFromPayloadInternal(payload, currentData, options)),
-      30000, // 30 second timeout
-    );
+    try {
+      // Use lock to prevent concurrent imports
+      return await importExportLock.withLock(
+        LOCK_KEYS.FOLDER_IMPORT,
+        () => Promise.resolve(this.importFromPayloadInternal(payload, currentData, options)),
+        30000, // 30 second timeout
+      );
+    } catch (error) {
+      const message =
+        error instanceof AsyncLockTimeoutError
+          ? 'Another folder import is already in progress. Please try again shortly.'
+          : 'Failed to acquire the folder import lock.';
+      return {
+        success: false,
+        error: new AppError(ErrorCode.UNKNOWN_ERROR, message, { originalError: error }),
+      };
+    }
   }
 
   /**
@@ -386,16 +459,44 @@ export class FolderImportExportService {
   }
 
   /**
+   * Parse folder JSON from a file or pasted AI response.
+   */
+  static parseJSONText(text: string): Result<unknown> {
+    const trimmed = text.trim();
+    const candidates = [trimmed];
+    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fenced?.[1]) candidates.push(fenced[1].trim());
+
+    const firstBrace = trimmed.indexOf('{');
+    const lastBrace = trimmed.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      candidates.push(trimmed.slice(firstBrace, lastBrace + 1));
+    }
+
+    let lastError: unknown;
+    for (const candidate of candidates) {
+      try {
+        return { success: true, data: JSON.parse(candidate) };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    return {
+      success: false,
+      error: new AppError(ErrorCode.VALIDATION_ERROR, 'Failed to parse JSON text', {
+        originalError: lastError,
+      }),
+    };
+  }
+
+  /**
    * Read and parse JSON file from user upload
    */
   static async readJSONFile(file: File): Promise<Result<unknown>> {
     try {
       const text = await file.text();
-      const parsed = JSON.parse(text);
-      return {
-        success: true,
-        data: parsed,
-      };
+      return this.parseJSONText(text);
     } catch (error) {
       return {
         success: false,

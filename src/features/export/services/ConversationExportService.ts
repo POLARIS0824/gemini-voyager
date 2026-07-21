@@ -3,9 +3,7 @@
  * Unified service for exporting conversations in multiple formats
  * Uses Strategy pattern for format-specific implementations
  */
-import JSZip from 'jszip';
-
-import { isSafari } from '@/core/utils/browser';
+import { fetchImageViaExtensionRuntime } from '@/core/utils/runtimeImageFetch';
 
 import { IMAGE_RENDER_EVENT_ERROR_CODE, isEventLikeImageRenderError } from '../types/errors';
 import type {
@@ -129,6 +127,7 @@ export class ConversationExportService {
     const processedItems = turns.map((turn) => {
       let userContent = turn.user;
       let assistantContent = turn.assistant;
+      let attachments = turn.attachments ?? [];
 
       // Extract rich content with Markdown formatting from DOM elements if available
       if (turn.userElement) {
@@ -136,6 +135,7 @@ export class ConversationExportService {
         if (extracted.text) {
           userContent = extracted.text;
         }
+        attachments = extracted.attachments;
       }
 
       if (turn.assistantElement) {
@@ -149,6 +149,7 @@ export class ConversationExportService {
         user: userContent,
         assistant: assistantContent,
         starred: turn.starred,
+        ...(attachments.length > 0 ? { attachments } : {}),
       };
     });
 
@@ -395,12 +396,6 @@ export class ConversationExportService {
   ): Promise<string> {
     const normalizedFilename = filename.toLowerCase().endsWith('.md') ? filename : `${filename}.md`;
 
-    if (isSafari()) {
-      const degradedMarkdown = MarkdownFormatter.degradeImageMarkdownForSafari(markdown);
-      MarkdownFormatter.download(degradedMarkdown, normalizedFilename);
-      return normalizedFilename;
-    }
-
     const imageUrls = MarkdownFormatter.extractImageUrls(markdown);
 
     if (imageUrls.length === 0) {
@@ -408,6 +403,9 @@ export class ConversationExportService {
       return normalizedFilename;
     }
 
+    // Load JSZip on demand: image-packaged Markdown export is a rare, click-driven
+    // action, so JSZip stays out of the statically-imported content-script chunk.
+    const { default: JSZip } = await import('jszip');
     const zip = new JSZip();
     const assetsFolder = zip.folder('assets');
     const mapping = new Map<string, string>();
@@ -471,7 +469,12 @@ export class ConversationExportService {
     if (GOOGLE_SIZE_PATTERN.test(url)) {
       return url.replace(GOOGLE_SIZE_PATTERN, '=s0');
     }
-    return url.includes('=') ? url + '-s0' : url + '=s0';
+    if (url.includes('?')) {
+      const parsed = new URL(url);
+      parsed.searchParams.set('s', '0');
+      return parsed.toString();
+    }
+    return url.split(/[?#]/, 1)[0].includes('=') ? url + '-s0' : url + '=s0';
   }
 
   private static pickImageExtension(contentType: string | null, url: string): string {
@@ -506,9 +509,45 @@ export class ConversationExportService {
     });
   }
 
+  private static decodeDataImageUrl(url: string): { blob: Blob; contentType: string } | null {
+    const commaIndex = url.indexOf(',');
+    if (!url.startsWith('data:image/') || commaIndex < 0) return null;
+
+    const metadata = url.slice('data:'.length, commaIndex);
+    const contentType = metadata.split(';')[0] || 'image/png';
+    const payload = url.slice(commaIndex + 1);
+
+    try {
+      let bytes: Uint8Array;
+      if (metadata.includes(';base64')) {
+        const binary = atob(payload);
+        bytes = new Uint8Array(binary.length);
+        for (let idx = 0; idx < binary.length; idx++) {
+          bytes[idx] = binary.charCodeAt(idx);
+        }
+      } else {
+        bytes = new TextEncoder().encode(decodeURIComponent(payload));
+      }
+
+      const buffer = new ArrayBuffer(bytes.byteLength);
+      new Uint8Array(buffer).set(bytes);
+
+      return {
+        blob: new Blob([buffer], { type: contentType }),
+        contentType,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   private static async fetchImageForMarkdownPackaging(
     url: string,
   ): Promise<{ blob: Blob; contentType: string | null } | null> {
+    if (url.startsWith('data:image/')) {
+      return this.decodeDataImageUrl(url);
+    }
+
     try {
       const response = await fetch(url, { credentials: 'include', mode: 'cors' as RequestMode });
       if (response.ok) {
@@ -535,68 +574,16 @@ export class ConversationExportService {
       /* ignore */
     }
 
-    type RuntimeFetchImageResponse =
-      | {
-          ok: true;
-          base64: string;
-          contentType?: string;
-          data?: string;
-        }
-      | {
-          ok?: false;
-          base64?: unknown;
-          contentType?: unknown;
-        }
-      | null;
-
-    const decodeRuntimeResponse = (
-      response: RuntimeFetchImageResponse,
-    ): { blob: Blob; contentType: string } | null => {
-      if (!(response && response.ok && typeof response.base64 === 'string')) return null;
-      const contentType = String(response.contentType || 'application/octet-stream');
-      const binary = atob(response.base64);
+    const runtimeImage = await fetchImageViaExtensionRuntime(url);
+    if (runtimeImage) {
+      const binary = atob(runtimeImage.base64);
       const length = binary.length;
       const bytes = new Uint8Array(length);
       for (let idx = 0; idx < length; idx++) bytes[idx] = binary.charCodeAt(idx);
       return {
-        blob: new Blob([bytes], { type: contentType }),
-        contentType,
+        blob: new Blob([bytes], { type: runtimeImage.contentType }),
+        contentType: runtimeImage.contentType,
       };
-    };
-
-    const sendFetchMessage = async (
-      type: 'gv.fetchImage' | 'gv.fetchImageViaPage',
-    ): Promise<RuntimeFetchImageResponse> => {
-      const sendMessage = chrome.runtime?.sendMessage;
-      if (typeof sendMessage !== 'function') return null;
-      return await new Promise<RuntimeFetchImageResponse>((resolve) => {
-        try {
-          (sendMessage as (...args: unknown[]) => void)({ type, url }, (rawResponse: unknown) => {
-            resolve((rawResponse as RuntimeFetchImageResponse) ?? null);
-          });
-        } catch {
-          resolve(null);
-        }
-      });
-    };
-
-    try {
-      const response = await sendFetchMessage('gv.fetchImage');
-      const decoded = decodeRuntimeResponse(response);
-      if (decoded) return decoded;
-    } catch {
-      /* ignore */
-    }
-
-    // blob: URLs are page-scoped and not fetchable via background/page-message strategy.
-    if (url.startsWith('blob:')) return null;
-
-    try {
-      const response = await sendFetchMessage('gv.fetchImageViaPage');
-      const decoded = decodeRuntimeResponse(response);
-      if (decoded) return decoded;
-    } catch {
-      /* ignore */
     }
 
     return null;

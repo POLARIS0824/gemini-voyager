@@ -4,8 +4,24 @@
     "description": "Extension name"
   },
   "extDescription": {
-    "message": "Supercharge your Gemini™ experience: timeline, folders, prompt vault, and chat export.",
+    "message": "A better workspace for Gemini™, Claude™, and ChatGPT™ — prompts, reading tools, organization, export, and more.",
     "description": "Extension description"
+  },
+  "timelineStyle": {
+    "message": "Timeline style",
+    "description": "Timeline visual style label"
+  },
+  "timelineStyleDots": {
+    "message": "Nodes",
+    "description": "Classic timeline node style"
+  },
+  "timelineStyleCompact": {
+    "message": "Compact",
+    "description": "Compact timeline index style"
+  },
+  "timelineCompactOpenPreview": {
+    "message": "Open timeline preview",
+    "description": "Accessible label for the compact timeline rail"
   },
   "scrollMode": {
     "message": "Scroll mode",
@@ -71,6 +87,18 @@
     "message": "Search prompts or tags",
     "description": "Search placeholder"
   },
+  "popupSettingsSearchPlaceholder": {
+    "message": "Search settings",
+    "description": "Popup settings search input placeholder"
+  },
+  "popupSettingsSearchClear": {
+    "message": "Clear search",
+    "description": "Popup settings search clear button label"
+  },
+  "popupSettingsSearchNoResults": {
+    "message": "No settings match your search",
+    "description": "Popup settings search empty state"
+  },
   "pm_import": {
     "message": "Import",
     "description": "Import button"
@@ -134,6 +162,10 @@
   "pm_import_invalid": {
     "message": "Invalid file format",
     "description": "Import invalid"
+  },
+  "pm_import_empty": {
+    "message": "Import file contains no prompts",
+    "description": "Import file is valid but empty"
   },
   "pm_import_success": {
     "message": "Imported {count} prompts",
@@ -215,6 +247,46 @@
     "message": "Switch to light mode",
     "description": "Theme toggle tooltip - switch to light"
   },
+  "pm_view_compact": {
+    "message": "Switch to compact list",
+    "description": "View-mode toggle tooltip - switch from comfortable cards to compact single-line rows"
+  },
+  "pm_view_comfortable": {
+    "message": "Switch to comfortable view",
+    "description": "View-mode toggle tooltip - switch from compact rows to comfortable cards with markdown preview"
+  },
+  "pm_name_placeholder": {
+    "message": "Name (optional)",
+    "description": "Placeholder for the optional prompt name/label input used as the compact-mode headline"
+  },
+  "pm_prompt_manager": {
+    "message": "Prompt Manager",
+    "description": "Button label for returning from the starred library to Prompt Manager"
+  },
+  "pm_starred_library": {
+    "message": "Saved Library",
+    "description": "Prompt Manager saved stars and highlights library title and entry button"
+  },
+  "pm_starred_search_placeholder": {
+    "message": "Search saved items",
+    "description": "Search placeholder for stars and highlights in Prompt Manager"
+  },
+  "pm_starred_no_results": {
+    "message": "No starred messages match your search",
+    "description": "Empty state when starred search has no matches"
+  },
+  "pm_starred_untitled": {
+    "message": "Untitled conversation",
+    "description": "Fallback title for starred messages without a conversation title"
+  },
+  "pm_starred_open": {
+    "message": "Open starred message",
+    "description": "Tooltip for opening a starred message from Prompt Manager"
+  },
+  "pm_starred_load_error": {
+    "message": "Failed to load starred messages",
+    "description": "Error shown when starred messages cannot be loaded"
+  },
   "pm_theme_dark": {
     "message": "Switch to dark mode",
     "description": "Theme toggle tooltip - switch to dark"
@@ -243,9 +315,17 @@
     "message": "Update source not synced yet, please try again in a few hours",
     "description": "Shown on Safari when the DMG file is not yet available on GitHub releases"
   },
+  "fableVerifiedBadgeAlt": {
+    "message": "Fable 5 Verified",
+    "description": "Alt text for the Fable 5 Verified badge in the popup footer"
+  },
   "starProject": {
     "message": "Support me ⭐",
     "description": "Github callout"
+  },
+  "sponsorMe": {
+    "message": "Sponsor me",
+    "description": "Sponsor callout"
   },
   "officialDocs": {
     "message": "Official Docs",
@@ -262,6 +342,18 @@
   "folder_create": {
     "message": "Create folder",
     "description": "Create folder button tooltip"
+  },
+  "folder_search_placeholder": {
+    "message": "Search folders and chats",
+    "description": "Folder sidebar search input placeholder"
+  },
+  "folder_search_mode_folder": {
+    "message": "Folder only",
+    "description": "Badge shown while folder-only search mode is active"
+  },
+  "folder_search_empty": {
+    "message": "No matching folders or chats",
+    "description": "Folder sidebar empty state when search has no matches"
   },
   "folder_name_prompt": {
     "message": "Enter folder name:",
@@ -343,6 +435,10 @@
     "message": "Remove from folder",
     "description": "Remove conversation button tooltip"
   },
+  "folder_remove_conversation_action": {
+    "message": "Remove",
+    "description": "Short confirmation button label for removing a conversation from a folder"
+  },
   "folder_remove_conversation_confirm": {
     "message": "Remove \"{title}\" from this folder?",
     "description": "Remove conversation confirmation"
@@ -382,6 +478,22 @@
   "chatFontSizeLarge": {
     "message": "Large",
     "description": "Large font size label"
+  },
+  "chatLineHeight": {
+    "message": "Chat spacing",
+    "description": "Chat message spacing adjustment label"
+  },
+  "chatLineHeightTight": {
+    "message": "Tight",
+    "description": "Tight chat line spacing label"
+  },
+  "chatLineHeightLoose": {
+    "message": "Loose",
+    "description": "Loose chat line spacing label"
+  },
+  "chatParagraphSpacing": {
+    "message": "Chat paragraph spacing",
+    "description": "Chat message paragraph spacing adjustment label"
   },
   "sidebarWidth": {
     "message": "Sidebar width",
@@ -446,6 +558,74 @@
   "folder_cloud_sync": {
     "message": "Sync from Cloud",
     "description": "Cloud sync button tooltip"
+  },
+  "folder_cloud": {
+    "message": "Cloud sync",
+    "description": "Tooltip for the merged cloud button that opens an upload/sync popover"
+  },
+  "folder_settings": {
+    "message": "Folder settings",
+    "description": "Tooltip for the gear icon that opens folder-scoped settings"
+  },
+  "folder_sort": {
+    "message": "Sort conversations",
+    "description": "Folder header action for choosing conversation order"
+  },
+  "folder_sort_manual": {
+    "message": "Manual order",
+    "description": "Conversation order option that follows drag-and-drop positions"
+  },
+  "folder_sort_recent": {
+    "message": "Recently opened",
+    "description": "Conversation order option that shows recently opened chats first"
+  },
+  "folder_sort_recent_drag_hint": {
+    "message": "Switch to Manual order to rearrange conversations in this folder.",
+    "description": "Notice shown when attempting an in-folder reorder in recently-opened mode"
+  },
+  "folder_anchor_move_above_notebooks": {
+    "message": "Move folders above Notebooks",
+    "description": "Tooltip on the folder header swap button shown when folders are currently above Recents — clicking moves them above Notebooks instead."
+  },
+  "folder_anchor_move_above_recents": {
+    "message": "Move folders above Recents",
+    "description": "Tooltip on the folder header swap button shown when folders are currently above Notebooks — clicking moves them above Recents instead."
+  },
+  "folder_item_font_size": {
+    "message": "Text size",
+    "description": "Label for the folder/conversation text size stepper inside folder settings"
+  },
+  "folder_item_font_size_decrease": {
+    "message": "Smaller",
+    "description": "Tooltip for the minus button on the folder text size stepper"
+  },
+  "folder_item_font_size_increase": {
+    "message": "Larger",
+    "description": "Tooltip for the plus button on the folder text size stepper"
+  },
+  "folder_manage_in_library": {
+    "message": "Manage in Library",
+    "description": "Shortcut button shown in AI Studio sidebar to jump to /library for drag-and-drop conversation management"
+  },
+  "aistudio_hide_archived_nudge_title": {
+    "message": "Tidy up your AI Studio Library",
+    "description": "Onboarding nudge title inviting the user to hide archived conversations from the AI Studio library table"
+  },
+  "aistudio_hide_archived_nudge_body": {
+    "message": "Voyager can hide conversations already filed into folders from the Library table, leaving only uncategorized chats behind.",
+    "description": "Onboarding nudge body explaining the hide-archived feature in AI Studio"
+  },
+  "aistudio_hide_archived_nudge_enable": {
+    "message": "Enable",
+    "description": "Primary button on the AI Studio hide-archived nudge"
+  },
+  "aistudio_hide_archived_nudge_dismiss": {
+    "message": "Not now",
+    "description": "Dismiss button on the AI Studio hide-archived nudge"
+  },
+  "aistudio_hide_archived_nudge_footnote": {
+    "message": "Applies to AI Studio only — your Gemini preference is kept separately.",
+    "description": "Footnote on the AI Studio hide-archived nudge noting the setting is scoped per platform"
   },
   "folder_import": {
     "message": "Import folders",
@@ -563,9 +743,85 @@
     "message": "Enable folder feature",
     "description": "Enable or disable the folder feature"
   },
+  "enableFolderFloatingMode": {
+    "message": "Use floating folder panel",
+    "description": "Popup toggle that renders the folder feature as a floating window instead of injecting into Gemini's sidebar"
+  },
+  "enableFolderFloatingModeHint": {
+    "message": "Show folders in a draggable floating window instead of the sidebar.",
+    "description": "Helper text under the floating folder mode toggle"
+  },
+  "openFloatingFolderOnStartup": {
+    "message": "Open floating panel on startup",
+    "description": "Popup toggle that controls whether floating folder mode opens the panel immediately when Gemini loads"
+  },
+  "openFloatingFolderOnStartupHint": {
+    "message": "When off, Voyager starts with only the floating button; click it to open folders.",
+    "description": "Helper text under the floating folder startup toggle"
+  },
   "hideArchivedConversations": {
     "message": "Hide archived conversations",
     "description": "Hide conversations that are in folders from the main list"
+  },
+  "showFolderSearch": {
+    "message": "Show folder search",
+    "description": "Popup toggle that shows or hides the folder sidebar search box"
+  },
+  "hideArchivedNudgeTitle": {
+    "message": "Tidy up your sidebar",
+    "description": "Title of the first-archive onboarding nudge"
+  },
+  "hideArchivedNudgeBody": {
+    "message": "Voyager can hide conversations that are filed into folders from the main list, so you see only active chats. Nothing is deleted — filed conversations stay accessible inside their folders.",
+    "description": "Body text of the first-archive onboarding nudge"
+  },
+  "hideArchivedNudgeEnable": {
+    "message": "Enable",
+    "description": "Primary button that turns on hide-archived"
+  },
+  "hideArchivedNudgeDismiss": {
+    "message": "Not now",
+    "description": "Secondary button that dismisses the nudge"
+  },
+  "hideArchivedNudgeFootnote": {
+    "message": "You can change this anytime in the extension popup → Folder options.",
+    "description": "Footnote explaining where to toggle the setting later"
+  },
+  "floatingModeNudgeTitle": {
+    "message": "Sidebar unavailable — open folders in a floating window?",
+    "description": "Title of the floating-mode fallback nudge"
+  },
+  "floatingModeNudgeBody": {
+    "message": "Voyager couldn't find the Gemini sidebar, likely because the page layout changed. You can still browse your folders in a floating window.",
+    "description": "Body copy of the floating-mode fallback nudge"
+  },
+  "floatingModeNudgeEnable": {
+    "message": "Open floating window",
+    "description": "Primary button that opens the floating folder panel"
+  },
+  "floatingModeNudgeDismiss": {
+    "message": "Not now",
+    "description": "Secondary button that dismisses the floating-mode nudge"
+  },
+  "floatingPanelTitle": {
+    "message": "Folders",
+    "description": "Title shown in the floating folder panel header"
+  },
+  "floatingPanelClose": {
+    "message": "Close",
+    "description": "Aria label for the floating panel close button"
+  },
+  "floatingPanelEmpty": {
+    "message": "No folders yet.",
+    "description": "Empty state shown when the user has no folders"
+  },
+  "floatingPanelUntitled": {
+    "message": "Untitled",
+    "description": "Fallback label for conversations with no title"
+  },
+  "floatingFabLabel": {
+    "message": "Open floating folders",
+    "description": "Aria label and tooltip for the persistent floating-mode FAB"
   },
   "conversation_star": {
     "message": "Star conversation",
@@ -711,6 +967,26 @@
     "message": "When enabled, clicking a prompt inserts it into Gemini's input. Off keeps the default copy behavior.",
     "description": "Hint for prompt click insertion behavior"
   },
+  "promptDataMigration": {
+    "message": "Prompt data",
+    "description": "Prompt Manager prompt import/export setting label"
+  },
+  "promptDataMigrationHint": {
+    "message": "Export or import saved prompts as a local JSON file.",
+    "description": "Prompt Manager prompt import/export setting hint"
+  },
+  "promptExportSuccess": {
+    "message": "Exported {count} prompts",
+    "description": "Prompt export success message"
+  },
+  "promptExportError": {
+    "message": "Export failed",
+    "description": "Prompt export error message"
+  },
+  "promptImportError": {
+    "message": "Import failed",
+    "description": "Prompt import error message"
+  },
   "customWebsites": {
     "message": "Custom websites",
     "description": "Custom websites for prompt manager"
@@ -756,12 +1032,12 @@
     "description": "Custom websites reload/permission note"
   },
   "starredHistory": {
-    "message": "Starred History",
-    "description": "Starred history title"
+    "message": "Saved Library",
+    "description": "Saved stars and highlights library title"
   },
   "viewStarredHistory": {
-    "message": "View Starred History",
-    "description": "View starred history button"
+    "message": "View Saved Library",
+    "description": "View saved stars and highlights button"
   },
   "noStarredMessages": {
     "message": "No starred messages yet",
@@ -863,6 +1139,14 @@
     "message": "Sync folders and prompts to Google Drive",
     "description": "Cloud sync description"
   },
+  "cloudSyncDescriptionICloud": {
+    "message": "Sync Voyager data using your private iCloud storage",
+    "description": "iCloud sync description"
+  },
+  "syncProvider": { "message": "Storage service" },
+  "syncProviderGoogleDrive": { "message": "Google Drive" },
+  "syncProviderICloud": { "message": "iCloud" },
+  "syncConnectGoogleDrive": { "message": "Connect Google Drive" },
   "preventAutoScroll": {
     "message": "Prevent auto-scroll to bottom",
     "description": "Feature to prevent auto scrolling to bottom when generating answers"
@@ -907,6 +1191,14 @@
     "message": "✓ Synced successfully",
     "description": "Sync success message"
   },
+  "syncSuccessHighlightsSkipped": {
+    "message": "✓ Synced; highlights skipped — open Gemini and try again",
+    "description": "Sync success message when account-scoped highlights were skipped"
+  },
+  "syncSuccessFoldersMissing": {
+    "message": "✓ Other data synced; no folder backup was found",
+    "description": "Partial sync message when the cloud has no folders payload"
+  },
   "syncError": {
     "message": "✗ Sync failed: {error}",
     "description": "Sync error message"
@@ -939,6 +1231,23 @@
     "message": "Download & Merge",
     "description": "Merge button label"
   },
+  "syncOverwrite": {
+    "message": "Overwrite",
+    "description": "Overwrite download button label"
+  },
+  "syncOverwriteConfirm": {
+    "message": "Overwrite local data with the cloud copy? Local changes that have not been uploaded will be lost.",
+    "description": "Confirmation before overwriting local sync data"
+  },
+  "syncDeleteICloudBackup": { "message": "Delete iCloud backup" },
+  "syncDeleteICloudConfirm": {
+    "message": "Delete every Voyager backup from iCloud? Local data will stay on this Mac. This cannot be undone."
+  },
+  "syncDeletingICloudBackup": { "message": "Deleting iCloud backup…" },
+  "syncDeleteICloudSuccess": {
+    "message": "✓ Deleted {count} iCloud backup files; local data is unchanged"
+  },
+  "syncDeleteICloudFailed": { "message": "✗ Could not delete iCloud backup: {error}" },
   "syncMode": {
     "message": "Sync Mode",
     "description": "Sync mode label"
@@ -950,6 +1259,10 @@
   "syncNoData": {
     "message": "No sync data found in Drive",
     "description": "Error message when no data is found in Drive"
+  },
+  "syncOverwriteMissingFolders": {
+    "message": "Drive does not have a folders backup to overwrite from. Your local folders were left unchanged.",
+    "description": "Error message when overwrite is blocked because Drive has no folders payload"
   },
   "syncUploadFailed": {
     "message": "Upload failed",
@@ -972,19 +1285,35 @@
     "description": "Sign in with Google button"
   },
   "nanobananaOptions": {
-    "message": "NanoBanana Options",
-    "description": "NanoBanana options section label"
+    "message": "Image Refinement Options",
+    "description": "Image Refinement options section label"
   },
-  "enableNanobananaWatermarkRemover": {
-    "message": "Remove NanoBanana watermark",
-    "description": "Enable automatic watermark removal for NanoBanana images"
+  "nanobananaDownloadLabel": {
+    "message": "Remove watermark on download",
+    "description": "Toggle: strip the Gemini watermark from images saved via the download button (lightweight, recommended)"
   },
-  "nanobananaWatermarkRemoverHint": {
-    "message": "Automatically removes visible Gemini watermarks from generated images",
-    "description": "Watermark remover feature hint"
+  "nanobananaDownloadHint": {
+    "message": "When you click the download button, the saved file has the watermark removed.",
+    "description": "Hint for the download-time watermark removal toggle"
+  },
+  "nanobananaPreviewLabel": {
+    "message": "Remove watermark in preview",
+    "description": "Toggle: also strip the watermark from images shown in the chat (heavier, may flash while processing)"
+  },
+  "nanobananaPreviewHint": {
+    "message": "Also process images shown on screen. Slower; the image may briefly flash while processing.",
+    "description": "Hint for the preview-time watermark removal toggle"
+  },
+  "nanobananaBadgeRecommended": {
+    "message": "Recommended",
+    "description": "Inline badge highlighting the recommended (download-time) watermark removal option"
+  },
+  "nanobananaBadgeUnstable": {
+    "message": "Unstable",
+    "description": "Inline badge warning that the preview-time watermark removal option is unstable"
   },
   "nanobananaDownloadTooltip": {
-    "message": "Download unwatermarked image (NanoBanana)",
+    "message": "Download unwatermarked image (Image Refinement)",
     "description": "Download button tooltip"
   },
   "deepResearchDownload": {
@@ -1067,6 +1396,14 @@
     "message": "Collapse input area even when it contains text or attachments",
     "description": "Hint text explaining the collapse when not empty feature"
   },
+  "inputVimMode": {
+    "message": "Input Vim mode",
+    "description": "Toggle label for focusing and leaving the question input with Vim-style keys"
+  },
+  "inputVimModeHint": {
+    "message": "Use i/Escape for Insert/Normal mode, v for selection, and Vim motions inside the question input",
+    "description": "Hint for input Vim mode shortcuts"
+  },
   "ctrlEnterSend": {
     "message": "{modifier}+Enter to send",
     "description": "Modifier+Enter to send toggle label. {modifier} is replaced with ⌘ on macOS and Ctrl on other platforms"
@@ -1074,6 +1411,22 @@
   "ctrlEnterSendHint": {
     "message": "Press {modifier}+Enter to send messages, Enter to add a new line",
     "description": "Modifier+Enter to send feature hint. {modifier} is replaced with ⌘ on macOS and Ctrl on other platforms"
+  },
+  "aistudioEnterSend": {
+    "message": "Enter to send on AI Studio",
+    "description": "AI Studio Enter to send toggle label. {modifier} is replaced with ⌘ on macOS and Ctrl on other platforms"
+  },
+  "aistudioEnterSendHint": {
+    "message": "Press Enter to send messages, {modifier}+Enter to add a new line",
+    "description": "AI Studio Enter to send feature hint. {modifier} is replaced with ⌘ on macOS and Ctrl on other platforms"
+  },
+  "safariEnterFix": {
+    "message": "Fix Enter key on Safari",
+    "description": "Toggle label for Safari Enter key fix feature"
+  },
+  "safariEnterFixHint": {
+    "message": "Send messages with a single Enter press (fixes Safari's double-Enter issue)",
+    "description": "Hint text for Safari Enter key fix feature"
   },
   "draftAutoSave": {
     "message": "Draft auto-save",
@@ -1120,8 +1473,16 @@
     "description": "Enable tab title sync toggle label"
   },
   "enableTabTitleUpdateHint": {
-    "message": "Automatically update the browser tab title to match the current conversation title",
-    "description": "Tab title sync feature hint"
+    "message": "Gemini officially added this in June 2026, so Voyager now keeps this option disabled.",
+    "description": "Retired tab title sync feature note"
+  },
+  "persistentExportToolbar": {
+    "message": "Show floating export button",
+    "description": "Toggle label for the fallback top-right export toolbar"
+  },
+  "persistentExportToolbarHint": {
+    "message": "Adds a top-right export button when Gemini's header no longer hosts one. Turn off to hide it.",
+    "description": "Hint for the persistent export toolbar toggle"
   },
   "enableMermaidRendering": {
     "message": "Enable Mermaid diagram rendering",
@@ -1138,6 +1499,30 @@
   "enableQuoteReplyHint": {
     "message": "Show a floating button to quote selected text when text is selected in conversations",
     "description": "Quote reply feature hint"
+  },
+  "enableHighlights": {
+    "message": "Enable highlights",
+    "description": "Highlight feature toggle label"
+  },
+  "enableHighlightsHint": {
+    "message": "Highlight selected response text, choose a color, and remember the last color you used.",
+    "description": "Highlight feature hint"
+  },
+  "showHighlightTimelineMarkers": {
+    "message": "Show highlights on timeline",
+    "description": "Highlight timeline markers toggle label"
+  },
+  "showHighlightTimelineMarkersHint": {
+    "message": "Show a colored position marker for each saved highlight. Turning this off keeps the highlights themselves.",
+    "description": "Highlight timeline markers toggle hint"
+  },
+  "hideInputHalo": {
+    "message": "Hide input box halo",
+    "description": "Input halo hider toggle label"
+  },
+  "hideInputHaloHint": {
+    "message": "Hide the blue radial-gradient halo behind Gemini's chat input area",
+    "description": "Input halo hider feature hint"
   },
   "contextSync": {
     "message": "Context Sync",
@@ -1199,14 +1584,6 @@
     "message": "Failed",
     "description": "Status prefix when download fails"
   },
-  "recentsHide": {
-    "message": "Hide recent items",
-    "description": "Tooltip for hiding recents preview section"
-  },
-  "recentsShow": {
-    "message": "Show recent items",
-    "description": "Tooltip for showing recents preview section"
-  },
   "gemsHide": {
     "message": "Hide Gems",
     "description": "Tooltip for hiding Gems list section"
@@ -1222,6 +1599,26 @@
   "notebooksShow": {
     "message": "Show Notebooks",
     "description": "Tooltip for showing Notebooks list section"
+  },
+  "foldersHide": {
+    "message": "Hide Folders",
+    "description": "Tooltip for hiding Folders section"
+  },
+  "foldersShow": {
+    "message": "Show Folders",
+    "description": "Tooltip for showing Folders section"
+  },
+  "sidebarCollapseNudgeTitle": {
+    "message": "Collapsed sections are still here",
+    "description": "Title of the one-time nudge shown after collapsing a sidebar section"
+  },
+  "sidebarCollapseNudgeBody": {
+    "message": "A slim bar stays in the sidebar. Click it anytime to expand this section again.",
+    "description": "Body text of the one-time nudge shown after collapsing a sidebar section"
+  },
+  "sidebarCollapseNudgeDismiss": {
+    "message": "Got it",
+    "description": "Dismiss button for the one-time sidebar collapse nudge"
   },
   "setAsDefaultModel": {
     "message": "Set as default model",
@@ -1239,6 +1636,42 @@
     "message": "Default model cleared",
     "description": "Toast message when default model is cleared"
   },
+  "enableDefaultModelAutoApply": {
+    "message": "Auto-apply default model on new chats",
+    "description": "Toggle label for the default-model auto-apply kill switch in the popup"
+  },
+  "enableDefaultModelAutoApplyHint": {
+    "message": "Automatically switch to your starred default model and thinking level when you start a new conversation. Turn off if a Gemini redesign causes the auto-selection to misfire.",
+    "description": "Hint text under the default-model auto-apply toggle"
+  },
+  "defaultModelAutoApplyFailed": {
+    "message": "Default model couldn't auto-apply after 3 tries. Gemini may have changed its menu — you can pause this feature for now.",
+    "description": "Toast body when the model locker hits its consecutive-failure threshold"
+  },
+  "defaultModelAutoApplyFailedAction": {
+    "message": "Pause in settings",
+    "description": "Action button label on the auto-apply failure toast"
+  },
+  "defaultModelAutoApplyFailedFallback": {
+    "message": "Click the Voyager icon in your toolbar to open the popup, then pause this feature.",
+    "description": "Fallback message shown when programmatic popup open fails (e.g. Firefox)"
+  },
+  "setAsDefaultThinkingLevel": {
+    "message": "Set as default thinking level",
+    "description": "Tooltip for setting default thinking level"
+  },
+  "cancelDefaultThinkingLevel": {
+    "message": "Cancel default thinking level",
+    "description": "Tooltip for cancelling default thinking level"
+  },
+  "defaultThinkingLevelSet": {
+    "message": "Default thinking level set: $1",
+    "description": "Toast message when default thinking level is set"
+  },
+  "defaultThinkingLevelCleared": {
+    "message": "Default thinking level cleared",
+    "description": "Toast message when default thinking level is cleared"
+  },
   "sidebarAutoHide": {
     "message": "Auto-hide sidebar",
     "description": "Auto-hide sidebar toggle label"
@@ -1252,7 +1685,7 @@
     "description": "Fully hide sidebar toggle label"
   },
   "sidebarFullHideHint": {
-    "message": "Completely hide the collapsed sidebar, hover left edge to reveal",
+    "message": "Completely hide the collapsed sidebar",
     "description": "Fully hide sidebar feature hint"
   },
   "folderSpacing": {
@@ -1278,6 +1711,70 @@
   "folderTreeIndentSpacious": {
     "message": "Wide",
     "description": "Wide subfolder indentation label"
+  },
+  "gemsSidebarCount": {
+    "message": "Recent Gems in sidebar",
+    "description": "Popup slider label — how many recent gems to show in the sidebar above Notebooks. 0 hides the section entirely."
+  },
+  "gemsSidebarCountOff": {
+    "message": "Off",
+    "description": "Narrow-end label on the gems count slider (count=0, section hidden)."
+  },
+  "gemsSidebarCountMany": {
+    "message": "Many",
+    "description": "Wide-end label on the gems count slider (count up to 10)."
+  },
+  "usageStatusTitle": {
+    "message": "Gemini usage limits",
+    "description": "Accessible label / tooltip for the usage status pill near the composer."
+  },
+  "usageStatusDaily": {
+    "message": "5h",
+    "description": "Label for the rolling 5-hour usage window bar in the usage status pill."
+  },
+  "usageStatusWeekly": {
+    "message": "Weekly",
+    "description": "Label for the weekly usage limit bar in the usage status pill."
+  },
+  "usageStatusResets": {
+    "message": "Resets",
+    "description": "Tooltip prefix shown before the reset time on a usage bar."
+  },
+  "usageStatusRefresh": {
+    "message": "Refresh",
+    "description": "Tooltip/aria-label for the refresh button on the usage status pill."
+  },
+  "usageStatusOpenHint": {
+    "message": "Open usage limits",
+    "description": "Tooltip on the usage status pill; clicking opens the Gemini usage page."
+  },
+  "usageStatusEmptyHint": {
+    "message": "Click to load usage",
+    "description": "Placeholder shown before the usage pill has loaded its first snapshot."
+  },
+  "usageStatusJustUpdated": {
+    "message": "Just updated",
+    "description": "Freshness stamp on the usage status pill when data is under a minute old."
+  },
+  "usageStatusMinutesAgo": {
+    "message": "Updated {n}m ago",
+    "description": "Freshness stamp; {n} is a number of minutes. Keep the {n} placeholder literal."
+  },
+  "usageStatusHoursAgo": {
+    "message": "Updated {n}h ago",
+    "description": "Freshness stamp; {n} is a number of hours. Keep the {n} placeholder literal."
+  },
+  "usageStatusDaysAgo": {
+    "message": "Updated {n}d ago",
+    "description": "Freshness stamp; {n} is a number of days. Keep the {n} placeholder literal."
+  },
+  "usageStatusToggle": {
+    "message": "Usage status bar",
+    "description": "Popup toggle label to enable the usage status pill."
+  },
+  "usageStatusToggleHint": {
+    "message": "Show 5h and weekly usage limits near the chat box",
+    "description": "Popup helper text under the usage status bar toggle."
   },
   "export_select_mode_select_all": {
     "message": "Select all",
@@ -1407,13 +1904,13 @@
     "message": "If Voyager has been helpful, share it with friends or on social media — feel free to tag the author!",
     "description": "Changelog modal recommendation message"
   },
+  "changelog_follow_cta": {
+    "message": "Get the latest updates — follow me on social media for new releases and quick fixes.",
+    "description": "Changelog modal follow-me CTA headline"
+  },
   "changelog_social_xiaohongshu": {
     "message": "Xiaohongshu",
     "description": "Xiaohongshu platform name for social links"
-  },
-  "changelog_social_zhihu": {
-    "message": "Zhihu",
-    "description": "Zhihu platform name for social links"
   },
   "changelog_docs_hint": {
     "message": "Details in docs",
@@ -1426,6 +1923,14 @@
   "changelog_rate_chrome_cta": {
     "message": "Rate Now",
     "description": "Chrome Web Store rating CTA button text"
+  },
+  "changelog_rate_edge": {
+    "message": "Love Voyager? A quick rating on the Edge Add-ons store makes a huge difference!",
+    "description": "Edge Add-ons store rating prompt in changelog modal"
+  },
+  "changelog_rate_edge_cta": {
+    "message": "Rate Now",
+    "description": "Edge Add-ons store rating CTA button text"
   },
   "changelog_badge_mode": {
     "message": "Notify via badge on the floating button instead of this popup",
@@ -1442,6 +1947,10 @@
   "forkConfirmBtn": {
     "message": "Fork",
     "description": "Fork confirmation button"
+  },
+  "forkMarkdownBtn": {
+    "message": "Download MD",
+    "description": "Fork confirmation button for downloading a Markdown file"
   },
   "forkCancel": {
     "message": "Cancel",
@@ -1466,6 +1975,14 @@
   "forkPasteHint": {
     "message": "Press Enter to send and create the fork",
     "description": "Fork paste hint text"
+  },
+  "forkManualUploadHint": {
+    "message": "Drag {filename} into Gemini and send within 2 minutes to create the fork.",
+    "description": "Fork manual Markdown upload hint text"
+  },
+  "forkManualUploadPrompt": {
+    "message": "I uploaded {filename}; it is context from the previous conversation. Please use the attachment as background and answer my new request below.\n\nNew request:\n",
+    "description": "Prefilled prompt for manual Markdown upload forks"
   },
   "forkDeleteData": {
     "message": "Delete this branch",
@@ -1531,6 +2048,10 @@
     "message": "Failed — open Gemini first",
     "description": "Error when copying AI organization prompt fails"
   },
+  "aiOrgNoConversations": {
+    "message": "No chats found — open and scroll your chat list, then retry",
+    "description": "Button text shown when no conversations could be read for AI organization"
+  },
   "aiOrgCopyHint": {
     "message": "Copies all conversations & folder structure as a prompt. Paste into Gemini to get an importable folder plan.",
     "description": "Hint text below the AI organization copy button"
@@ -1552,7 +2073,7 @@
     "description": "Heading for AI instructions section"
   },
   "aiOrgInstructionsBody": {
-    "message": "Based on the conversations and folder structure above, please reorganize them into a logical folder hierarchy. Output a JSON file using the exact format below that can be directly imported into the Gemini Voyager extension (use the \"Merge\" import strategy). Keep existing well-organized folders, create new ones as needed, and move unfiled conversations into appropriate folders. Each folder needs a unique ID (use a short random string), and each conversation must keep its original conversationId and url.",
+    "message": "Based on the conversations and folder structure above, please reorganize them into a logical folder hierarchy. Output a JSON file using the exact format below that can be directly imported into the Voyager extension (use the \"Merge\" import strategy). Keep existing well-organized folders, create new ones as needed, and move unfiled conversations into appropriate folders. Each folder needs a unique ID (use a short random string), and each conversation must keep its original conversationId and url.",
     "description": "Instructions body for AI to generate importable folder structure"
   },
   "showMessageTimestamps": {
@@ -1602,5 +2123,365 @@
   "folderAsProject_collapse": {
     "message": "Collapse",
     "description": "Aria-label for the collapse button (screen readers)"
+  },
+  "folder_new_chat_in_folder": {
+    "message": "New chat in this folder",
+    "description": "Folder context menu item to create a new chat and auto-assign it to this folder"
+  },
+  "canvasExportCopyMarkdown": {
+    "message": "Copy as Markdown",
+    "description": "Canvas share menu item: copy canvas content as Markdown to clipboard"
+  },
+  "canvasExportCopyMarkdownTooltip": {
+    "message": "Copy Canvas content as Markdown",
+    "description": "Tooltip for the Canvas copy-as-markdown menu item"
+  },
+  "canvasExportCopied": {
+    "message": "Canvas copied as Markdown",
+    "description": "Toast shown after copying canvas content as Markdown"
+  },
+  "canvasExportEmpty": {
+    "message": "Canvas content is empty",
+    "description": "Toast shown when canvas has no content to copy"
+  },
+  "canvasExportFailed": {
+    "message": "Failed to copy Canvas content",
+    "description": "Toast shown when clipboard copy of canvas markdown fails"
+  },
+  "floatingPanelCreateFolder": {
+    "message": "Create folder",
+    "description": "Floating folder panel create folder action"
+  },
+  "floatingPanelCreateSubfolder": {
+    "message": "Create subfolder",
+    "description": "Floating folder panel create subfolder action"
+  },
+  "floatingPanelFolderNamePlaceholder": {
+    "message": "Folder name",
+    "description": "Floating folder panel folder name input placeholder"
+  },
+  "floatingPanelRenameFolder": {
+    "message": "Rename",
+    "description": "Floating folder panel rename folder action"
+  },
+  "floatingPanelDeleteFolder": {
+    "message": "Delete",
+    "description": "Floating folder panel delete folder action"
+  },
+  "floatingPanelDeleteConfirm": {
+    "message": "Delete this folder and all its contents?",
+    "description": "Floating folder panel delete folder confirmation"
+  },
+  "floatingPanelCancel": {
+    "message": "Cancel",
+    "description": "Floating folder panel cancel action"
+  },
+  "floatingPanelSave": {
+    "message": "Save",
+    "description": "Floating folder panel save action"
+  },
+  "floatingPanelPinFolder": {
+    "message": "Pin",
+    "description": "Floating folder panel pin folder action"
+  },
+  "floatingPanelUnpinFolder": {
+    "message": "Unpin",
+    "description": "Floating folder panel unpin folder action"
+  },
+  "floatingPanelRemoveConversation": {
+    "message": "Remove from folder",
+    "description": "Floating folder panel remove conversation action"
+  },
+  "floatingPanelStarConversation": {
+    "message": "Star",
+    "description": "Floating folder panel star conversation action"
+  },
+  "floatingPanelUnstarConversation": {
+    "message": "Unstar",
+    "description": "Floating folder panel unstar conversation action"
+  },
+  "floatingPanelColor": {
+    "message": "Color",
+    "description": "Floating folder panel color section label"
+  },
+  "floatingPanelExpandFolder": {
+    "message": "Expand",
+    "description": "Floating folder panel expand folder aria label"
+  },
+  "floatingPanelCollapseFolder": {
+    "message": "Collapse",
+    "description": "Floating folder panel collapse folder aria label"
+  },
+  "floatingPanelCloudUpload": {
+    "message": "Upload to cloud",
+    "description": "Floating folder panel cloud upload button tooltip"
+  },
+  "floatingPanelCloudSync": {
+    "message": "Sync from cloud",
+    "description": "Floating folder panel cloud sync button tooltip"
+  },
+  "floatingPanelMoveHint": {
+    "message": "To add a conversation: open its ⋮ menu → \"Move to folder\".",
+    "description": "Floating folder panel hint explaining how to add conversations through the native conversation menu"
+  },
+  "floatingPanelGestureHint": {
+    "message": "Double-click to rename • Right-click for pin, color, delete.",
+    "description": "Floating folder panel hint explaining folder gestures and context menu actions"
+  },
+  "responseCompleteNotification": {
+    "message": "Response completion notifications",
+    "description": "Toggle label for response completion system notifications"
+  },
+  "responseCompleteNotificationHint": {
+    "message": "Send a system notification when Gemini finishes a response.",
+    "description": "Hint for response completion system notifications"
+  },
+  "responseCompleteNotificationHintSafari": {
+    "message": "On Safari, the Gemini Voyager macOS app sends this system notification.",
+    "description": "Safari-specific hint for response completion notifications"
+  },
+  "responseCompleteNotificationMessage": {
+    "message": "Gemini response complete",
+    "description": "System notification body when Gemini finishes a response"
+  },
+  "responseCompleteForegroundToast": {
+    "message": "New response completed",
+    "description": "Foreground toast text when a Gemini response completes offscreen"
+  },
+  "remoteAnnouncementNotification": {
+    "message": "Remote announcements",
+    "description": "Toggle label for maintainer remote announcement notifications"
+  },
+  "remoteAnnouncementNotificationHint": {
+    "message": "Voyager locally checks a public GitHub JSON file and only shows text/link notices. It cannot inject or run remote code, or control your computer.",
+    "description": "Hint explaining remote announcement notifications and their safety boundary"
+  },
+  "remoteAnnouncementSystemPermissionCta": {
+    "message": "Enable system alerts",
+    "description": "Button text for granting optional system notification permission for remote announcements"
+  },
+  "remoteAnnouncementDefaultTitle": {
+    "message": "Voyager announcement",
+    "description": "Fallback title for remote announcement in-page notifications"
+  },
+  "remoteAnnouncementOpen": {
+    "message": "Open",
+    "description": "Remote announcement link button"
+  },
+  "remoteAnnouncementDismiss": {
+    "message": "Dismiss",
+    "description": "Remote announcement dismiss button"
+  },
+  "pluginsTitle": {
+    "message": "Plugins",
+    "description": "Popup section title for the plugin list"
+  },
+  "pluginsDescription": {
+    "message": "Enable plugins that enhance other AI sites. Turning one on asks for permission to access that site.",
+    "description": "Popup subtitle explaining the plugin list"
+  },
+  "pluginViewSource": {
+    "message": "Source",
+    "description": "Link label to a plugin source/repo"
+  },
+  "pluginPermissionDenied": {
+    "message": "Site permission denied — the plugin can't run without it.",
+    "description": "Shown when the user denies the site permission for a plugin"
+  },
+  "pluginUnsupportedPlatform": {
+    "message": "Unsupported on this browser — it can't grant the site access this plugin needs.",
+    "description": "Shown when a plugin can't be enabled because the browser can't grant the site access it needs (e.g. Safari)"
+  },
+  "pluginsLoading": {
+    "message": "Loading plugins…",
+    "description": "Shown while the plugin catalog is loading"
+  },
+  "pluginsEmpty": {
+    "message": "No plugins available yet.",
+    "description": "Shown when no plugins are available"
+  },
+  "pluginsRefresh": {
+    "message": "Refresh plugins",
+    "description": "Tooltip for the refresh-marketplace-catalog button"
+  },
+  "usageCoachmarkTitle": {
+    "message": "New: usage limits",
+    "description": "Coachmark title introducing the usage pill"
+  },
+  "usageCoachmarkBody": {
+    "message": "Keep your remaining Gemini 5-hour and weekly limits in view, right by the chat box.",
+    "description": "Coachmark body text introducing the usage pill"
+  },
+  "usageCoachmarkToggle": {
+    "message": "Show the usage pill",
+    "description": "Inline toggle label in the usage-pill coachmark"
+  },
+  "folderSearchCoachmarkTitle": {
+    "message": "New: folder search",
+    "description": "Coachmark title introducing folder search"
+  },
+  "folderSearchCoachmarkBody": {
+    "message": "Search folder and chat titles right from the Folders section.",
+    "description": "Coachmark body text introducing folder search"
+  },
+  "folderSearchCoachmarkToggle": {
+    "message": "Show folder search",
+    "description": "Inline toggle label in the folder-search coachmark"
+  },
+  "conversationSortCoachmarkTitle": {
+    "message": "New: conversation sorting",
+    "description": "Coachmark title introducing conversation sorting"
+  },
+  "conversationSortCoachmarkBody": {
+    "message": "Manual order keeps your drag-and-drop arrangement. Recently opened brings chats you visit back to the top. Switch anytime in Folder settings.",
+    "description": "Coachmark body explaining manual and recently opened conversation sorting"
+  },
+  "timelineCoachmarkTitle": {
+    "message": "New: compact timeline",
+    "description": "Coachmark title introducing the compact timeline style"
+  },
+  "timelineCoachmarkBody": {
+    "message": "Keep the right edge quiet. Hover the compact index to open every message in one panel.",
+    "description": "Coachmark body text introducing the compact timeline style"
+  },
+  "timelineCoachmarkToggle": {
+    "message": "Use compact timeline",
+    "description": "Inline toggle label in the compact-timeline coachmark"
+  },
+  "coachmarkDismiss": {
+    "message": "Done",
+    "description": "Generic confirmation label for feature coachmarks"
+  },
+  "coachmarkNext": {
+    "message": "Next",
+    "description": "Button label for advancing to the next feature coachmark"
+  },
+  "coachmarkClose": {
+    "message": "Close",
+    "description": "Accessible label for the feature coachmark close button"
+  },
+  "themeColor": {
+    "message": "Accent color",
+    "description": "Accent/theme colour picker title"
+  },
+  "themeColorDesc": {
+    "message": "Customize Voyager's accent color for this site.",
+    "description": "Accent colour picker description"
+  },
+  "themeColorReset": {
+    "message": "Reset to default",
+    "description": "Reset accent colour to default"
+  },
+  "promptCloudPull": {
+    "message": "Pull (merge)",
+    "description": "Button: pull (merge) prompts from Google Drive into local"
+  },
+  "promptCloudPush": {
+    "message": "Push (merge)",
+    "description": "Button: push (merge) local prompts up to Google Drive"
+  },
+  "promptCloudPullSuccess": {
+    "message": "Merged {count} prompt(s) from the cloud",
+    "description": "Toast: prompts merged from cloud (with {count})"
+  },
+  "promptCloudPushSuccess": {
+    "message": "Uploaded {count} merged prompt(s) to the cloud",
+    "description": "Toast: merged prompts uploaded to cloud (with {count})"
+  },
+  "promptCloudPullEmpty": {
+    "message": "No prompts in the cloud yet",
+    "description": "Toast: no prompts in the cloud yet"
+  },
+  "promptCloudError": {
+    "message": "Cloud sync failed. Make sure you're signed in to Google Drive.",
+    "description": "Toast: cloud prompt sync failed / not signed in"
+  },
+  "enablePromptManagerOnSite": {
+    "message": "Enable Prompt Manager on {site}",
+    "description": "Top toggle label: enable Prompt Manager on the current plugin site ({site})"
+  },
+  "enablePromptManagerOnSiteHint": {
+    "message": "Use your saved prompts on this site. You'll be asked to grant access.",
+    "description": "Top toggle hint for enabling Prompt Manager on a third-party site"
+  },
+  "storageQuotaTitle": { "message": "Storage" },
+  "storageQuotaManage": { "message": "Manage storage" },
+  "storageQuotaLocal": { "message": "Extension local" },
+  "storageQuotaSync": { "message": "Synced settings" },
+  "storageQuotaHealthy": { "message": "Healthy" },
+  "storageQuotaAttention": { "message": "Near limit" },
+  "storageQuotaCritical": { "message": "Almost full" },
+  "storageQuotaWarningToast": {
+    "message": "Voyager storage is {percent}% full. Open the extension popup to review or clean up stored data."
+  },
+  "storageQuotaUnknown": { "message": "Usage unavailable" },
+  "storageQuotaBreakdown": { "message": "Storage breakdown" },
+  "storageQuotaSoftLimit": { "message": "Voyager soft limit" },
+  "storageQuotaEffectiveLimit": {
+    "message": "Current effective limit: {size}. Voyager uses the lower of this and your selected soft limit."
+  },
+  "storageQuotaCache": { "message": "Rebuildable cache" },
+  "storageQuotaHighlights": { "message": "Highlights" },
+  "storageQuotaOther": { "message": "Other" },
+  "storageQuotaUnlock": { "message": "Expand local storage" },
+  "storageQuotaSafariLimit": {
+    "message": "Safari 15 can only raise local storage from about 5 MB to about 10 MB. It can still fill up."
+  },
+  "storageQuotaUnknownLimit": {
+    "message": "Your Safari version could not be identified. Storage expansion may remain limited on older versions."
+  },
+  "storageQuotaClearConfirm": {
+    "message": "Clear {category}? Only data in this category will be removed."
+  },
+  "storageQuotaHighlightClearConfirm": {
+    "message": "Delete all saved highlights and annotations? This cannot be undone."
+  },
+  "storageQuotaDraftClearConfirm": {
+    "message": "Delete all unsent drafts? This cannot be undone."
+  },
+  "highlightAction": {
+    "message": "Highlight"
+  },
+  "highlightSaved": {
+    "message": "Highlight saved"
+  },
+  "highlightSaveFailed": {
+    "message": "Could not save highlight"
+  },
+  "highlightDeleteFailed": {
+    "message": "Could not delete highlight"
+  },
+  "highlightNotePlaceholder": {
+    "message": "Add a note (optional)"
+  },
+  "highlightColor": {
+    "message": "Highlight color"
+  },
+  "highlightCustomColor": {
+    "message": "Choose a custom highlight color"
+  },
+  "highlightTooLong": {
+    "message": "This selection is too long. Select a smaller passage."
+  },
+  "highlightAriaLabel": {
+    "message": "Saved highlight. Open annotation."
+  },
+  "highlightTimelineAriaLabel": {
+    "message": "Open saved highlight"
+  },
+  "savedLibraryAll": { "message": "All" },
+  "savedLibraryStars": { "message": "Stars" },
+  "savedLibraryHighlights": { "message": "Highlights" },
+  "savedLibraryEmpty": { "message": "No saved items yet" },
+  "savedLibraryNoHighlights": { "message": "No highlights yet" },
+  "savedLibrarySearchPlaceholder": { "message": "Search stars and highlights" },
+  "highlightImportSuccess": {
+    "message": "Imported {count} highlight(s)"
+  },
+  "highlightCloudSync": {
+    "message": "Sync highlights"
+  },
+  "highlightCloudSyncHint": {
+    "message": "Keep highlights in a separate account-scoped Drive file. Highlights are included by default when Drive sync is enabled and always merge safely."
   }
 }

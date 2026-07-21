@@ -12,13 +12,15 @@
 
 أبسط طريقة للبدء. التحديثات تلقائية.
 
-**Chrome / Brave / Opera / Vivaldi:**
+**Chrome / Edge / Brave / Opera / Vivaldi:**
 
 [<img src="https://img.shields.io/badge/Chrome_Web_Store-Download-4285F4?style=for-the-badge&logo=google-chrome&logoColor=white" alt="التثبيت من سوق Chrome الإلكتروني" height="40"/>](https://chromewebstore.google.com/detail/iifacdnjakkhjjiengaffnegbndgingi?utm_source=github&utm_medium=docs&utm_campaign=organic_growth&utm_content=ar)
 
 **Microsoft Edge:**
 
-[<img src="https://img.shields.io/badge/Microsoft_Edge-Download-0078D7?style=for-the-badge&logo=microsoft-edge&logoColor=white" alt="التثبيت من وظائف Microsoft Edge الإضافية" height="40"/>](https://microsoftedge.microsoft.com/addons/detail/gemini-voyager/gibmkggjijalcjinbdhcpklodjkhhlne)
+[<img src="https://img.shields.io/badge/Microsoft_Edge-Download-0078D7?style=for-the-badge&logo=microsoft-edge&logoColor=white" alt="التثبيت من وظائف Microsoft Edge الإضافية" height="40"/>](https://microsoftedge.microsoft.com/addons/detail/voyager/gibmkggjijalcjinbdhcpklodjkhhlne)
+
+> **لمستخدمي Edge:** سيواصل Voyager صيانة ونشر إصدار [Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/voyager/gibmkggjijalcjinbdhcpklodjkhhlne) لمن يحتاجون Edge على الهاتف أو الجهاز اللوحي. إذا تأخرت المراجعة، تبقى نسخة Chrome Web Store وحزم GitHub اليدوية متاحة.
 
 **Firefox:**
 
@@ -30,7 +32,7 @@
 
 **لـ Chrome / Edge / Brave / Opera:**
 
-1. قم بتنزيل أحدث `gemini-voyager-chrome-vX.Y.Z.zip` من [إصدارات GitHub](https://github.com/Nagi-ovo/gemini-voyager/releases).
+1. قم بتنزيل أحدث `voyager-chrome-vX.Y.Z.zip` من [إصدارات GitHub](https://github.com/Nagi-ovo/voyager/releases).
 2. قم بفك ضغط الملف.
 3. افتح صفحة الإضافات في متصفحك (`chrome://extensions`).
 4. قم بتمكين **وضع المطور** (أعلى اليسار أو اليمين حسب اللغة).
@@ -38,7 +40,7 @@
 
 **لـ Firefox:**
 
-1. قم بتنزيل أحدث `gemini-voyager-firefox-vX.Y.Z.xpi` من [الإصدارات](https://github.com/Nagi-ovo/gemini-voyager/releases).
+1. قم بتنزيل أحدث `voyager-firefox-vX.Y.Z.xpi` من [الإصدارات](https://github.com/Nagi-ovo/voyager/releases).
 2. افتح مدير الإضافات (`about:addons`).
 3. اسحب ملف `.xpi` وأفلته للتثبيت (أو انقر فوق أيقونة الترس ⚙️ -> **تثبيت إضافة من ملف**).
 
@@ -55,8 +57,8 @@ Safari يدعم الآن التوزيع المباشر! قم بتنزيل الت
 
 > 💡 إصدار Safari موقع مباشرة للتوزيع — لا حاجة لتحويل Xcode!
 >
-> ⚠️ **القيود**: نظرًا لطبيعة Safari، فإن (أ) إزالة العلامة المائية (ب) تصدير الصور (يُنصح باستخدام PDF) غير مدعومة.
+> ✅ **دعم Safari الرسمي**: بدءًا من v1.6.0، أصبحت إزالة العلامة المائية وتصدير الصور ومزامنة Google Drive وiCloud وإشعارات اكتمال الرد وتحديثات Sparkle مدعومة.
 
 ---
 
-_إعداد التطوير؟ إذا كنت مطوراً وتتطلع للمساهمة، تحقق من [دليل المساهمة](https://github.com/Nagi-ovo/gemini-voyager/blob/main/.github/CONTRIBUTING.md) الخاص بنا._
+_إعداد التطوير؟ إذا كنت مطوراً وتتطلع للمساهمة، تحقق من [دليل المساهمة](https://github.com/Nagi-ovo/voyager/blob/main/.github/CONTRIBUTING.md) الخاص بنا._

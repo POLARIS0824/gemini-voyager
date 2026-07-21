@@ -1,317 +1,404 @@
 /**
- * Sakura (Cherry Blossom) Effect for Gemini
+ * Sakura (Cherry Blossom) effect for Gemini.
  *
- * Renders a fullscreen canvas with gently falling sakura petals.
- * Uses `pointer-events: none` so it never blocks page interactions.
- * Pauses when the tab is hidden to save CPU.
- *
- * Graceful transitions: when switching effects or disabling, existing
- * petals continue falling naturally instead of vanishing instantly.
- * New petals stop spawning, and the canvas is cleaned up once all
- * particles have left the viewport.
- *
- * Visual approach:
- * - Petal shape: wide, rounded heart-like silhouette with a small
- *   V-notch — drawn via quadratic bezier curves. Width ≈ height
- *   so it reads as a petal, not a leaf.
- * - 3D flutter: gentle oscillating scaleX (never fully flips) to
- *   simulate a petal wobbling in the air, not aggressively tumbling.
- * - Colour: very pale pink, almost white — the hallmark of somei
- *   yoshino cherry blossoms.
- * - Motion: slow fall, wide lazy drift + tiny fast flutter. Petals
- *   feel like they're floating, not dropping.
+ * Firefox content scripts cannot reliably create moz-extension:// workers
+ * directly (Mozilla bug 1334891). The Firefox path therefore renders inside a
+ * transparent extension-origin iframe, which owns an OffscreenCanvas worker.
+ * The full 88-petal scene and display cadence are preserved. Other browsers,
+ * or any failed worker startup, use the same scene on the page main thread.
  */
+import { isFirefox } from '@/core/utils/browser';
+
+import { SAKURA_BASE_FRAME_MS, SAKURA_MAX_DPR, SakuraScene } from './sakuraScene';
+import {
+  SAKURA_RENDERER_CONNECT_MESSAGE,
+  type SakuraRendererCommand,
+  type SakuraWorkerEvent,
+} from './sakuraWorkerProtocol';
 
 const CANVAS_ID = 'gv-sakura-effect-canvas';
+const RENDERER_FRAME_ID = 'gv-sakura-effect-frame';
+const RENDERER_PAGE_PATH = 'src/pages/sakuraRenderer/index.html';
 const STORAGE_KEY = 'gvVisualEffect';
 const LEGACY_KEY = 'gvSnowEffect';
 const EFFECT_VALUE = 'sakura';
+const RENDERER_READY_TIMEOUT_MS = 3_000;
 
-const LAYERS = [
-  // far — tiny, slow, ghostly
-  { count: 40, size: [2.5, 4.5], speed: [0.1, 0.3], opacity: [0.1, 0.25], drift: [0.15, 0.4] },
-  // mid — main visible petals
-  { count: 32, size: [4.5, 7.5], speed: [0.25, 0.55], opacity: [0.25, 0.5], drift: [0.35, 0.8] },
-  // near — large, soft foreground
-  { count: 16, size: [7.5, 11], speed: [0.4, 0.75], opacity: [0.4, 0.65], drift: [0.5, 1.0] },
-] as const;
+type EffectState = 'off' | 'active' | 'draining';
+type RendererMode = 'none' | 'main-thread' | 'worker-frame';
 
-/**
- * Somei-yoshino palette: extremely pale pinks, almost white.
- * Pre-built fill prefixes — append opacity + `)`.
- */
-const PALETTE = [
-  'hsla(350,50%,94%,', // near-white blush
-  'hsla(348,55%,92%,', // faint pink
-  'hsla(345,60%,90%,', // soft petal
-  'hsla(340,50%,92%,', // warm white-pink
-  'hsla(346,65%,88%,', // gentle sakura
-  'hsla(342,45%,93%,', // whisper pink
-  'hsla(352,40%,95%,', // almost white
-  'hsla(338,55%,89%,', // subtle rose
-] as const;
-
-interface Petal {
-  x: number;
-  y: number;
-  /** Overall size scale of this petal */
-  size: number;
-  opacity: number;
-  speedY: number;
-
-  // primary sway — slow, wide
-  drift: number;
-  driftFreq: number;
-  phase: number;
-
-  // secondary flutter — fast, tiny
-  flutter: number;
-  flutterFreq: number;
-
-  // 2D spin
-  rotation: number;
-  rotationSpeed: number;
-
-  // 3D wobble — gentle scaleX oscillation (never fully flips)
-  wobblePhase: number;
-  wobbleSpeed: number;
-  /** Baseline scaleX (0.6–1.0); wobble oscillates around this */
-  wobbleBase: number;
-  /** Amplitude of scaleX wobble (0.15–0.35) */
-  wobbleAmp: number;
-
-  colorIdx: number;
-}
-
-/** Effect lifecycle: off → active ⇄ draining → off */
-let state: 'off' | 'active' | 'draining' = 'off';
+let state: EffectState = 'off';
+let rendererMode: RendererMode = 'none';
 let canvas: HTMLCanvasElement | null = null;
-let ctx: CanvasRenderingContext2D | null = null;
-let animationFrameId: number | null = null;
-let petals: Petal[] = [];
+let rendererFrame: HTMLIFrameElement | null = null;
+let rendererPort: MessagePort | null = null;
+let rendererFrameLoadHandler: (() => void) | null = null;
+let rendererFrameErrorHandler: (() => void) | null = null;
+let rendererReadyTimeoutId: number | null = null;
+let workerUnavailableForPage = false;
+let mainScene: SakuraScene | null = null;
+let mainAnimationFrameId: number | null = null;
+let mainLastDrawTime = 0;
+let sessionCounter = 0;
+let currentSessionId = 0;
+let drainCounter = 0;
+let currentDrainId = 0;
+let viewportWidth = 1;
+let viewportHeight = 1;
+let renderDpr = 1;
 let resizeHandler: (() => void) | null = null;
 let visibilityHandler: (() => void) | null = null;
 
-function rand(min: number, max: number): number {
-  return min + Math.random() * (max - min);
+function createEffectCanvas(): HTMLCanvasElement {
+  const nextCanvas = document.createElement('canvas');
+  nextCanvas.id = CANVAS_ID;
+  nextCanvas.dataset.gvSakuraRenderer = 'main-thread';
+  nextCanvas.style.cssText =
+    'position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:2147483647;';
+  document.documentElement.appendChild(nextCanvas);
+  return nextCanvas;
 }
 
-function createPetal(
-  canvasWidth: number,
-  canvasHeight: number,
-  layer: (typeof LAYERS)[number],
-  randomY: boolean,
-): Petal {
-  return {
-    x: Math.random() * canvasWidth,
-    y: randomY ? Math.random() * canvasHeight : -(Math.random() * canvasHeight * 0.4),
-    size: rand(layer.size[0], layer.size[1]),
-    opacity: rand(layer.opacity[0], layer.opacity[1]),
-    speedY: rand(layer.speed[0], layer.speed[1]),
-
-    drift: rand(layer.drift[0], layer.drift[1]),
-    driftFreq: rand(0.0003, 0.0009),
-    phase: Math.random() * Math.PI * 2,
-
-    flutter: rand(0.04, 0.15),
-    flutterFreq: rand(0.002, 0.006),
-
-    rotation: Math.random() * Math.PI * 2,
-    rotationSpeed: rand(0.001, 0.008) * (Math.random() > 0.5 ? 1 : -1),
-
-    wobblePhase: Math.random() * Math.PI * 2,
-    wobbleSpeed: rand(0.0006, 0.002),
-    wobbleBase: rand(0.6, 0.9),
-    wobbleAmp: rand(0.15, 0.35),
-
-    colorIdx: Math.floor(Math.random() * PALETTE.length),
-  };
-}
-
-function initPetals(width: number, height: number): void {
-  const items: Petal[] = [];
-  for (const layer of LAYERS) {
-    for (let i = 0; i < layer.count; i++) {
-      items.push(createPetal(width, height, layer, true));
-    }
+function createChannelId(): string {
+  try {
+    const values = crypto.getRandomValues(new Uint32Array(4));
+    return Array.from(values, (value) => value.toString(16).padStart(8, '0')).join('');
+  } catch {
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   }
-  items.sort((a, b) => a.colorIdx - b.colorIdx || a.opacity - b.opacity);
-  petals = items;
 }
 
-/**
- * Draw a sakura petal centred at the origin.
- *
- * Shape: wide, rounded, heart-like with a small notch at the top.
- * Width ≈ 85% of height — reads as a petal, not a leaf.
- *
- *        ╱ ‿ ╲        ← notch
- *      ╱       ╲
- *     (         )      ← round, fat body
- *      ╲       ╱
- *        ╲   ╱
- *          V           ← stem point
- */
-function tracePetal(c: CanvasRenderingContext2D, s: number): void {
-  // s = half-height; width is deliberately close to height
-  const w = s * 0.85;
+function updateViewportMetrics(): void {
+  const nextWidth = Math.max(1, window.innerWidth || document.documentElement.clientWidth || 1);
+  const nextHeight = Math.max(1, window.innerHeight || document.documentElement.clientHeight || 1);
+  const nextDpr = Math.max(1, Math.min(window.devicePixelRatio || 1, SAKURA_MAX_DPR));
 
-  c.beginPath();
-
-  // Bottom stem point
-  c.moveTo(0, s);
-
-  // Right side — sweeps up and out in a fat curve
-  c.quadraticCurveTo(w * 1.1, s * 0.15, w * 0.2, -s * 0.85);
-
-  // Top-right → notch centre
-  c.quadraticCurveTo(w * 0.05, -s * 0.55, 0, -s * 0.65);
-
-  // Notch centre → top-left
-  c.quadraticCurveTo(-w * 0.05, -s * 0.55, -w * 0.2, -s * 0.85);
-
-  // Left side — mirror sweep back to stem
-  c.quadraticCurveTo(-w * 1.1, s * 0.15, 0, s);
-
-  c.closePath();
-}
-
-function updateAndDraw(time: number): void {
-  if (!ctx || !canvas) return;
-
-  const { width, height } = canvas;
-  ctx.clearRect(0, 0, width, height);
-
-  let currentFill = '';
-  let visibleCount = 0;
-
-  for (const p of petals) {
-    // Gentle fall + dual-frequency sway
-    p.y += p.speedY;
-    p.x +=
-      Math.sin(p.phase + time * p.driftFreq) * p.drift +
-      Math.sin(p.phase * 2.7 + time * p.flutterFreq) * p.flutter;
-    p.rotation += p.rotationSpeed;
-
-    // Recycle off-screen (or skip during drain)
-    if (p.y > height + p.size * 2) {
-      if (state === 'draining') {
-        continue;
-      }
-      p.y = -p.size * 2;
-      p.x = Math.random() * width;
-    }
-
-    visibleCount++;
-
-    if (p.x > width + p.size * 2) {
-      p.x = -p.size * 2;
-    } else if (p.x < -p.size * 2) {
-      p.x = width + p.size * 2;
-    }
-
-    // Fill batching
-    const qOpacity = Math.round(p.opacity * 20) / 20;
-    const nextFill = PALETTE[p.colorIdx] + qOpacity + ')';
-    if (nextFill !== currentFill) {
-      currentFill = nextFill;
-      ctx.fillStyle = currentFill;
-    }
-
-    // 3D wobble — gentle scaleX oscillation, always positive (no full flip)
-    const wobble = p.wobbleBase + Math.sin(p.wobblePhase + time * p.wobbleSpeed) * p.wobbleAmp;
-
-    ctx.save();
-    ctx.translate(p.x, p.y);
-    ctx.rotate(p.rotation);
-    ctx.scale(wobble, 1);
-
-    tracePetal(ctx, p.size);
-    ctx.fill();
-
-    ctx.restore();
+  if (nextWidth === viewportWidth && nextHeight === viewportHeight && nextDpr === renderDpr) {
+    return;
   }
 
-  // All petals have left the viewport — finish draining
+  viewportWidth = nextWidth;
+  viewportHeight = nextHeight;
+  renderDpr = nextDpr;
+
+  if (rendererMode === 'main-thread') {
+    mainScene?.resize(viewportWidth, viewportHeight, renderDpr);
+  } else if (rendererMode === 'worker-frame' && rendererPort) {
+    postRendererCommand({
+      type: 'resize',
+      sessionId: currentSessionId,
+      width: viewportWidth,
+      height: viewportHeight,
+      dpr: renderDpr,
+    });
+  }
+}
+
+function clearRendererReadyTimeout(): void {
+  if (rendererReadyTimeoutId === null) return;
+  window.clearTimeout(rendererReadyTimeoutId);
+  rendererReadyTimeoutId = null;
+}
+
+function teardownRendererFrame(sendDispose: boolean): void {
+  clearRendererReadyTimeout();
+
+  if (sendDispose && rendererPort) {
+    try {
+      rendererPort.postMessage({
+        type: 'dispose',
+        sessionId: currentSessionId,
+      } satisfies SakuraRendererCommand);
+    } catch {
+      // The frame is being removed immediately below, which also stops its worker.
+    }
+  }
+
+  if (rendererPort) {
+    rendererPort.onmessage = null;
+    rendererPort.onmessageerror = null;
+    rendererPort.close();
+    rendererPort = null;
+  }
+
+  if (rendererFrame) {
+    if (rendererFrameLoadHandler) {
+      rendererFrame.removeEventListener('load', rendererFrameLoadHandler);
+    }
+    if (rendererFrameErrorHandler) {
+      rendererFrame.removeEventListener('error', rendererFrameErrorHandler);
+    }
+    rendererFrame.remove();
+    rendererFrame = null;
+  }
+
+  rendererFrameLoadHandler = null;
+  rendererFrameErrorHandler = null;
+}
+
+function postRendererCommand(command: SakuraRendererCommand): boolean {
+  if (!rendererPort || rendererMode !== 'worker-frame') return false;
+
+  try {
+    rendererPort.postMessage(command);
+    return true;
+  } catch (error) {
+    fallbackFromWorkerFrame(error);
+    return false;
+  }
+}
+
+function stopMainAnimation(): void {
+  if (mainAnimationFrameId === null) return;
+  cancelAnimationFrame(mainAnimationFrameId);
+  mainAnimationFrameId = null;
+}
+
+function startMainAnimation(): void {
+  if (
+    rendererMode !== 'main-thread' ||
+    mainAnimationFrameId !== null ||
+    document.visibilityState !== 'visible'
+  ) {
+    return;
+  }
+  mainAnimationFrameId = requestAnimationFrame(updateAndDrawOnMainThread);
+}
+
+function updateAndDrawOnMainThread(time: number): void {
+  mainAnimationFrameId = null;
+  if (rendererMode !== 'main-thread' || !mainScene || state === 'off') return;
+
+  const elapsedMs = mainLastDrawTime > 0 ? time - mainLastDrawTime : SAKURA_BASE_FRAME_MS;
+  mainLastDrawTime = time;
+  const visibleCount = mainScene.renderFrame(time, elapsedMs, state === 'draining');
+
   if (state === 'draining' && visibleCount === 0) {
     finalizeDrain();
     return;
   }
 
-  animationFrameId = requestAnimationFrame(updateAndDraw);
+  startMainAnimation();
 }
 
-function resizeCanvas(): void {
-  if (!canvas) return;
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
+function startMainThreadRenderer(): boolean {
+  canvas = createEffectCanvas();
+  const context = canvas.getContext('2d');
+  if (!context) return false;
+
+  mainScene = new SakuraScene({
+    canvas,
+    context,
+    createSpriteCanvas: () => document.createElement('canvas'),
+  });
+  mainScene.initialize(viewportWidth, viewportHeight, renderDpr);
+  mainLastDrawTime = 0;
+  rendererMode = 'main-thread';
+  startMainAnimation();
+  return true;
 }
 
-function startAnimation(): void {
-  if (animationFrameId !== null) return;
-  animationFrameId = requestAnimationFrame(updateAndDraw);
+function handleRendererMessage(event: MessageEvent<SakuraWorkerEvent>): void {
+  const message = event.data;
+  if (message.sessionId !== currentSessionId || rendererMode !== 'worker-frame') return;
+
+  if (message.type === 'ready') {
+    clearRendererReadyTimeout();
+    if (rendererFrame) rendererFrame.dataset.gvSakuraRenderer = 'worker';
+    return;
+  }
+
+  if (message.type === 'fatal') {
+    fallbackFromWorkerFrame(new Error(message.reason));
+    return;
+  }
+
+  if (message.type === 'drained' && state === 'draining' && message.drainId === currentDrainId) {
+    finalizeDrain();
+  }
 }
 
-function stopAnimation(): void {
-  if (animationFrameId !== null) {
-    cancelAnimationFrame(animationFrameId);
-    animationFrameId = null;
+function fallbackFromWorkerFrame(error: unknown): void {
+  if (rendererMode !== 'worker-frame' || state === 'off') return;
+
+  console.warn('[Gemini Voyager] Sakura worker frame unavailable; using fallback:', error);
+  workerUnavailableForPage = true;
+  teardownRendererFrame(false);
+  rendererMode = 'none';
+
+  if (!startMainThreadRenderer()) forceDisable();
+}
+
+function canUseFirefoxWorkerFrame(): boolean {
+  return (
+    isFirefox() &&
+    !workerUnavailableForPage &&
+    typeof MessageChannel === 'function' &&
+    typeof chrome.runtime?.getURL === 'function'
+  );
+}
+
+function connectRendererFrame(frame: HTMLIFrameElement, channelId: string): void {
+  if (rendererFrame !== frame || rendererMode !== 'worker-frame') return;
+
+  try {
+    const frameWindow = frame.contentWindow;
+    if (!frameWindow) throw new Error('Sakura renderer frame has no content window');
+
+    const rendererUrl = chrome.runtime.getURL(RENDERER_PAGE_PATH);
+    const parsedRendererUrl = new URL(rendererUrl);
+    const rendererOrigin = `${parsedRendererUrl.protocol}//${parsedRendererUrl.host}`;
+    const channel = new MessageChannel();
+    rendererPort = channel.port1;
+    channel.port1.onmessage = handleRendererMessage;
+    channel.port1.onmessageerror = (): void => {
+      fallbackFromWorkerFrame(new Error('Unable to decode a Sakura renderer event'));
+    };
+    channel.port1.start();
+
+    frameWindow.postMessage({ type: SAKURA_RENDERER_CONNECT_MESSAGE, channelId }, rendererOrigin, [
+      channel.port2,
+    ]);
+
+    postRendererCommand({
+      type: 'init',
+      sessionId: currentSessionId,
+      width: viewportWidth,
+      height: viewportHeight,
+      dpr: renderDpr,
+      visible: document.visibilityState === 'visible',
+      mode: state === 'draining' ? 'draining' : 'active',
+      drainId: currentDrainId,
+    });
+  } catch (error) {
+    fallbackFromWorkerFrame(error);
+  }
+}
+
+function tryStartFirefoxWorkerFrame(): boolean {
+  if (!canUseFirefoxWorkerFrame()) return false;
+
+  try {
+    const channelId = createChannelId();
+    const frame = document.createElement('iframe');
+    frame.id = RENDERER_FRAME_ID;
+    frame.dataset.gvSakuraRenderer = 'worker-pending';
+    frame.setAttribute('aria-hidden', 'true');
+    frame.setAttribute('tabindex', '-1');
+    frame.style.cssText =
+      'position:fixed;inset:0;width:100%;height:100%;border:0;pointer-events:none;background:transparent;z-index:2147483647;';
+    frame.src = `${chrome.runtime.getURL(RENDERER_PAGE_PATH)}#${encodeURIComponent(channelId)}`;
+
+    rendererMode = 'worker-frame';
+    rendererFrame = frame;
+    rendererFrameLoadHandler = () => connectRendererFrame(frame, channelId);
+    rendererFrameErrorHandler = () => {
+      fallbackFromWorkerFrame(new Error('Sakura renderer frame failed to load'));
+    };
+    frame.addEventListener('load', rendererFrameLoadHandler, { once: true });
+    frame.addEventListener('error', rendererFrameErrorHandler, { once: true });
+
+    rendererReadyTimeoutId = window.setTimeout(() => {
+      fallbackFromWorkerFrame(new Error('Sakura renderer did not become ready in time'));
+    }, RENDERER_READY_TIMEOUT_MS);
+
+    document.documentElement.appendChild(frame);
+    return true;
+  } catch (error) {
+    teardownRendererFrame(false);
+    rendererMode = 'none';
+    workerUnavailableForPage = true;
+    console.warn('[Gemini Voyager] Failed to start Sakura renderer frame:', error);
+    return false;
   }
 }
 
 function handleVisibilityChange(): void {
-  if (document.visibilityState === 'visible') {
-    startAnimation();
+  const visible = document.visibilityState === 'visible';
+
+  if (rendererMode === 'worker-frame') {
+    if (rendererPort) {
+      postRendererCommand({
+        type: 'visibility',
+        sessionId: currentSessionId,
+        visible,
+      });
+    }
+    return;
+  }
+
+  if (visible) {
+    mainLastDrawTime = 0;
+    startMainAnimation();
   } else {
-    stopAnimation();
+    stopMainAnimation();
   }
 }
 
 function enable(): void {
   if (state === 'active') return;
+
   if (state === 'draining') {
-    // Cancel drain — resume normal particle recycling
     state = 'active';
+    currentDrainId = ++drainCounter;
+    if (rendererMode === 'worker-frame') {
+      if (rendererPort) {
+        postRendererCommand({
+          type: 'set-mode',
+          sessionId: currentSessionId,
+          mode: 'active',
+          drainId: currentDrainId,
+        });
+      }
+    } else {
+      startMainAnimation();
+    }
     return;
   }
+
   state = 'active';
+  rendererMode = 'none';
+  currentSessionId = ++sessionCounter;
+  currentDrainId = ++drainCounter;
+  mainLastDrawTime = 0;
+  viewportWidth = Math.max(1, window.innerWidth || document.documentElement.clientWidth || 1);
+  viewportHeight = Math.max(1, window.innerHeight || document.documentElement.clientHeight || 1);
+  renderDpr = Math.max(1, Math.min(window.devicePixelRatio || 1, SAKURA_MAX_DPR));
 
-  canvas = document.createElement('canvas');
-  canvas.id = CANVAS_ID;
-  canvas.style.cssText =
-    'position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:2147483647;';
-  document.documentElement.appendChild(canvas);
-
-  ctx = canvas.getContext('2d');
-  if (!ctx) {
+  if (!tryStartFirefoxWorkerFrame() && !startMainThreadRenderer()) {
     forceDisable();
     return;
   }
 
-  resizeCanvas();
-  initPetals(canvas.width, canvas.height);
-  startAnimation();
-
-  resizeHandler = resizeCanvas;
+  resizeHandler = updateViewportMetrics;
   window.addEventListener('resize', resizeHandler);
 
   visibilityHandler = handleVisibilityChange;
   document.addEventListener('visibilitychange', visibilityHandler);
 }
 
-/**
- * Graceful disable: stop spawning new petals and let existing ones
- * fall off the bottom of the viewport naturally.
- */
+/** Stop recycling petals and let the existing full-quality scene drain. */
 function disable(): void {
   if (state !== 'active') return;
+
   state = 'draining';
+  currentDrainId = ++drainCounter;
+  if (rendererMode === 'worker-frame' && rendererPort) {
+    postRendererCommand({
+      type: 'set-mode',
+      sessionId: currentSessionId,
+      mode: 'draining',
+      drainId: currentDrainId,
+    });
+  }
 }
 
-/** Complete the drain: remove canvas and clean up all resources. */
 function finalizeDrain(): void {
   state = 'off';
-  stopAnimation();
+  stopMainAnimation();
+  teardownRendererFrame(true);
+  mainScene?.dispose();
+  mainScene = null;
 
   if (resizeHandler) {
     window.removeEventListener('resize', resizeHandler);
@@ -323,53 +410,48 @@ function finalizeDrain(): void {
     visibilityHandler = null;
   }
 
-  if (canvas) {
-    canvas.remove();
-    canvas = null;
-  }
-
-  ctx = null;
-  petals = [];
+  canvas?.remove();
+  canvas = null;
+  rendererMode = 'none';
+  mainLastDrawTime = 0;
+  viewportWidth = 1;
+  viewportHeight = 1;
+  renderDpr = 1;
 }
 
-/** Immediate disable: remove everything without draining (e.g. page unload). */
 function forceDisable(): void {
   if (state === 'off') return;
   finalizeDrain();
 }
 
-function resolveEffect(res: Record<string, unknown>): string {
-  if (typeof res[STORAGE_KEY] === 'string') return res[STORAGE_KEY] as string;
-  if (res[LEGACY_KEY] === true) return 'snow';
+function resolveEffect(result: Record<string, unknown>): string {
+  if (typeof result[STORAGE_KEY] === 'string') return result[STORAGE_KEY] as string;
+  if (result[LEGACY_KEY] === true) return 'snow';
   return 'off';
 }
 
 export function startSakuraEffect(): void {
   try {
-    chrome.storage?.sync?.get({ [STORAGE_KEY]: null, [LEGACY_KEY]: false }, (res) => {
-      if (resolveEffect(res) === EFFECT_VALUE) {
-        enable();
-      }
+    chrome.storage?.sync?.get({ [STORAGE_KEY]: null, [LEGACY_KEY]: false }, (result) => {
+      if (resolveEffect(result) === EFFECT_VALUE) enable();
     });
-  } catch (e) {
-    console.error('[Gemini Voyager] Failed to get sakura effect setting:', e);
+  } catch (error) {
+    console.error('[Gemini Voyager] Failed to get sakura effect setting:', error);
   }
 
   try {
     chrome.storage?.onChanged?.addListener((changes, area) => {
-      if (area === 'sync' && changes[STORAGE_KEY]) {
-        if (changes[STORAGE_KEY].newValue === EFFECT_VALUE) {
-          enable();
-        } else {
-          disable();
-        }
+      if (area !== 'sync' || !changes[STORAGE_KEY]) return;
+
+      if (changes[STORAGE_KEY].newValue === EFFECT_VALUE) {
+        enable();
+      } else {
+        disable();
       }
     });
-  } catch (e) {
-    console.error('[Gemini Voyager] Failed to add storage listener for sakura effect:', e);
+  } catch (error) {
+    console.error('[Gemini Voyager] Failed to add storage listener for sakura effect:', error);
   }
 
-  window.addEventListener('beforeunload', () => {
-    forceDisable();
-  });
+  window.addEventListener('beforeunload', forceDisable);
 }

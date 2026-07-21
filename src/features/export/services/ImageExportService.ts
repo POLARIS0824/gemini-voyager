@@ -5,6 +5,7 @@
  * Uses DOM-to-image rendering and inlines remote images (best-effort).
  */
 import { isSafari } from '@/core/utils/browser';
+import { fetchImageViaExtensionRuntime } from '@/core/utils/runtimeImageFetch';
 
 import { isEventLikeImageRenderError } from '../types/errors';
 import {
@@ -14,6 +15,7 @@ import {
 } from '../types/export';
 import { DOMContentExtractor } from './DOMContentExtractor';
 import { renderElementToImageBlob } from './ImageRenderService';
+import { buildKatexExportStyles } from './katexExportStyles';
 
 export interface RenderableDocumentContent {
   title: string;
@@ -248,6 +250,27 @@ export class ImageExportService {
         margin: 12px 0;
       }
 
+      .gv-image-export-content .gv-export-attachment {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: fit-content;
+        max-width: 100%;
+        margin: 12px 0;
+        padding: 10px 14px;
+        border: 1px solid rgba(0,0,0,0.14);
+        border-radius: 8px;
+        background: rgba(0,0,0,0.025);
+      }
+
+      .gv-image-export-content .gv-export-attachment-icon {
+        flex: none;
+      }
+
+      .gv-image-export-content .gv-export-attachment-name {
+        overflow-wrap: anywhere;
+      }
+
       .gv-image-export-content pre {
         background: rgba(0,0,0,0.05);
         padding: 14px 16px;
@@ -268,6 +291,8 @@ export class ImageExportService {
         display: grid;
         gap: 8px;
       }
+
+      ${buildKatexExportStyles('.gv-image-export-doc')}
     `;
 
     const doc = document.createElement('div');
@@ -387,6 +412,8 @@ export class ImageExportService {
         display: grid;
         gap: 0.4em;
       }
+
+      ${buildKatexExportStyles('.gv-image-export-doc')}
     `;
 
     const doc = document.createElement('div');
@@ -416,6 +443,23 @@ export class ImageExportService {
     };
 
     const toDataUrl = async (url: string): Promise<string | null> => {
+      if (/^data:/i.test(url)) return url;
+
+      // Blob URLs are document-scoped — fetch them directly from this context,
+      // they can't be reached from the background script.
+      if (/^blob:/i.test(url)) {
+        try {
+          const resp = await fetch(url);
+          if (resp.ok) {
+            const blob = await resp.blob();
+            return await blobToDataUrl(blob);
+          }
+        } catch {
+          /* ignore */
+        }
+        return null;
+      }
+
       if (!/^https?:\/\//i.test(url)) return null;
 
       // Try content-script fetch first
@@ -433,23 +477,11 @@ export class ImageExportService {
         /* ignore */
       }
 
-      // Fallback to background fetch (bypasses page CORS)
+      // Fall back to the extension fetch chain. On Safari this ends in a
+      // MAIN-world fetch, which retains the page's Google authentication.
       try {
-        const data = await new Promise<string | null>((resolve) => {
-          try {
-            chrome.runtime?.sendMessage?.({ type: 'gv.fetchImage', url }, (resp) => {
-              if (resp && resp.ok && resp.base64) {
-                const contentType = String(resp.contentType || 'application/octet-stream');
-                resolve(`data:${contentType};base64,${resp.base64}`);
-              } else {
-                resolve(null);
-              }
-            });
-          } catch {
-            resolve(null);
-          }
-        });
-        if (data) return data;
+        const data = await fetchImageViaExtensionRuntime(url);
+        if (data) return `data:${data.contentType};base64,${data.base64}`;
       } catch {
         /* ignore */
       }

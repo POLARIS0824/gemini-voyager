@@ -157,7 +157,7 @@ export class LocalStorageFolderAdapter implements IFolderStorageAdapter {
  * - Safari's localStorage has 7-day deletion policy
  * - Random data loss on iOS 13+
  * - Private mode quota exceeded errors
- * - browser.storage.local is more reliable (10MB quota, persistent)
+ * - browser.storage.local is more reliable (persistent; quota depends on Safari and permissions)
  */
 export class SafariFolderAdapter implements IFolderStorageAdapter {
   /**
@@ -174,7 +174,11 @@ export class SafariFolderAdapter implements IFolderStorageAdapter {
       if (!stored) {
         return null;
       }
-      return JSON.parse(stored) as FolderData;
+      // Older Safari builds stored JSON strings; cloud sync writes the same
+      // structured object shape used by the other browsers.
+      return typeof stored === 'string'
+        ? (JSON.parse(stored) as FolderData)
+        : (stored as FolderData);
     } catch (error) {
       console.error('[SafariFolderAdapter] Failed to load data:', error);
       return null;
@@ -183,12 +187,13 @@ export class SafariFolderAdapter implements IFolderStorageAdapter {
 
   async saveData(key: string, data: FolderData): Promise<boolean> {
     try {
-      const dataString = JSON.stringify(data);
-      await safariStorage.setItem(key, dataString);
+      await safariStorage.setItem(key, data);
 
       // Verify the save was successful for robustness
       const verification = await safariStorage.getItem(key);
-      if (verification !== dataString) {
+      const verifiedData =
+        typeof verification === 'string' ? (JSON.parse(verification) as FolderData) : verification;
+      if (JSON.stringify(verifiedData) !== JSON.stringify(data)) {
         throw new Error('Save verification failed - data mismatch');
       }
 

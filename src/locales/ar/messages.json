@@ -4,8 +4,24 @@
     "description": "Extension name"
   },
   "extDescription": {
-    "message": "عزز تجربة Gemini™: جدول زمني، مجلدات، مطالبات، وتصدير.",
+    "message": "مساحة عمل أفضل لـ Gemini™ وClaude™ وChatGPT™ — مع أدوات للمطالبات والقراءة والتنظيم والتصدير والمزيد.",
     "description": "Extension description"
+  },
+  "timelineStyle": {
+    "message": "نمط الخط الزمني",
+    "description": "تسمية النمط المرئي للخط الزمني"
+  },
+  "timelineStyleDots": {
+    "message": "العُقد",
+    "description": "نمط عُقد الخط الزمني التقليدي"
+  },
+  "timelineStyleCompact": {
+    "message": "مضغوط",
+    "description": "نمط فهرس الخط الزمني المضغوط"
+  },
+  "timelineCompactOpenPreview": {
+    "message": "فتح معاينة الخط الزمني",
+    "description": "تسمية إمكانية الوصول للخط الزمني المضغوط"
   },
   "scrollMode": {
     "message": "وضع التمرير",
@@ -71,6 +87,18 @@
     "message": "البحث في المطالبات أو العلامات",
     "description": "Search placeholder"
   },
+  "popupSettingsSearchPlaceholder": {
+    "message": "البحث في الإعدادات",
+    "description": "Popup settings search input placeholder"
+  },
+  "popupSettingsSearchClear": {
+    "message": "مسح البحث",
+    "description": "Popup settings search clear button label"
+  },
+  "popupSettingsSearchNoResults": {
+    "message": "لا توجد إعدادات مطابقة",
+    "description": "Popup settings search empty state"
+  },
   "pm_import": {
     "message": "استيراد",
     "description": "Import button"
@@ -134,6 +162,10 @@
   "pm_import_invalid": {
     "message": "تنسيق ملف غير صالح",
     "description": "Import invalid"
+  },
+  "pm_import_empty": {
+    "message": "ملف الاستيراد لا يحتوي على أي مطالبات",
+    "description": "Import file is valid but empty"
   },
   "pm_import_success": {
     "message": "تم استيراد {count} مطالبة",
@@ -215,6 +247,46 @@
     "message": "التبديل إلى الوضع الفاتح",
     "description": "Theme toggle tooltip - switch to light"
   },
+  "pm_view_compact": {
+    "message": "التبديل إلى القائمة المدمجة",
+    "description": "View-mode toggle tooltip - switch from comfortable cards to compact single-line rows"
+  },
+  "pm_view_comfortable": {
+    "message": "التبديل إلى العرض المريح",
+    "description": "View-mode toggle tooltip - switch from compact rows to comfortable cards with markdown preview"
+  },
+  "pm_name_placeholder": {
+    "message": "الاسم (اختياري)",
+    "description": "Placeholder for the optional prompt name/label input used as the compact-mode headline"
+  },
+  "pm_prompt_manager": {
+    "message": "مدير المطالبات",
+    "description": "Button label for returning from the starred library to Prompt Manager"
+  },
+  "pm_starred_library": {
+    "message": "مكتبة العناصر المحفوظة",
+    "description": "Prompt Manager starred messages library title and entry button"
+  },
+  "pm_starred_search_placeholder": {
+    "message": "البحث في العناصر المحفوظة",
+    "description": "Search placeholder for starred messages in Prompt Manager"
+  },
+  "pm_starred_no_results": {
+    "message": "لا توجد رسائل مميزة تطابق بحثك",
+    "description": "Empty state when starred search has no matches"
+  },
+  "pm_starred_untitled": {
+    "message": "محادثة بلا عنوان",
+    "description": "Fallback title for starred messages without a conversation title"
+  },
+  "pm_starred_open": {
+    "message": "فتح الرسالة المميزة",
+    "description": "Tooltip for opening a starred message from Prompt Manager"
+  },
+  "pm_starred_load_error": {
+    "message": "تعذر تحميل الرسائل المميزة",
+    "description": "Error shown when starred messages cannot be loaded"
+  },
   "pm_theme_dark": {
     "message": "التبديل إلى الوضع الداكن",
     "description": "Theme toggle tooltip - switch to dark"
@@ -243,9 +315,17 @@
     "message": "مصدر التحديث غير متزامن بعد، يرجى المحاولة مرة أخرى بعد بضع ساعات",
     "description": "Shown on Safari when the DMG file is not yet available on GitHub releases"
   },
+  "fableVerifiedBadgeAlt": {
+    "message": "Fable 5 Verified",
+    "description": "Alt text for the Fable 5 Verified badge in the popup footer"
+  },
   "starProject": {
     "message": "ادعمني ⭐",
     "description": "Github callout"
+  },
+  "sponsorMe": {
+    "message": "ادعمني",
+    "description": "Sponsor callout"
   },
   "officialDocs": {
     "message": "الوثائق الرسمية",
@@ -262,6 +342,18 @@
   "folder_create": {
     "message": "إنشاء مجلد",
     "description": "Create folder button tooltip"
+  },
+  "folder_search_placeholder": {
+    "message": "البحث في المجلدات والمحادثات",
+    "description": "Folder sidebar search input placeholder"
+  },
+  "folder_search_mode_folder": {
+    "message": "المجلدات فقط",
+    "description": "شارة تظهر عند تفعيل وضع البحث في المجلدات فقط"
+  },
+  "folder_search_empty": {
+    "message": "لا توجد مجلدات أو محادثات مطابقة",
+    "description": "Folder sidebar empty state when search has no matches"
   },
   "folder_name_prompt": {
     "message": "أدخل اسم المجلد:",
@@ -343,6 +435,10 @@
     "message": "إزالة من المجلد",
     "description": "Remove conversation button tooltip"
   },
+  "folder_remove_conversation_action": {
+    "message": "إزالة",
+    "description": "Short confirmation button label for removing a conversation from a folder"
+  },
   "folder_remove_conversation_confirm": {
     "message": "هل تريد إزالة \"{title}\" من هذا المجلد؟",
     "description": "Remove conversation confirmation"
@@ -382,6 +478,22 @@
   "chatFontSizeLarge": {
     "message": "كبير",
     "description": "Large font size label"
+  },
+  "chatLineHeight": {
+    "message": "تباعد الدردشة",
+    "description": "Chat message spacing adjustment label"
+  },
+  "chatLineHeightTight": {
+    "message": "ضيق",
+    "description": "Tight chat line spacing label"
+  },
+  "chatLineHeightLoose": {
+    "message": "واسع",
+    "description": "Loose chat line spacing label"
+  },
+  "chatParagraphSpacing": {
+    "message": "تباعد فقرات الدردشة",
+    "description": "Chat message paragraph spacing adjustment label"
   },
   "sidebarWidth": {
     "message": "عرض الشريط الجانبي",
@@ -446,6 +558,74 @@
   "folder_cloud_sync": {
     "message": "مزامنة من السحابة",
     "description": "Cloud sync button tooltip"
+  },
+  "folder_cloud": {
+    "message": "المزامنة السحابية",
+    "description": "Tooltip for the merged cloud button that opens an upload/sync popover"
+  },
+  "folder_settings": {
+    "message": "إعدادات المجلدات",
+    "description": "Tooltip for the gear icon that opens folder-scoped settings"
+  },
+  "folder_sort": {
+    "message": "ترتيب المحادثات",
+    "description": "Folder header action for choosing conversation order"
+  },
+  "folder_sort_manual": {
+    "message": "ترتيب يدوي",
+    "description": "Conversation order option that follows drag-and-drop positions"
+  },
+  "folder_sort_recent": {
+    "message": "المفتوحة مؤخرًا",
+    "description": "Conversation order option that shows recently opened chats first"
+  },
+  "folder_sort_recent_drag_hint": {
+    "message": "بدّل إلى الترتيب اليدوي لإعادة ترتيب المحادثات داخل هذا المجلد.",
+    "description": "Notice shown when attempting an in-folder reorder in recently-opened mode"
+  },
+  "folder_anchor_move_above_notebooks": {
+    "message": "نقل المجلدات فوق Notebooks",
+    "description": "Tooltip on the folder header swap button shown when folders are currently above Recents — clicking moves them above Notebooks instead."
+  },
+  "folder_anchor_move_above_recents": {
+    "message": "نقل المجلدات فوق Recents",
+    "description": "Tooltip on the folder header swap button shown when folders are currently above Notebooks — clicking moves them above Recents instead."
+  },
+  "folder_item_font_size": {
+    "message": "حجم النص",
+    "description": "Label for the folder/conversation text size stepper inside folder settings"
+  },
+  "folder_item_font_size_decrease": {
+    "message": "تصغير",
+    "description": "Tooltip for the minus button on the folder text size stepper"
+  },
+  "folder_item_font_size_increase": {
+    "message": "تكبير",
+    "description": "Tooltip for the plus button on the folder text size stepper"
+  },
+  "folder_manage_in_library": {
+    "message": "الإدارة في المكتبة",
+    "description": "Shortcut button shown in AI Studio sidebar to jump to /library for drag-and-drop conversation management"
+  },
+  "aistudio_hide_archived_nudge_title": {
+    "message": "رتّب مكتبة AI Studio",
+    "description": "Onboarding nudge title inviting the user to hide archived conversations from the AI Studio library table"
+  },
+  "aistudio_hide_archived_nudge_body": {
+    "message": "يمكن لـ Voyager إخفاء المحادثات المصنّفة في مجلدات من جدول المكتبة، ليبقى فيه فقط ما لم يُصنّف بعد.",
+    "description": "Onboarding nudge body explaining the hide-archived feature in AI Studio"
+  },
+  "aistudio_hide_archived_nudge_enable": {
+    "message": "تفعيل",
+    "description": "Primary button on the AI Studio hide-archived nudge"
+  },
+  "aistudio_hide_archived_nudge_dismiss": {
+    "message": "ليس الآن",
+    "description": "Dismiss button on the AI Studio hide-archived nudge"
+  },
+  "aistudio_hide_archived_nudge_footnote": {
+    "message": "يُطبَّق على AI Studio فقط — تبقى تفضيلاتك في Gemini محفوظة بشكل منفصل.",
+    "description": "Footnote on the AI Studio hide-archived nudge noting the setting is scoped per platform"
   },
   "folder_import": {
     "message": "استيراد المجلدات",
@@ -563,9 +743,85 @@
     "message": "تمكين ميزة المجلد",
     "description": "Enable or disable the folder feature"
   },
+  "enableFolderFloatingMode": {
+    "message": "استخدام لوحة المجلدات العائمة",
+    "description": "Popup toggle that renders the folder feature as a floating window instead of injecting into Gemini's sidebar"
+  },
+  "enableFolderFloatingModeHint": {
+    "message": "عرض المجلدات في نافذة عائمة قابلة للسحب بدلاً من الشريط الجانبي.",
+    "description": "Helper text under the floating folder mode toggle"
+  },
+  "openFloatingFolderOnStartup": {
+    "message": "فتح اللوحة العائمة عند بدء التشغيل",
+    "description": "Popup toggle that controls whether floating folder mode opens the panel immediately when Gemini loads"
+  },
+  "openFloatingFolderOnStartupHint": {
+    "message": "عند إيقافه، يبدأ Voyager بزر عائم فقط؛ انقر عليه لفتح المجلدات.",
+    "description": "Helper text under the floating folder startup toggle"
+  },
   "hideArchivedConversations": {
     "message": "إخفاء المحادثات المؤرشفة",
     "description": "Hide conversations that are in folders from the main list"
+  },
+  "showFolderSearch": {
+    "message": "إظهار بحث المجلدات",
+    "description": "Popup toggle that shows or hides the folder sidebar search box"
+  },
+  "hideArchivedNudgeTitle": {
+    "message": "رتّب شريطك الجانبي",
+    "description": "Title of the first-archive onboarding nudge"
+  },
+  "hideArchivedNudgeBody": {
+    "message": "يمكن لـ Voyager إخفاء المحادثات المضافة إلى مجلدات من القائمة الرئيسية، لتظهر لك المحادثات الجارية فقط. لن تُحذف أي محادثة — تبقى متاحة داخل مجلداتها.",
+    "description": "Body text of the first-archive onboarding nudge"
+  },
+  "hideArchivedNudgeEnable": {
+    "message": "تفعيل الآن",
+    "description": "Primary button that turns on hide-archived"
+  },
+  "hideArchivedNudgeDismiss": {
+    "message": "ليس الآن",
+    "description": "Secondary button that dismisses the nudge"
+  },
+  "hideArchivedNudgeFootnote": {
+    "message": "يمكنك تغيير ذلك في أي وقت من نافذة الإضافة ← خيارات المجلدات.",
+    "description": "Footnote explaining where to toggle the setting later"
+  },
+  "floatingModeNudgeTitle": {
+    "message": "الشريط الجانبي غير متاح — هل تريد فتح المجلدات في نافذة عائمة؟",
+    "description": "Title of the floating-mode fallback nudge"
+  },
+  "floatingModeNudgeBody": {
+    "message": "تعذّر على Voyager العثور على الشريط الجانبي في Gemini، ربما بسبب تغيير في تخطيط الصفحة. لا يزال بإمكانك تصفح مجلداتك في نافذة عائمة.",
+    "description": "Body copy of the floating-mode fallback nudge"
+  },
+  "floatingModeNudgeEnable": {
+    "message": "فتح نافذة عائمة",
+    "description": "Primary button that opens the floating folder panel"
+  },
+  "floatingModeNudgeDismiss": {
+    "message": "ليس الآن",
+    "description": "Secondary button that dismisses the floating-mode nudge"
+  },
+  "floatingPanelTitle": {
+    "message": "المجلدات",
+    "description": "Title shown in the floating folder panel header"
+  },
+  "floatingPanelClose": {
+    "message": "إغلاق",
+    "description": "Aria label for the floating panel close button"
+  },
+  "floatingPanelEmpty": {
+    "message": "لا توجد مجلدات بعد.",
+    "description": "Empty state shown when the user has no folders"
+  },
+  "floatingPanelUntitled": {
+    "message": "بدون عنوان",
+    "description": "Fallback label for conversations with no title"
+  },
+  "floatingFabLabel": {
+    "message": "فتح المجلدات العائمة",
+    "description": "Aria label and tooltip for the persistent floating-mode FAB"
   },
   "conversation_star": {
     "message": "تمييز المحادثة بنجمة",
@@ -711,6 +967,26 @@
     "message": "عند التفعيل، يؤدي النقر على المطالبة إلى إدراجها في حقل إدخال Gemini. عند الإيقاف يبقى السلوك الافتراضي هو النسخ.",
     "description": "Hint for prompt click insertion behavior"
   },
+  "promptDataMigration": {
+    "message": "بيانات المطالبات",
+    "description": "Prompt Manager prompt import/export setting label"
+  },
+  "promptDataMigrationHint": {
+    "message": "تصدير أو استيراد المطالبات المحفوظة كملف JSON محلي.",
+    "description": "Prompt Manager prompt import/export setting hint"
+  },
+  "promptExportSuccess": {
+    "message": "تم تصدير {count} من المطالبات",
+    "description": "Prompt export success message"
+  },
+  "promptExportError": {
+    "message": "فشل التصدير",
+    "description": "Prompt export error message"
+  },
+  "promptImportError": {
+    "message": "فشل الاستيراد",
+    "description": "Prompt import error message"
+  },
   "customWebsites": {
     "message": "مواقع مخصصة",
     "description": "Custom websites for prompt manager"
@@ -756,11 +1032,11 @@
     "description": "Custom websites reload/permission note"
   },
   "starredHistory": {
-    "message": "السجل المميز بنجمة",
+    "message": "مكتبة العناصر المحفوظة",
     "description": "Starred history title"
   },
   "viewStarredHistory": {
-    "message": "عرض السجل المميز بنجمة",
+    "message": "عرض مكتبة العناصر المحفوظة",
     "description": "View starred history button"
   },
   "noStarredMessages": {
@@ -871,6 +1147,14 @@
     "message": "مزامنة المجلدات والمطالبات مع Google Drive",
     "description": "Cloud sync description"
   },
+  "cloudSyncDescriptionICloud": {
+    "message": "مزامنة بيانات Voyager عبر مساحة iCloud الخاصة بك",
+    "description": "iCloud sync description"
+  },
+  "syncProvider": { "message": "خدمة التخزين" },
+  "syncProviderGoogleDrive": { "message": "Google Drive" },
+  "syncProviderICloud": { "message": "iCloud" },
+  "syncConnectGoogleDrive": { "message": "ربط Google Drive" },
   "syncModeDisabled": {
     "message": "معطل",
     "description": "Sync mode disabled option"
@@ -907,6 +1191,14 @@
     "message": "✓ تمت المزامنة بنجاح",
     "description": "Sync success message"
   },
+  "syncSuccessHighlightsSkipped": {
+    "message": "✓ تمت المزامنة؛ تم تخطي التمييزات. افتح Gemini وحاول مرة أخرى",
+    "description": "Sync success message when account-scoped highlights were skipped"
+  },
+  "syncSuccessFoldersMissing": {
+    "message": "✓ تمت مزامنة البيانات الأخرى؛ لم يتم العثور على نسخة احتياطية للمجلدات",
+    "description": "Partial sync message when the cloud has no folders payload"
+  },
   "syncError": {
     "message": "✗ فشلت المزامنة: {error}",
     "description": "Sync error message"
@@ -939,6 +1231,23 @@
     "message": "دمج",
     "description": "Merge button label"
   },
+  "syncOverwrite": {
+    "message": "استبدال",
+    "description": "Overwrite download button label"
+  },
+  "syncOverwriteConfirm": {
+    "message": "هل تريد استبدال البيانات المحلية بنسخة السحابة؟ ستُفقد التغييرات المحلية التي لم يتم رفعها.",
+    "description": "Confirmation before overwriting local sync data"
+  },
+  "syncDeleteICloudBackup": { "message": "حذف نسخة iCloud الاحتياطية" },
+  "syncDeleteICloudConfirm": {
+    "message": "هل تريد حذف جميع نسخ Voyager الاحتياطية من iCloud؟ ستبقى البيانات المحلية على هذا الـ Mac. لا يمكن التراجع عن هذا الإجراء."
+  },
+  "syncDeletingICloudBackup": { "message": "جارٍ حذف نسخة iCloud الاحتياطية…" },
+  "syncDeleteICloudSuccess": {
+    "message": "✓ تم حذف {count} من ملفات iCloud الاحتياطية؛ لم تتغير البيانات المحلية"
+  },
+  "syncDeleteICloudFailed": { "message": "✗ تعذر حذف نسخة iCloud الاحتياطية: {error}" },
   "syncMode": {
     "message": "وضع المزامنة",
     "description": "Sync mode label"
@@ -950,6 +1259,10 @@
   "syncNoData": {
     "message": "لم يتم العثور على بيانات مزامنة في Drive",
     "description": "Error message when no data is found in Drive"
+  },
+  "syncOverwriteMissingFolders": {
+    "message": "لا يحتوي Drive على نسخة احتياطية للمجلدات يمكن استخدامها للاستبدال. لم يتم تغيير المجلدات المحلية.",
+    "description": "Error message when overwrite is blocked because Drive has no folders payload"
   },
   "syncUploadFailed": {
     "message": "فشل الرفع",
@@ -972,19 +1285,35 @@
     "description": "Sign in with Google button"
   },
   "nanobananaOptions": {
-    "message": "خيارات NanoBanana",
-    "description": "NanoBanana options section label"
+    "message": "خيارات Image Refinement",
+    "description": "Image Refinement options section label"
   },
-  "enableNanobananaWatermarkRemover": {
-    "message": "إزالة علامة NanoBanana المائية",
-    "description": "Enable automatic watermark removal for NanoBanana images"
+  "nanobananaDownloadLabel": {
+    "message": "إزالة العلامة المائية عند التنزيل",
+    "description": "Toggle: strip the Gemini watermark from images saved via the download button (lightweight, recommended)"
   },
-  "nanobananaWatermarkRemoverHint": {
-    "message": "يزيل تلقائيًا علامات Gemini المائية المرئية من الصور التي تم إنشاؤها",
-    "description": "Watermark remover feature hint"
+  "nanobananaDownloadHint": {
+    "message": "عند الضغط على زر التنزيل، يتم حفظ الصورة بدون العلامة المائية.",
+    "description": "Hint for the download-time watermark removal toggle"
+  },
+  "nanobananaPreviewLabel": {
+    "message": "إزالة العلامة المائية في المعاينة",
+    "description": "Toggle: also strip the watermark from images shown in the chat (heavier, may flash while processing)"
+  },
+  "nanobananaPreviewHint": {
+    "message": "تتم معالجة الصور المعروضة على الشاشة أيضًا. أبطأ؛ وقد تومض الصورة للحظة أثناء المعالجة.",
+    "description": "Hint for the preview-time watermark removal toggle"
+  },
+  "nanobananaBadgeRecommended": {
+    "message": "موصى به",
+    "description": "Inline badge highlighting the recommended (download-time) watermark removal option"
+  },
+  "nanobananaBadgeUnstable": {
+    "message": "غير مستقر",
+    "description": "Inline badge warning that the preview-time watermark removal option is unstable"
   },
   "nanobananaDownloadTooltip": {
-    "message": "تنزيل الصورة بدون علامة مائية (NanoBanana)",
+    "message": "تنزيل الصورة بدون علامة مائية (Image Refinement)",
     "description": "Download button tooltip"
   },
   "deepResearchDownload": {
@@ -1067,6 +1396,14 @@
     "message": "طي منطقة الإدخال حتى عند احتوائها على نص أو مرفقات",
     "description": "Hint text explaining the collapse when not empty feature"
   },
+  "inputVimMode": {
+    "message": "وضع Vim للإدخال",
+    "description": "Toggle label for focusing and leaving the question input with Vim-style keys"
+  },
+  "inputVimModeHint": {
+    "message": "استخدم i/Escape لوضعي الإدخال/العادي، وv للتحديد، وحركات Vim داخل مربع السؤال",
+    "description": "Hint for input Vim mode shortcuts"
+  },
   "ctrlEnterSend": {
     "message": "{modifier}+Enter للإرسال",
     "description": "Modifier+Enter to send toggle label. {modifier} is replaced with ⌘ on macOS and Ctrl on other platforms"
@@ -1074,6 +1411,22 @@
   "ctrlEnterSendHint": {
     "message": "اضغط {modifier}+Enter لإرسال الرسائل، Enter لإضافة سطر جديد",
     "description": "Modifier+Enter to send feature hint. {modifier} is replaced with ⌘ on macOS and Ctrl on other platforms"
+  },
+  "aistudioEnterSend": {
+    "message": "Enter للإرسال في AI Studio",
+    "description": "AI Studio Enter to send toggle label. {modifier} is replaced with ⌘ on macOS and Ctrl on other platforms"
+  },
+  "aistudioEnterSendHint": {
+    "message": "اضغط Enter لإرسال الرسائل، {modifier}+Enter لإضافة سطر جديد",
+    "description": "AI Studio Enter to send feature hint. {modifier} is replaced with ⌘ on macOS and Ctrl on other platforms"
+  },
+  "safariEnterFix": {
+    "message": "إصلاح مفتاح Enter في Safari",
+    "description": "Toggle label for Safari Enter key fix feature"
+  },
+  "safariEnterFixHint": {
+    "message": "إرسال الرسائل بضغطة واحدة على Enter (إصلاح مشكلة الضغط المزدوج في Safari)",
+    "description": "Hint text for Safari Enter key fix feature"
   },
   "draftAutoSave": {
     "message": "حفظ المسودة تلقائيًا",
@@ -1120,8 +1473,16 @@
     "description": "Enable tab title sync toggle label"
   },
   "enableTabTitleUpdateHint": {
-    "message": "تحديث عنوان علامة تبويب المتصفح تلقائيًا لمطابقة عنوان المحادثة الحالية",
-    "description": "Tab title sync feature hint"
+    "message": "أضاف Gemini هذه الميزة رسميًا في يونيو 2026، لذلك يُبقي Voyager هذا الخيار معطّلًا.",
+    "description": "Retired tab title sync feature note"
+  },
+  "persistentExportToolbar": {
+    "message": "إظهار زر التصدير العائم",
+    "description": "Toggle label for the fallback top-right export toolbar"
+  },
+  "persistentExportToolbarHint": {
+    "message": "يضيف زر تصدير في أعلى اليمين عندما لا يعرض رأس Gemini واحدًا. أوقفه لإخفائه.",
+    "description": "Hint for the persistent export toolbar toggle"
   },
   "enableMermaidRendering": {
     "message": "تمكين عرض مخططات Mermaid",
@@ -1138,6 +1499,30 @@
   "enableQuoteReplyHint": {
     "message": "إظهار زر عائم لاقتباس النص المحدد عند تحديد نص في المحادثات",
     "description": "Quote reply feature hint"
+  },
+  "enableHighlights": {
+    "message": "تمكين التمييز",
+    "description": "Highlight feature toggle label"
+  },
+  "enableHighlightsHint": {
+    "message": "يميز نص الإجابة المحدد ويتيح اختيار لون ويتذكر آخر لون استخدمته.",
+    "description": "Highlight feature hint"
+  },
+  "showHighlightTimelineMarkers": {
+    "message": "إظهار التمييزات على الخط الزمني",
+    "description": "Highlight timeline markers toggle label"
+  },
+  "showHighlightTimelineMarkersHint": {
+    "message": "يعرض علامة موضع ملونة لكل تمييز محفوظ. لا يؤدي إيقافه إلى حذف التمييزات نفسها.",
+    "description": "Highlight timeline markers toggle hint"
+  },
+  "hideInputHalo": {
+    "message": "إخفاء هالة مربع الإدخال",
+    "description": "Input halo hider toggle label"
+  },
+  "hideInputHaloHint": {
+    "message": "إخفاء الهالة الزرقاء المتدرجة شعاعياً خلف مربع إدخال محادثة Gemini",
+    "description": "Input halo hider feature hint"
   },
   "contextSync": {
     "message": "مزامنة السياق",
@@ -1199,14 +1584,6 @@
     "message": "فشل",
     "description": "Status prefix when download fails"
   },
-  "recentsHide": {
-    "message": "إخفاء العناصر الأخيرة",
-    "description": "تلميح لإخفاء قسم العناصر الأخيرة"
-  },
-  "recentsShow": {
-    "message": "إظهار العناصر الأخيرة",
-    "description": "تلميح لإظهار قسم العناصر الأخيرة"
-  },
   "gemsHide": {
     "message": "إخفاء Gems",
     "description": "تلميح لإخفاء قسم قائمة Gems"
@@ -1222,6 +1599,26 @@
   "notebooksShow": {
     "message": "إظهار دفاتر الملاحظات",
     "description": "تلميح لإظهار قسم قائمة دفاتر الملاحظات"
+  },
+  "foldersHide": {
+    "message": "إخفاء المجلدات",
+    "description": "Tooltip for hiding Folders section"
+  },
+  "foldersShow": {
+    "message": "إظهار المجلدات",
+    "description": "Tooltip for showing Folders section"
+  },
+  "sidebarCollapseNudgeTitle": {
+    "message": "الأقسام المطوية لا تزال هنا",
+    "description": "Title of the one-time nudge shown after collapsing a sidebar section"
+  },
+  "sidebarCollapseNudgeBody": {
+    "message": "سيبقى شريط رفيع في الشريط الجانبي. انقر عليه في أي وقت لتوسيع هذا القسم مرة أخرى.",
+    "description": "Body text of the one-time nudge shown after collapsing a sidebar section"
+  },
+  "sidebarCollapseNudgeDismiss": {
+    "message": "فهمت",
+    "description": "Dismiss button for the one-time sidebar collapse nudge"
   },
   "setAsDefaultModel": {
     "message": "Set as default model",
@@ -1239,6 +1636,42 @@
     "message": "Default model cleared",
     "description": "Toast message when default model is cleared"
   },
+  "enableDefaultModelAutoApply": {
+    "message": "تطبيق النموذج الافتراضي تلقائيًا في المحادثات الجديدة",
+    "description": "Toggle label for the default-model auto-apply kill switch in the popup"
+  },
+  "enableDefaultModelAutoApplyHint": {
+    "message": "التبديل تلقائيًا إلى النموذج الافتراضي ومستوى التفكير المميزَين عند بدء محادثة جديدة. أوقف هذه الميزة إذا تسبب تصميم Gemini الجديد في تشغيل خاطئ للتحديد التلقائي.",
+    "description": "Hint text under the default-model auto-apply toggle"
+  },
+  "defaultModelAutoApplyFailed": {
+    "message": "فشل تطبيق النموذج الافتراضي تلقائيًا 3 مرات متتالية. ربما تغيّرت قائمة Gemini — يمكنك إيقاف هذه الميزة مؤقتًا.",
+    "description": "Toast body when the model locker hits its consecutive-failure threshold"
+  },
+  "defaultModelAutoApplyFailedAction": {
+    "message": "إيقاف مؤقت في الإعدادات",
+    "description": "Action button label on the auto-apply failure toast"
+  },
+  "defaultModelAutoApplyFailedFallback": {
+    "message": "انقر على أيقونة Voyager في شريط الأدوات لفتح الإعدادات ثم أوقف هذه الميزة مؤقتًا.",
+    "description": "Fallback message shown when programmatic popup open fails (e.g. Firefox)"
+  },
+  "setAsDefaultThinkingLevel": {
+    "message": "Set as default thinking level",
+    "description": "Tooltip for setting default thinking level"
+  },
+  "cancelDefaultThinkingLevel": {
+    "message": "Cancel default thinking level",
+    "description": "Tooltip for cancelling default thinking level"
+  },
+  "defaultThinkingLevelSet": {
+    "message": "Default thinking level set: $1",
+    "description": "Toast message when default thinking level is set"
+  },
+  "defaultThinkingLevelCleared": {
+    "message": "Default thinking level cleared",
+    "description": "Toast message when default thinking level is cleared"
+  },
   "sidebarAutoHide": {
     "message": "إخفاء الشريط الجانبي تلقائياً",
     "description": "Auto-hide sidebar toggle label"
@@ -1252,7 +1685,7 @@
     "description": "Fully hide sidebar toggle label"
   },
   "sidebarFullHideHint": {
-    "message": "إخفاء الشريط الجانبي المطوي بالكامل، مرر الماوس على الحافة اليسرى لإظهاره",
+    "message": "إخفاء الشريط الجانبي المطوي بالكامل",
     "description": "Fully hide sidebar feature hint"
   },
   "folderSpacing": {
@@ -1278,6 +1711,70 @@
   "folderTreeIndentSpacious": {
     "message": "أوسع",
     "description": "Wide subfolder indentation label"
+  },
+  "gemsSidebarCount": {
+    "message": "عدد Gems الحديثة في الشريط الجانبي",
+    "description": "Popup slider label — how many recent gems to show in the sidebar above Notebooks. 0 hides the section entirely."
+  },
+  "gemsSidebarCountOff": {
+    "message": "إيقاف",
+    "description": "Narrow-end label on the gems count slider (count=0, section hidden)."
+  },
+  "gemsSidebarCountMany": {
+    "message": "كثيرة",
+    "description": "Wide-end label on the gems count slider (count up to 10)."
+  },
+  "usageStatusTitle": {
+    "message": "حدود استخدام Gemini",
+    "description": "Accessible label / tooltip for the usage status pill near the composer."
+  },
+  "usageStatusDaily": {
+    "message": "5h",
+    "description": "Label for the rolling 5-hour usage window bar in the usage status pill."
+  },
+  "usageStatusWeekly": {
+    "message": "أسبوعي",
+    "description": "Label for the weekly usage limit bar in the usage status pill."
+  },
+  "usageStatusResets": {
+    "message": "إعادة التعيين",
+    "description": "Tooltip prefix shown before the reset time on a usage bar."
+  },
+  "usageStatusRefresh": {
+    "message": "تحديث",
+    "description": "Tooltip/aria-label for the refresh button on the usage status pill."
+  },
+  "usageStatusOpenHint": {
+    "message": "فتح حدود الاستخدام",
+    "description": "Tooltip on the usage status pill; clicking opens the Gemini usage page."
+  },
+  "usageStatusEmptyHint": {
+    "message": "انقر لتحميل بيانات الاستخدام",
+    "description": "Placeholder shown before the usage pill has loaded its first snapshot."
+  },
+  "usageStatusJustUpdated": {
+    "message": "تم التحديث للتو",
+    "description": "Freshness stamp on the usage status pill when data is under a minute old."
+  },
+  "usageStatusMinutesAgo": {
+    "message": "تم التحديث قبل {n} دقيقة",
+    "description": "Freshness stamp; {n} is a number of minutes. Keep the {n} placeholder literal."
+  },
+  "usageStatusHoursAgo": {
+    "message": "تم التحديث قبل {n} ساعة",
+    "description": "Freshness stamp; {n} is a number of hours. Keep the {n} placeholder literal."
+  },
+  "usageStatusDaysAgo": {
+    "message": "تم التحديث قبل {n} يوم",
+    "description": "Freshness stamp; {n} is a number of days. Keep the {n} placeholder literal."
+  },
+  "usageStatusToggle": {
+    "message": "شريط حالة الاستخدام",
+    "description": "Popup toggle label to enable the usage status pill."
+  },
+  "usageStatusToggleHint": {
+    "message": "إظهار حدود الاستخدام لكل 5h والأسبوعية بجوار مربع المحادثة",
+    "description": "Popup helper text under the usage status bar toggle."
   },
   "export_select_mode_select_all": {
     "message": "تحديد الكل",
@@ -1407,13 +1904,13 @@
     "message": "إذا ساعدك Voyager، شاركه مع أصدقائك أو على وسائل التواصل الاجتماعي — لا تنسَ الإشارة إلى المطور!",
     "description": "Changelog modal recommendation message"
   },
+  "changelog_follow_cta": {
+    "message": "اطّلِع على آخر التحديثات — تابعني عبر وسائل التواصل الاجتماعي للاطلاع على الإصدارات الجديدة والإصلاحات السريعة.",
+    "description": "Changelog modal follow-me CTA headline"
+  },
   "changelog_social_xiaohongshu": {
     "message": "Xiaohongshu",
     "description": "Xiaohongshu platform name for social links"
-  },
-  "changelog_social_zhihu": {
-    "message": "Zhihu",
-    "description": "Zhihu platform name for social links"
   },
   "changelog_docs_hint": {
     "message": "التفاصيل في المستندات",
@@ -1426,6 +1923,14 @@
   "changelog_rate_chrome_cta": {
     "message": "تقييم الآن",
     "description": "Chrome Web Store rating CTA button text"
+  },
+  "changelog_rate_edge": {
+    "message": "هل أعجبك Voyager؟ تقييمك على متجر إضافات Edge يساعد الآخرين على اكتشافه!",
+    "description": "Edge Add-ons store rating prompt in changelog modal"
+  },
+  "changelog_rate_edge_cta": {
+    "message": "تقييم الآن",
+    "description": "Edge Add-ons store rating CTA button text"
   },
   "changelog_badge_mode": {
     "message": "الإشعار عبر شارة NEW على الزر العائم بدلاً من هذه النافذة",
@@ -1442,6 +1947,10 @@
   "forkConfirmBtn": {
     "message": "Fork",
     "description": "Fork confirmation button"
+  },
+  "forkMarkdownBtn": {
+    "message": "تنزيل MD",
+    "description": "Fork confirmation button for downloading a Markdown file"
   },
   "forkCancel": {
     "message": "Cancel",
@@ -1466,6 +1975,14 @@
   "forkPasteHint": {
     "message": "Press Enter to send and create the fork",
     "description": "Fork paste hint text"
+  },
+  "forkManualUploadHint": {
+    "message": "اسحب {filename} إلى Gemini وأرسله خلال دقيقتين لإنشاء التفرع.",
+    "description": "Fork manual Markdown upload hint text"
+  },
+  "forkManualUploadPrompt": {
+    "message": "أرفقت {filename}؛ وهو سياق من المحادثة السابقة. استخدم المرفق كخلفية وأجب عن طلبي الجديد أدناه.\n\nالطلب الجديد:\n",
+    "description": "Prefilled prompt for manual Markdown upload forks"
   },
   "forkDeleteData": {
     "message": "حذف هذا التفرع",
@@ -1531,6 +2048,10 @@
     "message": "فشل — افتح Gemini أولاً",
     "description": "خطأ عند فشل نسخ موجه تنظيم AI"
   },
+  "aiOrgNoConversations": {
+    "message": "لم يتم العثور على محادثات — افتح قائمة محادثاتك ومرّرها ثم أعد المحاولة",
+    "description": "نص الزر عند تعذّر قراءة أي محادثة لأجل التنظيم بالذكاء الاصطناعي"
+  },
   "aiOrgCopyHint": {
     "message": "ينسخ جميع المحادثات وهيكل المجلدات كموجه. الصقه في Gemini للحصول على خطة مجلدات قابلة للاستيراد.",
     "description": "نص تلميح أسفل زر نسخ تنظيم AI"
@@ -1552,7 +2073,7 @@
     "description": "عنوان قسم تعليمات AI"
   },
   "aiOrgInstructionsBody": {
-    "message": "بناءً على المحادثات وهيكل المجلدات أعلاه، يرجى إعادة تنظيمها في تسلسل هرمي منطقي للمجلدات. أخرج ملف JSON باستخدام التنسيق أدناه يمكن استيراده مباشرة إلى إضافة Gemini Voyager (استخدم استراتيجية الاستيراد \"دمج\"). احتفظ بالمجلدات المنظمة جيداً الحالية، وأنشئ مجلدات جديدة حسب الحاجة، وانقل المحادثات غير المصنفة إلى مجلدات مناسبة. يحتاج كل مجلد إلى معرف فريد (استخدم سلسلة عشوائية قصيرة)، ويجب أن تحتفظ كل محادثة بـ conversationId و url الأصليين.",
+    "message": "بناءً على المحادثات وهيكل المجلدات أعلاه، يرجى إعادة تنظيمها في تسلسل هرمي منطقي للمجلدات. أخرج ملف JSON باستخدام التنسيق أدناه يمكن استيراده مباشرة إلى إضافة Voyager (استخدم استراتيجية الاستيراد \"دمج\"). احتفظ بالمجلدات المنظمة جيداً الحالية، وأنشئ مجلدات جديدة حسب الحاجة، وانقل المحادثات غير المصنفة إلى مجلدات مناسبة. يحتاج كل مجلد إلى معرف فريد (استخدم سلسلة عشوائية قصيرة)، ويجب أن تحتفظ كل محادثة بـ conversationId و url الأصليين.",
     "description": "نص التعليمات لـ AI لإنشاء هيكل مجلدات قابل للاستيراد"
   },
   "showMessageTimestamps": {
@@ -1602,5 +2123,341 @@
   "folderAsProject_collapse": {
     "message": "طي",
     "description": "Aria-label for the collapse button (screen readers)"
+  },
+  "canvasExportCopyMarkdown": {
+    "message": "نسخ بصيغة Markdown",
+    "description": "عنصر قائمة مشاركة Canvas: نسخ محتوى Canvas بصيغة Markdown إلى الحافظة"
+  },
+  "canvasExportCopyMarkdownTooltip": {
+    "message": "نسخ محتوى Canvas بصيغة Markdown",
+    "description": "تلميح عنصر قائمة نسخ بصيغة Markdown"
+  },
+  "canvasExportCopied": {
+    "message": "تم نسخ Canvas بصيغة Markdown",
+    "description": "إشعار بعد النسخ الناجح"
+  },
+  "canvasExportEmpty": {
+    "message": "محتوى Canvas فارغ",
+    "description": "إشعار عندما لا يكون هناك محتوى للنسخ"
+  },
+  "canvasExportFailed": {
+    "message": "فشل نسخ محتوى Canvas",
+    "description": "إشعار عند فشل نسخ Markdown إلى الحافظة"
+  },
+  "floatingPanelCreateFolder": {
+    "message": "إنشاء مجلد",
+    "description": "Floating folder panel create folder action"
+  },
+  "floatingPanelCreateSubfolder": {
+    "message": "إنشاء مجلد فرعي",
+    "description": "Floating folder panel create subfolder action"
+  },
+  "floatingPanelFolderNamePlaceholder": {
+    "message": "اسم المجلد",
+    "description": "Floating folder panel folder name input placeholder"
+  },
+  "floatingPanelRenameFolder": {
+    "message": "إعادة التسمية",
+    "description": "Floating folder panel rename folder action"
+  },
+  "floatingPanelDeleteFolder": {
+    "message": "حذف",
+    "description": "Floating folder panel delete folder action"
+  },
+  "floatingPanelDeleteConfirm": {
+    "message": "هل تريد حذف هذا المجلد وكل محتوياته؟",
+    "description": "Floating folder panel delete folder confirmation"
+  },
+  "floatingPanelCancel": {
+    "message": "إلغاء",
+    "description": "Floating folder panel cancel action"
+  },
+  "floatingPanelSave": {
+    "message": "حفظ",
+    "description": "Floating folder panel save action"
+  },
+  "floatingPanelPinFolder": {
+    "message": "تثبيت",
+    "description": "Floating folder panel pin folder action"
+  },
+  "floatingPanelUnpinFolder": {
+    "message": "إلغاء التثبيت",
+    "description": "Floating folder panel unpin folder action"
+  },
+  "floatingPanelRemoveConversation": {
+    "message": "إزالة من المجلد",
+    "description": "Floating folder panel remove conversation action"
+  },
+  "floatingPanelStarConversation": {
+    "message": "تمييز بنجمة",
+    "description": "Floating folder panel star conversation action"
+  },
+  "floatingPanelUnstarConversation": {
+    "message": "إزالة النجمة",
+    "description": "Floating folder panel unstar conversation action"
+  },
+  "floatingPanelColor": {
+    "message": "اللون",
+    "description": "Floating folder panel color section label"
+  },
+  "floatingPanelExpandFolder": {
+    "message": "توسيع",
+    "description": "Floating folder panel expand folder aria label"
+  },
+  "floatingPanelCollapseFolder": {
+    "message": "طي",
+    "description": "Floating folder panel collapse folder aria label"
+  },
+  "floatingPanelCloudUpload": {
+    "message": "رفع إلى السحابة",
+    "description": "Floating folder panel cloud upload button tooltip"
+  },
+  "floatingPanelCloudSync": {
+    "message": "مزامنة من السحابة",
+    "description": "Floating folder panel cloud sync button tooltip"
+  },
+  "floatingPanelMoveHint": {
+    "message": "لإضافة محادثة: افتح قائمة ⋮ للمحادثة ← \"نقل إلى مجلد\".",
+    "description": "Floating folder panel hint explaining how to add conversations through the native conversation menu"
+  },
+  "floatingPanelGestureHint": {
+    "message": "نقر مزدوج لإعادة التسمية · زر الفأرة الأيمن للتثبيت واللون والحذف.",
+    "description": "Floating folder panel hint explaining folder gestures and context menu actions"
+  },
+  "folder_new_chat_in_folder": {
+    "message": "محادثة جديدة في هذا المجلد",
+    "description": "Folder context menu item to create a new chat and auto-assign it to this folder"
+  },
+  "responseCompleteNotification": {
+    "message": "إشعارات اكتمال رد Gemini",
+    "description": "Gemini response completion notification toggle"
+  },
+  "responseCompleteNotificationHint": {
+    "message": "إرسال إشعار نظام عندما ينهي Gemini الرد.",
+    "description": "Gemini response completion notification hint"
+  },
+  "responseCompleteNotificationHintSafari": {
+    "message": "في Safari، يرسل تطبيق Gemini Voyager لنظام macOS إشعار النظام هذا.",
+    "description": "Safari-specific hint for response completion notifications"
+  },
+  "responseCompleteNotificationMessage": {
+    "message": "اكتمل رد Gemini",
+    "description": "نص إشعار النظام عندما ينهي Gemini الرد"
+  },
+  "responseCompleteForegroundToast": {
+    "message": "اكتمل الرد الجديد",
+    "description": "نص التنبيه الأمامي عندما يكتمل رد Gemini خارج الشاشة"
+  },
+  "remoteAnnouncementNotification": {
+    "message": "الإعلانات البعيدة",
+    "description": "تسمية مفتاح إشعارات الإعلانات البعيدة من المشرف"
+  },
+  "remoteAnnouncementNotificationHint": {
+    "message": "يتحقق Voyager محليًا من ملف JSON عام على GitHub ويعرض تنبيهات نصية/روابط فقط. لا يمكنه حقن أو تشغيل كود بعيد، ولا التحكم في جهازك.",
+    "description": "شرح إشعارات الإعلانات البعيدة وحدود الأمان"
+  },
+  "remoteAnnouncementSystemPermissionCta": {
+    "message": "تفعيل تنبيهات النظام",
+    "description": "زر منح إذن إشعارات النظام الاختياري للإعلانات البعيدة"
+  },
+  "remoteAnnouncementDefaultTitle": {
+    "message": "إعلان Voyager",
+    "description": "عنوان احتياطي لإشعارات الإعلانات البعيدة داخل الصفحة"
+  },
+  "remoteAnnouncementOpen": {
+    "message": "فتح",
+    "description": "زر رابط الإعلان البعيد"
+  },
+  "remoteAnnouncementDismiss": {
+    "message": "إغلاق",
+    "description": "زر إغلاق الإعلان البعيد"
+  },
+  "pluginsTitle": {
+    "message": "الإضافات",
+    "description": "Popup section title for the plugin list"
+  },
+  "pluginsDescription": {
+    "message": "فعّل الإضافات التي تحسّن مواقع الذكاء الاصطناعي الأخرى. تفعيل إضافة يطلب إذن الوصول إلى ذلك الموقع.",
+    "description": "Popup subtitle explaining the plugin list"
+  },
+  "pluginViewSource": {
+    "message": "المصدر",
+    "description": "Link label to a plugin source/repo"
+  },
+  "pluginPermissionDenied": {
+    "message": "تم رفض إذن الموقع، ولا يمكن تشغيل الإضافة بدونه.",
+    "description": "Shown when the user denies the site permission for a plugin"
+  },
+  "pluginUnsupportedPlatform": {
+    "message": "غير مدعوم في هذا المتصفّح — لا يمكن منح إذن الموقع الذي تحتاجه الإضافة.",
+    "description": "Shown when a plugin can't be enabled because the browser can't grant the site access it needs (e.g. Safari)"
+  },
+  "pluginsLoading": {
+    "message": "جارٍ تحميل الإضافات…",
+    "description": "Shown while the plugin catalog is loading"
+  },
+  "pluginsEmpty": {
+    "message": "لا توجد إضافات متاحة.",
+    "description": "Shown when no plugins are available"
+  },
+  "pluginsRefresh": {
+    "message": "تحديث الإضافات",
+    "description": "Tooltip for the refresh-marketplace-catalog button"
+  },
+  "usageCoachmarkTitle": {
+    "message": "جديد: حدود الاستخدام",
+    "description": "Coachmark title introducing the usage pill"
+  },
+  "usageCoachmarkBody": {
+    "message": "تابِع ما تبقّى من حدود Gemini (كل 5 ساعات وأسبوعيًا) بجوار مربع الدردشة مباشرةً.",
+    "description": "Coachmark body text introducing the usage pill"
+  },
+  "usageCoachmarkToggle": {
+    "message": "إظهار شارة الاستخدام",
+    "description": "Inline toggle label in the usage-pill coachmark"
+  },
+  "folderSearchCoachmarkTitle": {
+    "message": "جديد: بحث المجلدات",
+    "description": "Coachmark title introducing folder search"
+  },
+  "folderSearchCoachmarkBody": {
+    "message": "ابحث عن عناوين المجلدات والمحادثات مباشرة من قسم المجلدات.",
+    "description": "Coachmark body text introducing folder search"
+  },
+  "folderSearchCoachmarkToggle": {
+    "message": "إظهار بحث المجلدات",
+    "description": "Inline toggle label in the folder-search coachmark"
+  },
+  "conversationSortCoachmarkTitle": {
+    "message": "جديد: ترتيب المحادثات",
+    "description": "Coachmark title introducing conversation sorting"
+  },
+  "conversationSortCoachmarkBody": {
+    "message": "يحافظ الترتيب اليدوي على التنظيم الذي تحدده بالسحب والإفلات. ويعيد خيار المفتوحة مؤخرًا المحادثات التي تزورها إلى الأعلى. يمكنك التبديل في أي وقت من إعدادات المجلدات.",
+    "description": "Coachmark body explaining manual and recently opened conversation sorting"
+  },
+  "timelineCoachmarkTitle": {
+    "message": "جديد: مخطط زمني مضغوط",
+    "description": "Coachmark title introducing the compact timeline style"
+  },
+  "timelineCoachmarkBody": {
+    "message": "حافظ على بساطة الحافة اليمنى. مرّر المؤشر فوق الفهرس المضغوط لعرض جميع الرسائل في لوحة واحدة.",
+    "description": "Coachmark body text introducing the compact timeline style"
+  },
+  "timelineCoachmarkToggle": {
+    "message": "استخدام المخطط الزمني المضغوط",
+    "description": "Inline toggle label in the compact-timeline coachmark"
+  },
+  "coachmarkDismiss": {
+    "message": "تم",
+    "description": "Generic confirmation label for feature coachmarks"
+  },
+  "coachmarkNext": {
+    "message": "التالي",
+    "description": "Button label for advancing to the next feature coachmark"
+  },
+  "coachmarkClose": {
+    "message": "إغلاق",
+    "description": "Accessible label for the feature coachmark close button"
+  },
+  "themeColor": {
+    "message": "لون التمييز",
+    "description": "Accent/theme colour picker title"
+  },
+  "themeColorDesc": {
+    "message": "خصّص لون تمييز Voyager لهذا الموقع.",
+    "description": "Accent colour picker description"
+  },
+  "themeColorReset": {
+    "message": "إعادة التعيين إلى الافتراضي",
+    "description": "Reset accent colour to default"
+  },
+  "promptCloudPull": {
+    "message": "سحب (دمج)",
+    "description": "Button: pull (merge) prompts from Google Drive into local"
+  },
+  "promptCloudPush": {
+    "message": "رفع (دمج)",
+    "description": "Button: push (merge) local prompts up to Google Drive"
+  },
+  "promptCloudPullSuccess": {
+    "message": "تم دمج {count} من الموجّهات من السحابة",
+    "description": "Toast: prompts merged from cloud (with {count})"
+  },
+  "promptCloudPushSuccess": {
+    "message": "تم رفع {count} من الموجّهات المدموجة إلى السحابة",
+    "description": "Toast: merged prompts uploaded to cloud (with {count})"
+  },
+  "promptCloudPullEmpty": {
+    "message": "لا توجد موجّهات في السحابة بعد",
+    "description": "Toast: no prompts in the cloud yet"
+  },
+  "promptCloudError": {
+    "message": "فشلت المزامنة السحابية. تأكد من تسجيل الدخول إلى Google Drive.",
+    "description": "Toast: cloud prompt sync failed / not signed in"
+  },
+  "enablePromptManagerOnSite": {
+    "message": "تفعيل مدير الموجّهات على {site}",
+    "description": "Top toggle label: enable Prompt Manager on the current plugin site ({site})"
+  },
+  "enablePromptManagerOnSiteHint": {
+    "message": "استخدم موجّهاتك المحفوظة على هذا الموقع. سيُطلب منك منح الإذن بالوصول.",
+    "description": "Top toggle hint for enabling Prompt Manager on a third-party site"
+  },
+  "storageQuotaTitle": { "message": "مساحة التخزين" },
+  "storageQuotaManage": { "message": "إدارة التخزين" },
+  "storageQuotaLocal": { "message": "بيانات الإضافة المحلية" },
+  "storageQuotaSync": { "message": "الإعدادات المتزامنة" },
+  "storageQuotaHealthy": { "message": "مساحة كافية" },
+  "storageQuotaAttention": { "message": "قريب من الحد" },
+  "storageQuotaCritical": { "message": "ممتلئ تقريبًا" },
+  "storageQuotaWarningToast": {
+    "message": "تم استخدام {percent}% من مساحة تخزين Voyager. افتح نافذة الإضافة لمراجعة البيانات أو تنظيفها."
+  },
+  "storageQuotaUnknown": { "message": "تعذّر قراءة الاستخدام" },
+  "storageQuotaBreakdown": { "message": "تفاصيل التخزين" },
+  "storageQuotaSoftLimit": { "message": "الحد المرن لـ Voyager" },
+  "storageQuotaEffectiveLimit": {
+    "message": "الحد الفعلي الحالي: {size}. يطبق Voyager القيمة الأقل بينه وبين الحد المرن المحدد."
+  },
+  "storageQuotaCache": { "message": "ذاكرة مؤقتة قابلة لإعادة الإنشاء" },
+  "storageQuotaHighlights": { "message": "النصوص المميزة" },
+  "storageQuotaOther": { "message": "أخرى" },
+  "storageQuotaUnlock": { "message": "توسيع التخزين المحلي" },
+  "storageQuotaSafariLimit": {
+    "message": "يستطيع Safari 15 رفع التخزين المحلي من نحو 5 ميجابايت إلى نحو 10 ميجابايت فقط، وقد يمتلئ مع ذلك."
+  },
+  "storageQuotaUnknownLimit": {
+    "message": "تعذّر تحديد إصدار Safari. قد يظل التوسيع محدودًا في الإصدارات القديمة."
+  },
+  "storageQuotaClearConfirm": {
+    "message": "هل تريد مسح «{category}»؟ ستُحذف بيانات هذه الفئة فقط."
+  },
+  "storageQuotaHighlightClearConfirm": {
+    "message": "هل تريد حذف كل النصوص المميزة والتعليقات المحفوظة؟ لا يمكن التراجع عن هذا الإجراء."
+  },
+  "storageQuotaDraftClearConfirm": {
+    "message": "هل تريد حذف كل المسودات غير المرسلة؟ لا يمكن التراجع عن هذا الإجراء."
+  },
+  "highlightAction": { "message": "تمييز" },
+  "highlightSaved": { "message": "تم حفظ التمييز" },
+  "highlightSaveFailed": { "message": "تعذر حفظ التمييز" },
+  "highlightDeleteFailed": { "message": "تعذر حذف التمييز" },
+  "highlightNotePlaceholder": { "message": "إضافة ملاحظة (اختياري)" },
+  "highlightColor": { "message": "لون التمييز" },
+  "highlightCustomColor": { "message": "اختيار لون مخصص" },
+  "highlightTooLong": { "message": "التحديد طويل جدًا. حدد مقطعًا أقصر." },
+  "highlightAriaLabel": { "message": "تمييز محفوظ. فتح التعليق التوضيحي." },
+  "highlightTimelineAriaLabel": { "message": "فتح التمييز المحفوظ" },
+  "savedLibraryAll": { "message": "الكل" },
+  "savedLibraryStars": { "message": "المفضلة" },
+  "savedLibraryHighlights": { "message": "التمييزات" },
+  "savedLibraryEmpty": { "message": "لا توجد عناصر محفوظة بعد" },
+  "savedLibraryNoHighlights": { "message": "لا توجد تمييزات بعد" },
+  "savedLibrarySearchPlaceholder": { "message": "البحث في المفضلة والتمييزات" },
+  "highlightImportSuccess": { "message": "تم استيراد {count} من التمييزات" },
+  "highlightCloudSync": { "message": "مزامنة التمييزات" },
+  "highlightCloudSyncHint": {
+    "message": "يحفظ التمييزات في ملف Drive منفصل لكل حساب. تُضمّن افتراضيًا عند تشغيل مزامنة Drive وتُدمج دائمًا بأمان."
   }
 }

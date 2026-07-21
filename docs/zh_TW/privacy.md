@@ -1,6 +1,6 @@
 # 隱私政策
 
-最後更新：2026年3月16日
+最後更新：2026年7月17日
 
 ## 簡介
 
@@ -19,7 +19,11 @@ Voyager 完全在您的瀏覽器本地運作。擴充功能產生或管理的所
 
 ## Google Drive 同步（選用）
 
-如果您主動啟用 Google Drive 同步功能，擴充功能會使用 Chrome Identity API 取得 OAuth2 權杖（僅限 `drive.file` 範圍），將您的資料夾和提示詞備份到**您自己的 Google Drive**。此傳輸直接發生在您的瀏覽器和 Google 伺服器之間。我們無法存取此資料，且絕不會傳送到我們營運的任何伺服器。
+如果您主動啟用 Google Drive 同步功能，Chrome、Edge 與 Firefox 會使用瀏覽器身分 API；Safari 直裝版則使用原生 Google Sign-In，並將憑證保存在 macOS 鑰匙圈中。兩種方式都只申請 `drive.file` 範圍，直接在您的裝置與**您自己的 Google Drive**之間傳輸資料；OAuth 權杖不會傳送到 Voyager 伺服器。
+
+## Safari iCloud 同步（選用）
+
+Safari 直裝版可將選定的備份資料直接寫入您 iCloud 帳戶的私有 CloudKit 資料庫。Voyager 不會取得您的 Apple ID 或 iCloud 驗證權杖，開發者也無法存取該私有資料庫中的記錄。
 
 ## 權限說明
 
@@ -41,4 +45,4 @@ Voyager 不會與任何第三方服務、廣告商或分析提供商共享資料
 
 ## 聯絡我們
 
-如果您對本隱私政策有任何疑問，請透過我們的 [GitHub 儲存庫](https://github.com/Nagi-ovo/gemini-voyager) 聯絡我們。
+如果您對本隱私政策有任何疑問，請透過我們的 [GitHub 儲存庫](https://github.com/Nagi-ovo/voyager) 聯絡我們。

@@ -4,12 +4,32 @@
  */
 
 /**
+ * Canvas document content extracted from immersive-editor
+ */
+export interface CanvasDoc {
+  /** Title of the Canvas document */
+  title: string;
+  /** Full markdown content of the Canvas document */
+  content: string;
+}
+
+/**
+ * File attached to a user message.
+ * The export preserves context only; it does not bundle the original file.
+ */
+export interface ExportAttachment {
+  name: string;
+  type: string;
+}
+
+/**
  * Chat turn representing a user-assistant exchange
  */
 export interface ChatTurn {
   user: string;
   assistant: string;
   starred: boolean;
+  attachments?: ExportAttachment[];
   omitEmptySections?: boolean;
   // Optional DOM elements for rich content extraction
   userElement?: HTMLElement;

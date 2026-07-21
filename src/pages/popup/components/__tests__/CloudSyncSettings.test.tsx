@@ -11,6 +11,9 @@ import { getTimelineHierarchyStorageKey } from '@/pages/content/timeline/hierarc
 
 import { CloudSyncSettings } from '../CloudSyncSettings';
 
+const browserTarget = vi.hoisted(() => ({ value: 'chrome' }));
+const deleteSafariICloudBackup = vi.hoisted(() => vi.fn());
+
 vi.mock('@/contexts/LanguageContext', () => ({
   useLanguage: () => ({
     language: 'en',
@@ -20,7 +23,12 @@ vi.mock('@/contexts/LanguageContext', () => ({
 }));
 
 vi.mock('@/core/utils/browser', () => ({
+  getVoyagerBuildTarget: () => browserTarget.value,
   isSafari: () => false,
+}));
+
+vi.mock('@/core/utils/safariICloudSync', () => ({
+  deleteSafariICloudBackup,
 }));
 
 type MockedChrome = typeof chrome;
@@ -39,6 +47,7 @@ function createChromeMock(sendMessage: ReturnType<typeof vi.fn>): MockedChrome {
       id: 'test-extension-id',
     },
     tabs: {
+      get: vi.fn().mockResolvedValue({ id: 1, url: 'https://gemini.google.com/app' }),
       query: vi.fn().mockResolvedValue([{ id: 1, url: 'https://gemini.google.com/app' }]),
       sendMessage: vi.fn().mockResolvedValue({
         ok: true,
@@ -88,12 +97,153 @@ describe('CloudSyncSettings auth flow', () => {
     }
     document.body.innerHTML = '';
     vi.clearAllMocks();
+    vi.restoreAllMocks();
   });
 
   beforeEach(() => {
+    browserTarget.value = 'chrome';
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     container = document.createElement('div');
     document.body.appendChild(container);
+  });
+
+  it('shows Gemini as a branded platform summary without decorative emoji text', async () => {
+    const sendMessageMock = vi.fn().mockImplementation((message: { type?: string }) => {
+      if (message.type === 'gv.sync.getState') {
+        return Promise.resolve({ ok: true, state: baseState });
+      }
+      return Promise.resolve({ ok: true });
+    });
+    (globalThis as { chrome: MockedChrome }).chrome = createChromeMock(sendMessageMock);
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<CloudSyncSettings />);
+    });
+    await flushMicrotasks();
+
+    const summary = container.querySelector('[data-testid="sync-platform-summary"]');
+    const logo = summary?.querySelector('img');
+
+    expect(summary?.textContent).toContain('platformGemini');
+    expect(summary?.textContent).not.toContain('✨');
+    expect(logo?.getAttribute('src')).toContain('gemini_sparkle');
+    expect(logo?.getAttribute('alt')).toBe('');
+  });
+
+  it('switches the platform summary artwork and label for AI Studio', async () => {
+    const sendMessageMock = vi.fn().mockImplementation((message: { type?: string }) => {
+      if (message.type === 'gv.sync.getState') {
+        return Promise.resolve({ ok: true, state: baseState });
+      }
+      return Promise.resolve({ ok: true });
+    });
+    const chromeMock = createChromeMock(sendMessageMock);
+    (chromeMock.tabs.query as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 2, url: 'https://aistudio.google.com/prompts/new_chat' },
+    ]);
+    (globalThis as { chrome: MockedChrome }).chrome = chromeMock;
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<CloudSyncSettings />);
+    });
+    await flushMicrotasks();
+
+    const summary = container.querySelector('[data-testid="sync-platform-summary"]');
+    const logo = summary?.querySelector('img');
+
+    expect(summary?.textContent).toContain('platformAIStudio');
+    expect(logo?.getAttribute('src')).toContain('/productlogos/ai_studio/');
+  });
+
+  it('lets Safari users select iCloud without changing the sync mode', async () => {
+    browserTarget.value = 'safari';
+    const sendMessageMock = vi.fn().mockImplementation((message: { type?: string }) => {
+      if (message.type === 'gv.sync.getState') {
+        return Promise.resolve({ ok: true, state: baseState });
+      }
+      if (message.type === 'gv.sync.setProvider') {
+        return Promise.resolve({
+          ok: true,
+          state: { ...baseState, provider: 'icloud' },
+        });
+      }
+      return Promise.resolve({ ok: true });
+    });
+    (globalThis as { chrome: MockedChrome }).chrome = createChromeMock(sendMessageMock);
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<CloudSyncSettings />);
+    });
+    await flushMicrotasks();
+
+    const iCloudButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'syncProviderICloud',
+    );
+    expect(iCloudButton).toBeDefined();
+    await act(async () => {
+      iCloudButton?.click();
+    });
+
+    expect(sendMessageMock).toHaveBeenCalledWith({
+      type: 'gv.sync.setProvider',
+      payload: { provider: 'icloud' },
+    });
+    expect(container.textContent).toContain('cloudSyncDescriptionICloud');
+  });
+
+  it('gives unauthenticated Safari users a direct Google Drive connection link', async () => {
+    browserTarget.value = 'safari';
+    const sendMessageMock = vi.fn().mockImplementation((message: { type?: string }) => {
+      if (message.type === 'gv.sync.getState') {
+        return Promise.resolve({ ok: true, state: baseState });
+      }
+      return Promise.resolve({ ok: true });
+    });
+    (globalThis as { chrome: MockedChrome }).chrome = createChromeMock(sendMessageMock);
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<CloudSyncSettings />);
+    });
+    await flushMicrotasks();
+
+    const connectLink = container.querySelector<HTMLAnchorElement>(
+      'a[href="gemini-voyager://google-drive-auth"]',
+    );
+    expect(connectLink?.textContent).toBe('syncConnectGoogleDrive');
+  });
+
+  it('lets Safari users delete their iCloud backup without deleting local data', async () => {
+    browserTarget.value = 'safari';
+    deleteSafariICloudBackup.mockResolvedValue(3);
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const sendMessageMock = vi.fn().mockImplementation((message: { type?: string }) => {
+      if (message.type === 'gv.sync.getState') {
+        return Promise.resolve({ ok: true, state: { ...baseState, provider: 'icloud' } });
+      }
+      return Promise.resolve({ ok: true });
+    });
+    (globalThis as { chrome: MockedChrome }).chrome = createChromeMock(sendMessageMock);
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<CloudSyncSettings />);
+    });
+    await flushMicrotasks();
+
+    const deleteButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'syncDeleteICloudBackup',
+    );
+    expect(deleteButton).toBeDefined();
+    await act(async () => {
+      deleteButton?.click();
+    });
+
+    expect(deleteSafariICloudBackup).toHaveBeenCalledOnce();
+    expect(container.textContent).toContain('syncDeleteICloudSuccess');
   });
 
   it('triggers upload directly without a separate authenticate message', async () => {
@@ -136,6 +286,259 @@ describe('CloudSyncSettings auth flow', () => {
     expect(sendMessageMock).not.toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'gv.sync.authenticate',
+      }),
+    );
+  });
+
+  it('includes highlights by default in the next manual upload', async () => {
+    const sendMessageMock = vi.fn().mockImplementation((message: { type?: string }) => {
+      if (message.type === 'gv.sync.getState') {
+        return Promise.resolve({ ok: true, state: baseState });
+      }
+      if (message.type === 'gv.sync.upload') {
+        return Promise.resolve({ ok: true, state: baseState });
+      }
+      return Promise.resolve({ ok: true });
+    });
+    const chromeMock = createChromeMock(sendMessageMock);
+    vi.mocked(chromeMock.tabs.sendMessage).mockImplementation(async (_tabId, message) => {
+      if ((message as { type?: string }).type === 'gv.account.getContext') {
+        return {
+          ok: true,
+          context: { routeUserId: '0', email: 'user@example.com' },
+        } as never;
+      }
+      return { ok: true, data: { folders: [], folderContents: {} } } as never;
+    });
+    (globalThis as { chrome: MockedChrome }).chrome = chromeMock;
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<CloudSyncSettings />);
+    });
+    await flushMicrotasks();
+
+    const toggle = container.querySelector<HTMLInputElement>('#highlight-cloud-sync');
+    expect(toggle).toBeTruthy();
+    expect(toggle?.checked).toBe(true);
+
+    const uploadButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      (button.textContent || '').includes('syncUpload'),
+    );
+    await act(async () => {
+      uploadButton?.click();
+    });
+    await flushMicrotasks();
+
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'gv.sync.upload',
+        payload: expect.objectContaining({
+          includeHighlights: true,
+          highlightAccountScope: expect.objectContaining({ routeUserId: '0' }),
+        }),
+      }),
+    );
+  });
+
+  it('uses the default account scope when the Gemini page has no explicit account id', async () => {
+    const sendMessageMock = vi.fn().mockImplementation((message: { type?: string }) => {
+      if (message.type === 'gv.sync.getState') {
+        return Promise.resolve({ ok: true, state: baseState });
+      }
+      if (message.type === 'gv.sync.upload') {
+        return Promise.resolve({ ok: true, state: baseState });
+      }
+      return Promise.resolve({ ok: true });
+    });
+    const chromeMock = createChromeMock(sendMessageMock);
+    vi.mocked(chromeMock.tabs.sendMessage).mockImplementation(async (_tabId, message) => {
+      if ((message as { type?: string }).type === 'gv.account.getContext') {
+        return {
+          ok: true,
+          context: { routeUserId: null, email: null },
+        } as never;
+      }
+      return { ok: true, data: { folders: [], folderContents: {} } } as never;
+    });
+    (globalThis as { chrome: MockedChrome }).chrome = chromeMock;
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<CloudSyncSettings />);
+    });
+    await flushMicrotasks();
+
+    const uploadButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      (button.textContent || '').includes('syncUpload'),
+    );
+    await act(async () => {
+      uploadButton?.click();
+    });
+    await flushMicrotasks();
+
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'gv.sync.upload',
+        payload: expect.objectContaining({
+          includeHighlights: true,
+          highlightAccountScope: expect.objectContaining({
+            accountKey: 'default',
+            routeUserId: null,
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('reports a partial success when highlights are skipped without page context', async () => {
+    const sendMessageMock = vi.fn().mockImplementation((message: { type?: string }) => {
+      if (message.type === 'gv.sync.getState') {
+        return Promise.resolve({ ok: true, state: baseState });
+      }
+      if (message.type === 'gv.sync.upload') {
+        return Promise.resolve({
+          ok: true,
+          state: baseState,
+          highlights: { synced: false, skipped: true },
+        });
+      }
+      return Promise.resolve({ ok: true });
+    });
+    const chromeMock = createChromeMock(sendMessageMock);
+    vi.mocked(chromeMock.tabs.sendMessage).mockRejectedValue(new Error('No receiving end'));
+    (globalThis as { chrome: MockedChrome }).chrome = chromeMock;
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<CloudSyncSettings />);
+    });
+    await flushMicrotasks();
+
+    const uploadButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      (button.textContent || '').includes('syncUpload'),
+    );
+    await act(async () => {
+      uploadButton?.click();
+    });
+    await flushMicrotasks();
+
+    expect(container.textContent).toContain('syncSuccessHighlightsSkipped');
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'gv.sync.upload',
+        payload: expect.objectContaining({
+          includeHighlights: true,
+          highlightAccountScope: null,
+        }),
+      }),
+    );
+  });
+
+  it('uses the source tab when options is opened as the popup fallback', async () => {
+    const sendMessageMock = vi.fn().mockImplementation((message: { type?: string }) => {
+      if (message.type === 'gv.sync.getState') {
+        return Promise.resolve({ ok: true, state: baseState });
+      }
+      if (message.type === 'gv.sync.upload') {
+        return Promise.resolve({
+          ok: true,
+          state: { ...baseState, isAuthenticated: true },
+        });
+      }
+      return Promise.resolve({ ok: true });
+    });
+
+    const chromeMock = createChromeMock(sendMessageMock);
+    (chromeMock.tabs.query as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 7, url: 'chrome-extension://test/src/pages/options/index.html' },
+    ]);
+    (chromeMock.tabs.get as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 42,
+      url: 'https://gemini.google.com/app/source',
+    });
+    (globalThis as { chrome: MockedChrome }).chrome = chromeMock;
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<CloudSyncSettings sourceTabId={42} />);
+    });
+    await flushMicrotasks();
+
+    const uploadButton = Array.from(container.querySelectorAll('button')).find((btn) =>
+      (btn.textContent || '').includes('syncUpload'),
+    );
+    expect(uploadButton).toBeTruthy();
+
+    await act(async () => {
+      uploadButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flushMicrotasks();
+
+    expect(chromeMock.tabs.get).toHaveBeenCalledWith(42);
+    expect(chromeMock.tabs.sendMessage).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ type: 'gv.sync.requestData' }),
+    );
+    expect(chromeMock.tabs.sendMessage).not.toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ type: 'gv.sync.requestData' }),
+    );
+  });
+
+  it('uploads legacy Safari folder data stored as a JSON string', async () => {
+    const storedFolders = {
+      folders: [
+        {
+          id: 'folder-1',
+          name: 'Research',
+          parentId: null,
+          isExpanded: true,
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      ],
+      folderContents: { 'folder-1': [] },
+    };
+    const sendMessageMock = vi.fn().mockImplementation((message: { type?: string }) => {
+      if (message.type === 'gv.sync.getState') {
+        return Promise.resolve({ ok: true, state: baseState });
+      }
+      if (message.type === 'gv.sync.upload') {
+        return Promise.resolve({ ok: true, state: baseState });
+      }
+      return Promise.resolve({ ok: true });
+    });
+    const chromeMock = createChromeMock(sendMessageMock);
+    (chromeMock.tabs.sendMessage as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('No receiving end'),
+    );
+    (chromeMock.storage.local.get as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      gvFolderData: JSON.stringify(storedFolders),
+      gvPromptItems: [],
+      geminiTimelineStarredMessages: { messages: {} },
+      [StorageKeys.TIMELINE_HIERARCHY]: { conversations: {} },
+    });
+    (globalThis as { chrome: MockedChrome }).chrome = chromeMock;
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<CloudSyncSettings />);
+    });
+    await flushMicrotasks();
+
+    const uploadButton = Array.from(container.querySelectorAll('button')).find((btn) =>
+      (btn.textContent || '').includes('syncUpload'),
+    );
+    await act(async () => {
+      uploadButton?.click();
+    });
+    await flushMicrotasks();
+
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'gv.sync.upload',
+        payload: expect.objectContaining({ folders: storedFolders }),
       }),
     );
   });
@@ -186,6 +589,120 @@ describe('CloudSyncSettings auth flow', () => {
       expect.objectContaining({
         type: 'gv.sync.authenticate',
       }),
+    );
+  });
+
+  it('reports a partial sync when other data exists but the folder backup is missing', async () => {
+    const sendMessageMock = vi.fn().mockImplementation((message: { type?: string }) => {
+      if (message.type === 'gv.sync.getState') {
+        return Promise.resolve({ ok: true, state: baseState });
+      }
+      if (message.type === 'gv.sync.download') {
+        return Promise.resolve({
+          ok: true,
+          state: { ...baseState, isAuthenticated: true },
+          data: { prompts: { items: [] } },
+        });
+      }
+      return Promise.resolve({ ok: true });
+    });
+    (globalThis as { chrome: MockedChrome }).chrome = createChromeMock(sendMessageMock);
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<CloudSyncSettings />);
+    });
+    await flushMicrotasks();
+
+    const downloadButton = Array.from(container.querySelectorAll('button')).find((btn) =>
+      (btn.textContent || '').includes('syncMerge'),
+    );
+    await act(async () => {
+      downloadButton?.click();
+    });
+    await flushMicrotasks();
+
+    expect(container.textContent).toContain('syncSuccessFoldersMissing');
+  });
+
+  it('blocks overwrite when Drive has no folders payload', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const sendMessageMock = vi.fn().mockImplementation((message: { type?: string }) => {
+      if (message.type === 'gv.sync.getState') {
+        return Promise.resolve({ ok: true, state: baseState });
+      }
+      if (message.type === 'gv.sync.download') {
+        return Promise.resolve({
+          ok: true,
+          state: { ...baseState, isAuthenticated: true },
+          data: {
+            prompts: { items: [] },
+            starred: { data: { messages: {} } },
+          },
+        });
+      }
+      return Promise.resolve({ ok: true });
+    });
+
+    const chromeMock = createChromeMock(sendMessageMock);
+    (chromeMock.tabs.sendMessage as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      data: {
+        folders: [
+          {
+            id: 'folder-1',
+            name: 'Existing',
+            parentId: null,
+            isExpanded: true,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ],
+        folderContents: {},
+      },
+    });
+    (chromeMock.storage.local.get as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      gvFolderData: {
+        folders: [
+          {
+            id: 'folder-1',
+            name: 'Existing',
+            parentId: null,
+            isExpanded: true,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ],
+        folderContents: {},
+      },
+      gvPromptItems: [],
+      geminiTimelineStarredMessages: { messages: {} },
+      [StorageKeys.TIMELINE_HIERARCHY]: { conversations: {} },
+    });
+    (globalThis as { chrome: MockedChrome }).chrome = chromeMock;
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<CloudSyncSettings />);
+    });
+    await flushMicrotasks();
+
+    const overwriteButton = Array.from(container.querySelectorAll('button')).find((btn) =>
+      (btn.textContent || '').includes('syncOverwrite'),
+    );
+    expect(overwriteButton).toBeTruthy();
+
+    await act(async () => {
+      overwriteButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await flushMicrotasks();
+
+    expect(confirmSpy).toHaveBeenCalledOnce();
+    expect(container.textContent).toContain('syncOverwriteMissingFolders');
+    expect(chromeMock.storage.local.set).not.toHaveBeenCalled();
+    expect(chromeMock.tabs.sendMessage).not.toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ type: 'gv.folders.reload' }),
     );
   });
 
@@ -308,6 +825,70 @@ describe('CloudSyncSettings auth flow', () => {
     expect(syncSetMock).toHaveBeenCalledWith({
       [StorageKeys.CHAT_WIDTH]: 88,
       [StorageKeys.CONTEXT_SYNC_PORT]: 4040,
+    });
+  });
+
+  it('merges the independent cloud plugin-state file into local storage', async () => {
+    const sendMessageMock = vi.fn().mockImplementation((message: { type?: string }) => {
+      if (message.type === 'gv.sync.getState') {
+        return Promise.resolve({ ok: true, state: baseState });
+      }
+      if (message.type === 'gv.sync.download') {
+        return Promise.resolve({
+          ok: true,
+          state: { ...baseState, isAuthenticated: true },
+          data: {
+            folders: { data: { folders: [], folderContents: {} } },
+            prompts: { items: [] },
+            plugins: {
+              format: 'gemini-voyager.plugins.v1',
+              exportedAt: new Date().toISOString(),
+              version: '1.0.0',
+              data: {
+                shared: { enabled: true, installedAt: 3, settings: { width: 80 } },
+                cloud: { enabled: false, installedAt: 4 },
+              },
+            },
+            starred: { data: { messages: {} } },
+          },
+        });
+      }
+      return Promise.resolve({ ok: true });
+    });
+
+    const chromeMock = createChromeMock(sendMessageMock);
+    (chromeMock.storage.local.get as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      gvFolderData: { folders: [], folderContents: {} },
+      gvPromptItems: [],
+      geminiTimelineStarredMessages: { messages: {} },
+      [StorageKeys.TIMELINE_HIERARCHY]: { conversations: {} },
+      [StorageKeys.PLUGINS_STATE]: {
+        local: { enabled: true, installedAt: 1 },
+        shared: { enabled: false, installedAt: 2, settings: { width: 60 } },
+      },
+    });
+    (globalThis as { chrome: MockedChrome }).chrome = chromeMock;
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<CloudSyncSettings />);
+    });
+    await flushMicrotasks();
+
+    const downloadButton = Array.from(container.querySelectorAll('button')).find((btn) =>
+      (btn.textContent || '').includes('syncMerge'),
+    );
+    await act(async () => {
+      downloadButton?.click();
+    });
+    await flushMicrotasks();
+
+    expect(chromeMock.storage.local.set).toHaveBeenCalledWith({
+      [StorageKeys.PLUGINS_STATE]: {
+        local: { enabled: true, installedAt: 1 },
+        shared: { enabled: true, installedAt: 3, settings: { width: 80 } },
+        cloud: { enabled: false, installedAt: 4 },
+      },
     });
   });
 

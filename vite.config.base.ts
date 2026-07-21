@@ -11,6 +11,7 @@ import manifest from './manifest.json';
 import pkg from './package.json';
 
 const isDev = process.env.__DEV__ === 'true';
+const buildTarget = process.env.VOYAGER_BUILD_TARGET === 'edge' ? 'edge' : 'chrome';
 // set this flag to true, if you want localization support
 const localize = true;
 
@@ -25,6 +26,11 @@ export const baseManifest = {
         default_locale: 'en',
       }
     : {}),
+  // Dev override: bypass the i18n placeholder so the unpacked dev extension
+  // shows up as "Voyager (Dev)" in chrome://extensions, the toolbar tooltip,
+  // and OS task switchers. Makes it impossible to confuse with the Chrome Web
+  // Store install when both are loaded.
+  ...(isDev ? { name: 'Voyager (Dev)' } : {}),
 } as ManifestV3Export;
 
 export const baseBuildOptions: BuildOptions = {
@@ -37,6 +43,9 @@ export const baseBuildOptions: BuildOptions = {
 };
 
 export default defineConfig({
+  define: {
+    'import.meta.env.VOYAGER_BUILD_TARGET': JSON.stringify(buildTarget),
+  },
   plugins: [
     tailwindcss(),
     tsconfigPaths(),

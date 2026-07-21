@@ -50,6 +50,10 @@ describe('watermarkRemover download toasts', () => {
     const bridge = document.getElementById('gv-watermark-bridge');
     expect(bridge).not.toBeNull();
     if (!bridge) return;
+    const intentTtlMs =
+      Number((bridge as HTMLElement).dataset.downloadIntentExpiresAt) - Date.now();
+    expect(intentTtlMs).toBeGreaterThanOrEqual(59000);
+    expect(intentTtlMs).toBeLessThanOrEqual(60000);
 
     (bridge as HTMLElement).dataset.status = JSON.stringify({ type: 'DOWNLOADING_LARGE' });
     await flushMutationObservers();

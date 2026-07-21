@@ -1,4 +1,4 @@
-import browser from 'webextension-polyfill';
+import browser, { type Runtime } from 'webextension-polyfill';
 
 import {
   type AccountScope,
@@ -7,12 +7,18 @@ import {
   detectAccountContextFromDocument,
 } from '@/core/services/AccountIsolationService';
 import { DataBackupService } from '@/core/services/DataBackupService';
-import { getStorageMonitor } from '@/core/services/StorageMonitor';
 import { StorageKeys } from '@/core/types/common';
 import type { PromptItem, SyncAccountScope } from '@/core/types/sync';
 import { isSafari } from '@/core/utils/browser';
 import { createTranslator, initI18n } from '@/utils/i18n';
+import { mergeFolderData as mergeSyncedFolderData } from '@/utils/merge';
 
+import { watchRouteChanges } from '../utils/routeWatcher';
+import {
+  mountHideArchivedNudge,
+  shouldShowHideArchivedNudge,
+  unmountHideArchivedNudge,
+} from './hideArchivedNudge';
 import type { ConversationReference, DragData, Folder, FolderData } from './types';
 
 function waitForElement<T extends Element = Element>(
@@ -82,16 +88,46 @@ function uid(): string {
 }
 
 const NOTIFICATION_TIMEOUT_MS = 5000;
-const PROMPT_LINK_SELECTOR = 'a.prompt-link[href^="/prompts/"]';
-const UNBOUND_PROMPT_LINK_SELECTOR = `${PROMPT_LINK_SELECTOR}:not([data-gv-drag-bound])`;
+const PROMPT_LINK_SELECTORS = [
+  'a[href^="/prompts/"]',
+  'a[href^="/u/"][href*="/prompts/"]',
+  'a[href*="://aistudio.google.com/prompts/"]',
+  'a[href*="://aistudio.google.com/u/"][href*="/prompts/"]',
+  'a[href*="://aistudio.google.cn/prompts/"]',
+  'a[href*="://aistudio.google.cn/u/"][href*="/prompts/"]',
+];
+const PROMPT_LINK_SELECTOR = PROMPT_LINK_SELECTORS.join(', ');
+const UNBOUND_PROMPT_LINK_SELECTOR = PROMPT_LINK_SELECTORS.map(
+  (selector) => `${selector}:not([data-gv-drag-bound])`,
+).join(', ');
+const BODY_PROMPT_POPOVER_SELECTOR = [
+  '.cdk-overlay-container',
+  '.cdk-overlay-pane',
+  '[role="menu"]',
+  '[role="listbox"]',
+  '[role="dialog"]',
+].join(', ');
 const PROMPT_LIST_BIND_DEBOUNCE_MS = 120;
 const PROMPT_TITLE_SYNC_DEBOUNCE_MS = 280;
+// If no dragover arrives for this long while the floating library drop zone is
+// visible, treat the drag as over (e.g. the source row was torn out of the DOM by an
+// Angular refresh, so dragend never fires) and hide the zone.
+const LIBRARY_DRAG_HEARTBEAT_MS = 800;
 const PROMPT_DRAG_HOST_SELECTORS = [
   '[data-test-id^="history-item"]',
   '[role="listitem"]',
   '.mat-mdc-list-item',
   'li',
 ];
+
+type LibraryPromptData = DragData & { conversationId: string };
+
+type InlineFolderEditor = {
+  wrapper: HTMLElement;
+  input: HTMLInputElement;
+  saveBtn: HTMLButtonElement;
+  cancelBtn: HTMLButtonElement;
+};
 
 function nodeContainsPromptLink(node: Node): boolean {
   if (!(node instanceof Element)) return false;
@@ -214,19 +250,39 @@ export class AIStudioFolderManager {
   private promptListBindTimer: number | null = null;
   private promptTitleSyncTimer: number | null = null;
   private promptTitleSyncInProgress: boolean = false;
+  private selectedLibraryPrompts: Set<string> = new Set();
+  private isLibraryMultiSelectMode: boolean = false;
+  private libraryOutsideClickHandler: ((e: MouseEvent) => void) | null = null;
+  private libraryMultiSelectHostElement: HTMLElement | null = null;
+  private libraryBatchDeleteInProgress: boolean = false;
+  private libraryBatchDeleteProgressElement: HTMLElement | null = null;
   private readonly STORAGE_KEY = StorageKeys.FOLDER_DATA_AISTUDIO;
   private folderEnabled: boolean = true; // Whether folder feature is enabled
+  private hideArchivedEnabled: boolean = false; // AI Studio-scoped — hide filed convs in /library table
+  private hideArchivedNudgeShown: boolean = false; // AI Studio-scoped — nudge dismissed/enabled before
   private accountIsolationEnabled: boolean = false; // Whether hard account isolation is enabled
   private accountScope: AccountScope | null = null; // Resolved account scope for current account
   private activeStorageKey: string = StorageKeys.FOLDER_DATA_AISTUDIO; // Active folder data key
   private accountContextPoller: number | null = null; // Detect account switches
   private lastAccountContextFingerprint: string | null = null; // Debounce account scope refresh
+  private stopRouteWatcher: (() => void) | null = null;
   private backupService!: DataBackupService<FolderData>; // Initialized in init()
   private sidebarWidth: number = 360; // Default sidebar width (increased to reduce text truncation)
   private readonly SIDEBAR_WIDTH_KEY = 'gvAIStudioSidebarWidth';
   private readonly MIN_SIDEBAR_WIDTH = 240;
   private readonly MAX_SIDEBAR_WIDTH = 600;
   private readonly UNCATEGORIZED_KEY = '__uncategorized__'; // Special key for root-level conversations
+  private readonly LIBRARY_LONG_PRESS_MS = 500;
+  private readonly MAX_LIBRARY_BATCH_DELETE_COUNT = 50;
+  private readonly LIBRARY_BATCH_DELETE_CONFIG = {
+    DELAY_BETWEEN_DELETIONS: 500,
+    MENU_APPEAR_DELAY: 300,
+    DIALOG_APPEAR_DELAY: 300,
+    DELETION_COMPLETE_DELAY: 500,
+    MAX_BUTTON_WAIT_TIME: 3000,
+    BUTTON_CHECK_INTERVAL: 100,
+    PAGE_REFRESH_DELAY: 1500,
+  } as const;
 
   // Helper to create a ligature icon span with a data-icon attribute
   private createIcon(name: string): HTMLSpanElement {
@@ -239,6 +295,132 @@ export class AIStudioFolderManager {
     return span;
   }
 
+  private createInlineMaterialIcon(name: string): HTMLElement {
+    const icon = document.createElement('mat-icon');
+    icon.setAttribute('role', 'img');
+    icon.setAttribute('aria-hidden', 'true');
+    icon.className = 'mat-icon notranslate google-symbols mat-ligature-font mat-icon-no-color';
+    icon.textContent = name;
+    return icon;
+  }
+
+  private createMenuItem(
+    label: string,
+    iconName: string,
+    action: () => void,
+    options: { danger?: boolean } = {},
+  ): HTMLButtonElement {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = `gv-folder-menu-item${options.danger ? ' gv-folder-menu-item-danger' : ''}`;
+    item.appendChild(this.createInlineMaterialIcon(iconName));
+    item.append(document.createTextNode(label));
+    item.addEventListener('click', action);
+    return item;
+  }
+
+  private createInlineFolderEditor(
+    wrapperTag: 'div' | 'span',
+    wrapperClassName: string,
+    inputClassName: string,
+    inputOptions: { placeholder?: string; value?: string } = {},
+  ): InlineFolderEditor {
+    const wrapper = document.createElement(wrapperTag);
+    wrapper.className = wrapperClassName;
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = inputClassName;
+    input.maxLength = 50;
+    if (inputOptions.placeholder) input.placeholder = inputOptions.placeholder;
+    if (inputOptions.value) input.value = inputOptions.value;
+
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.className = 'gv-folder-inline-btn gv-folder-inline-save';
+    saveBtn.title = this.t('pm_save');
+    saveBtn.appendChild(this.createInlineMaterialIcon('check'));
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'gv-folder-inline-btn gv-folder-inline-cancel';
+    cancelBtn.title = this.t('pm_cancel');
+    cancelBtn.appendChild(this.createInlineMaterialIcon('close'));
+
+    wrapper.appendChild(input);
+    wrapper.appendChild(saveBtn);
+    wrapper.appendChild(cancelBtn);
+
+    return { wrapper, input, saveBtn, cancelBtn };
+  }
+
+  private showFolderConfirm(
+    anchor: HTMLElement | null | undefined,
+    message: string,
+    actionLabel: string,
+    onConfirm: () => void,
+    alignRight = false,
+  ): void {
+    document.querySelector('.gv-folder-confirm-dialog.gv-aistudio-confirm')?.remove();
+
+    const dialog = document.createElement('div');
+    dialog.className = 'gv-folder-confirm-dialog gv-aistudio-confirm';
+
+    if (anchor) {
+      const rect = anchor.getBoundingClientRect();
+      dialog.style.position = 'fixed';
+      dialog.style.top = `${rect.bottom + 4}px`;
+      dialog.style.left = `${Math.max(10, alignRight ? rect.right - 200 : rect.left + 24)}px`;
+      dialog.style.zIndex = '2147483647';
+    }
+
+    const msg = document.createElement('div');
+    msg.className = 'gv-confirm-message';
+    msg.textContent = message;
+    dialog.appendChild(msg);
+
+    const actions = document.createElement('div');
+    actions.className = 'gv-confirm-actions';
+
+    const confirmBtn = document.createElement('button');
+    confirmBtn.type = 'button';
+    confirmBtn.className = 'gv-confirm-btn gv-confirm-delete';
+    confirmBtn.textContent = actionLabel;
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'gv-confirm-btn gv-confirm-cancel';
+    cancelBtn.textContent = this.t('pm_cancel');
+
+    let closeOnOutside: ((e: MouseEvent) => void) | null = null;
+    const cleanup = () => {
+      if (closeOnOutside) {
+        document.removeEventListener('click', closeOnOutside);
+        closeOnOutside = null;
+      }
+      dialog.remove();
+    };
+
+    confirmBtn.addEventListener('click', () => {
+      onConfirm();
+      cleanup();
+    });
+    cancelBtn.addEventListener('click', cleanup);
+
+    actions.appendChild(confirmBtn);
+    actions.appendChild(cancelBtn);
+    dialog.appendChild(actions);
+    document.body.appendChild(dialog);
+
+    setTimeout(() => {
+      if (!dialog.isConnected) return;
+      closeOnOutside = (e: MouseEvent) => {
+        if (!dialog.contains(e.target as Node)) cleanup();
+      };
+      document.addEventListener('click', closeOnOutside);
+    }, 0);
+  }
+
   async init(): Promise<void> {
     await initI18n();
     this.t = createTranslator();
@@ -248,19 +430,6 @@ export class AIStudioFolderManager {
 
     // Setup automatic backup before page unload
     this.backupService.setupBeforeUnloadBackup(() => this.data);
-
-    // Initialize storage quota monitor
-    const storageMonitor = getStorageMonitor({
-      checkIntervalMs: 120000, // Check every 2 minutes (less frequent for AI Studio)
-    });
-
-    // Use custom notification callback to match our style
-    storageMonitor.setNotificationCallback((message, level) => {
-      this.showNotification(message, level);
-    });
-
-    // Start monitoring
-    storageMonitor.startMonitoring();
 
     // Migrate data from chrome.storage.sync to chrome.storage.local (one-time)
     await this.migrateFromSyncToLocal();
@@ -273,6 +442,7 @@ export class AIStudioFolderManager {
 
     // Load folder enabled setting
     await this.loadFolderEnabledSetting();
+    await this.loadHideArchivedSettings();
 
     // Load account isolation setting/scope before reading folder data.
     await this.loadAccountIsolationSetting();
@@ -493,12 +663,8 @@ export class AIStudioFolderManager {
     this.accountContextPoller = window.setInterval(() => {
       void this.refreshScopedDataOnAccountContextChange();
     }, 1200);
-
-    this.cleanupFns.push(() => {
-      if (!this.accountContextPoller) return;
-      clearInterval(this.accountContextPoller);
-      this.accountContextPoller = null;
-    });
+    // No cleanupFns registration: destroy() clears this.accountContextPoller directly,
+    // so repeated setup calls cannot grow the cleanup list.
   }
 
   private async refreshScopedDataOnAccountContextChange(): Promise<void> {
@@ -521,7 +687,11 @@ export class AIStudioFolderManager {
    * Handles gv.sync.requestData and gv.folders.reload messages from popup
    */
   private setupMessageListener(): void {
-    browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    const listener = (
+      message: unknown,
+      _sender: Runtime.MessageSender,
+      sendResponse: (response: unknown) => void,
+    ): true | undefined => {
       const msg = message as Record<string, unknown>;
       // Handle request for folder data (for cloud sync upload)
       if (msg?.type === 'gv.sync.requestData') {
@@ -531,12 +701,6 @@ export class AIStudioFolderManager {
           data: this.data,
           accountScope: this.toSyncAccountScope(this.accountScope),
         });
-        return true;
-      }
-
-      if (msg?.type === 'gv.account.getContext') {
-        const context = detectAccountContextFromDocument(window.location.href, document);
-        sendResponse({ ok: true, context });
         return true;
       }
 
@@ -551,20 +715,37 @@ export class AIStudioFolderManager {
         return true;
       }
 
-      // Return true for all messages to keep the channel open
-      return true;
-    });
+      // Unknown message: return undefined so the sender's promise settles immediately.
+      // Returning true here would declare an async response that never arrives, leaving
+      // senders (e.g. background broadcasts awaiting chrome.tabs.sendMessage) hanging.
+      return undefined;
+    };
+    // The polyfill's OnMessageListener typing cannot express "sync-respond to some
+    // messages, ignore the rest" (its callback variant requires a constant `true`
+    // return). Runtime behavior is well-defined for both values, so cast: `true`
+    // keeps the channel open for handled messages, `undefined` closes it for
+    // unknown ones.
+    browser.runtime.onMessage.addListener(listener as Runtime.OnMessageListenerCallback);
   }
 
   private async initializeFolderUI(): Promise<void> {
-    // Find the prompt history component and sidebar region
-    this.historyRoot = (await waitForElement<HTMLElement>('ms-prompt-history-v3')) || null;
-
-    // On /library page, historyRoot may not exist, but we still need to load data
-    // and observe the library table for draggable elements
     const isLibraryPage = /\/library(\/|$)/.test(location.pathname);
 
-    if (!this.historyRoot && !isLibraryPage) return;
+    // Wait for a *stable* insertion anchor rather than just the outer nav-content.
+    // Angular renders the shell first and fills in children asynchronously; waiting only on
+    // the shell caused intermittent mis-mounts where the anchor wasn't there yet and we
+    // fell through to an awkward appendChild position (or appeared to "never mount" at all).
+    const anchorSelector = [
+      'ms-prompt-history-v3',
+      '.nav-content.v3-left-nav > nav > .empty-space',
+      '.nav-content.v3-left-nav > nav > .bottom-actions',
+    ].join(', ');
+    const mountSignal = await waitForElement<HTMLElement>(anchorSelector);
+
+    this.historyRoot =
+      (document.querySelector('ms-prompt-history-v3') as HTMLElement | null) ?? null;
+
+    if (!mountSignal) return;
 
     try {
       document.documentElement.classList.add('gv-aistudio-root');
@@ -572,25 +753,39 @@ export class AIStudioFolderManager {
 
     await this.load();
 
-    // Only inject folder UI on prompts pages where historyRoot exists
+    // Inject the sidebar folder panel anywhere a mount anchor exists — including /library.
+    // Previously /library skipped the sidebar because legacy AI Studio had no place to mount
+    // it there; the V2 nav has `.empty-space`/`.bottom-actions` on every page, so users
+    // should see their folders while triaging the history table.
+    this.injectUI();
+
+    // Self-heal: Angular can tear down and rebuild the nav on route transitions, which
+    // silently detaches our container. Watch the nav root and re-inject on detach.
+    this.watchContainerMount();
+
+    // Observers that read prompt-link anchors only run when the legacy history panel is present.
     if (this.historyRoot) {
-      this.injectUI();
       this.observePromptList();
       this.bindDraggablesInPromptList();
       await this.syncConversationTitlesFromPromptList();
-
-      // Highlight current conversation initially and on navigation
-      this.highlightActiveConversation();
-      this.installRouteChangeListener();
-
-      // Apply initial sidebar width (force on first load)
-      this.applySidebarWidth(true);
-
-      // Add resize handle for sidebar width adjustment
-      this.addResizeHandle();
     }
 
-    // On library page, observe and bind draggables to table rows
+    // V2 nav renders History recents in a body-level hover popover rather than
+    // inline ms-prompt-history-v3 rows. Bind those transient links as they appear.
+    this.observeBodyPromptPopovers();
+
+    // These work off our own folder DOM + location, so they run in both legacy and V2 nav.
+    this.highlightActiveConversation();
+    this.installRouteChangeListener();
+
+    // Apply initial sidebar width (force on first load)
+    this.applySidebarWidth(true);
+
+    // Add resize handle for sidebar width adjustment
+    this.addResizeHandle();
+
+    // On library page, also bind the table rows as drag sources and surface the floating
+    // drop zone (belt-and-suspenders alongside the sidebar panel).
     if (isLibraryPage) {
       this.observeLibraryTable();
       this.bindDraggablesInLibraryTable();
@@ -598,8 +793,61 @@ export class AIStudioFolderManager {
     }
   }
 
+  private containerMountObserver: MutationObserver | null = null;
+  private lastContainerReinjectAt: number = 0;
+  private libraryShortcutBtn: HTMLButtonElement | null = null;
+  private libraryTableObserver: MutationObserver | null = null;
+  private bodyPromptPopoverObserver: MutationObserver | null = null;
+  private libraryDropZoneInjected: boolean = false;
+
+  /**
+   * Watches the AI Studio left nav for Angular tear-downs that would silently detach
+   * our folder panel, and re-injects it. Cheap reconciliation: each mutation just checks
+   * whether `this.container` is still in the document, throttled to avoid flapping.
+   */
+  private watchContainerMount(): void {
+    try {
+      this.containerMountObserver?.disconnect();
+    } catch {}
+    this.containerMountObserver = null;
+
+    const navContent = document.querySelector('.nav-content.v3-left-nav');
+    if (!navContent) return;
+
+    const observer = new MutationObserver(() => {
+      const container = this.container;
+      if (!container) return;
+      if (document.body.contains(container)) return;
+
+      // Throttle re-injection — browsers fire many mutations in a single tick during
+      // an Angular re-render. We only need to run once per burst.
+      const nowTs = Date.now();
+      if (nowTs - this.lastContainerReinjectAt < 250) return;
+      this.lastContainerReinjectAt = nowTs;
+
+      this.container = null;
+      try {
+        this.injectUI();
+      } catch (error) {
+        console.error('[AIStudioFolderManager] Failed to re-inject folder panel:', error);
+      }
+    });
+
+    try {
+      observer.observe(navContent, { childList: true, subtree: true });
+    } catch {}
+    this.containerMountObserver = observer;
+    // No cleanupFns registration: this method re-arms on every route change, so a
+    // per-call push would grow the cleanup list without bound. destroy() disconnects
+    // this.containerMountObserver directly.
+  }
+
   private async load(): Promise<void> {
     try {
+      // On Safari, restore recovery backups from the durable mirror before any
+      // recoverFromBackup() can run (localStorage may have been ITP-evicted).
+      await this.backupService.ensureHydrated();
+
       // Use chrome.storage.local with account-scoped key when isolation is enabled.
       const result = await chrome.storage.local.get(this.activeStorageKey);
       let data = result[this.activeStorageKey];
@@ -641,6 +889,10 @@ export class AIStudioFolderManager {
       // Show error notification to user
       this.showErrorNotification('Failed to save folder data. Changes may not be persisted.');
     }
+    // Folder membership drives which /library rows count as "archived"; re-sync the
+    // table and nudge visibility after every mutation, not just on explicit user toggles.
+    this.applyHideArchivedToLibraryTable();
+    this.updateHideArchivedNudgeVisibility();
   }
 
   private injectUI(): void {
@@ -701,16 +953,56 @@ export class AIStudioFolderManager {
     addBtn.addEventListener('click', () => this.createFolder());
     actions.appendChild(addBtn);
 
+    // On the V2 nav (no inline prompt history), surface a shortcut to /library.
+    // We always create the button in V2 mode and toggle its visibility on route change,
+    // since Angular won't re-run injectUI when the container survives a soft navigation.
+    if (!this.historyRoot) {
+      const libraryBtn = document.createElement('button');
+      libraryBtn.className = 'gv-folder-action-btn gv-folder-library-btn';
+      libraryBtn.title = this.t('folder_manage_in_library');
+      libraryBtn.appendChild(this.createIcon('library_books'));
+      libraryBtn.addEventListener('click', () => {
+        try {
+          location.assign('/library');
+        } catch {}
+      });
+      actions.appendChild(libraryBtn);
+      this.libraryShortcutBtn = libraryBtn;
+      this.updateLibraryShortcutVisibility();
+    } else {
+      this.libraryShortcutBtn = null;
+    }
+
     const list = document.createElement('div');
     list.className = 'gv-folder-list';
     container.appendChild(header);
     container.appendChild(list);
 
-    // Insert before prompt history
+    // Insertion point: prefer the legacy prompt history anchor; otherwise drop the
+    // panel inside the V2 left nav, right before the `.empty-space` spacer so the
+    // panel sits just below the nav items while `.bottom-actions` stays pinned.
     const root = this.historyRoot;
-    if (!root) return;
-    const host: Element = root.parentElement ?? root;
-    host.insertAdjacentElement('beforebegin', container);
+    if (root) {
+      const host: Element = root.parentElement ?? root;
+      host.insertAdjacentElement('beforebegin', container);
+    } else {
+      const navContent = document.querySelector('.nav-content.v3-left-nav');
+      const navEl = navContent?.querySelector(':scope > nav');
+      const emptySpace = navEl?.querySelector(':scope > .empty-space');
+      const bottomActions = navEl?.querySelector(':scope > .bottom-actions');
+      if (emptySpace) {
+        emptySpace.insertAdjacentElement('beforebegin', container);
+      } else if (bottomActions) {
+        bottomActions.insertAdjacentElement('beforebegin', container);
+      } else if (navEl) {
+        navEl.appendChild(container);
+      } else if (navContent) {
+        navContent.appendChild(container);
+      } else {
+        return;
+      }
+      container.classList.add('gv-aistudio-v2');
+    }
 
     this.container = container;
     this.injectStyles();
@@ -727,71 +1019,80 @@ export class AIStudioFolderManager {
     const style = document.createElement('style');
     style.id = styleId;
     style.textContent = `
+      /* AI Studio is a predominantly dark surface; tuned for low contrast so the
+         confirm dialog reads as a subtle elevated card, not a bright pop-out. */
       .gv-folder-confirm-dialog.gv-aistudio-confirm {
-        background: var(--gem-sys-color-surface, #fff);
-        border: 1px solid var(--gem-sys-color-outline-variant, #e5e7eb);
+        background: var(--mat-sys-surface-container-high, #2d2e30);
+        border: 1px solid rgba(255, 255, 255, 0.08);
         border-radius: 12px;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
         padding: 16px;
         min-width: 280px;
         font-family: 'Google Sans', 'Segoe UI', sans-serif;
         animation: gv-fade-in 0.2s ease-out;
+        color: var(--mat-sys-on-surface, #e3e3e3);
       }
-      
-      .gv-confirm-message {
+
+      .gv-folder-confirm-dialog.gv-aistudio-confirm .gv-confirm-message {
         margin-bottom: 16px;
-        color: var(--gem-sys-color-on-surface, #1f2937);
+        color: var(--mat-sys-on-surface, #e3e3e3);
         font-size: 14px;
         line-height: 1.5;
-        font-weight: 500;
+        font-weight: 400;
+        opacity: 0.92;
       }
 
-      .gv-confirm-actions {
+      .gv-folder-confirm-dialog.gv-aistudio-confirm .gv-confirm-actions {
         display: flex;
-        gap: 12px;
-        justify-content: flex-end; /* Default right align, but we override order */
+        gap: 4px;
+        justify-content: flex-end;
       }
 
-      .gv-confirm-btn {
-        padding: 8px 16px;
-        border-radius: 8px;
+      .gv-folder-confirm-dialog.gv-aistudio-confirm .gv-confirm-btn {
+        padding: 6px 14px;
+        border-radius: 999px;
         font-size: 13px;
-        font-weight: 600;
+        font-weight: 500;
         cursor: pointer;
-        transition: all 0.2s;
+        transition: background-color 0.15s ease;
         border: none;
         outline: none;
+        background: transparent;
       }
 
-      .gv-confirm-delete {
-        background-color: #ef4444; /* Red color */
-        color: white;
-        box-shadow: 0 2px 4px rgba(239, 68, 68, 0.2);
-      }
-      
-      .gv-confirm-delete:hover {
-        background-color: #dc2626;
-        box-shadow: 0 4px 6px rgba(239, 68, 68, 0.3);
+      /* Destructive action: filled but muted — use the token-scaled error tone when
+         available, otherwise a desaturated red that sits quietly on dark surfaces. */
+      .gv-folder-confirm-dialog.gv-aistudio-confirm .gv-confirm-delete {
+        background-color: var(--mat-sys-error-container, rgba(220, 90, 90, 0.22));
+        color: var(--mat-sys-on-error-container, #f5b8b3);
+        box-shadow: none;
       }
 
-      .gv-confirm-cancel {
+      .gv-folder-confirm-dialog.gv-aistudio-confirm .gv-confirm-delete:hover {
+        background-color: rgba(220, 90, 90, 0.32);
+        color: #ffd3cf;
+        box-shadow: none;
+      }
+
+      /* Cancel is a borderless text button — removes the framing that fought the Delete fill. */
+      .gv-folder-confirm-dialog.gv-aistudio-confirm .gv-confirm-cancel {
         background-color: transparent;
-        color: var(--gem-sys-color-on-surface-variant, #4b5563);
-        border: 1px solid var(--gem-sys-color-outline, #d1d5db);
+        color: var(--mat-sys-on-surface-variant, #c4c7c5);
+        border: none;
       }
 
-      .gv-confirm-cancel:hover {
-        background-color: var(--gem-sys-color-surface-container-high, #f3f4f6);
-        color: var(--gem-sys-color-on-surface, #111827);
+      .gv-folder-confirm-dialog.gv-aistudio-confirm .gv-confirm-cancel:hover {
+        background-color: rgba(255, 255, 255, 0.06);
+        color: var(--mat-sys-on-surface, #e3e3e3);
       }
 
       /* Hover effect for remove button in list */
-      .gv-conversation-remove-btn:hover {
-        background-color: rgba(239, 68, 68, 0.1) !important;
-        color: #ef4444 !important;
+      .gv-aistudio .gv-conversation-remove-btn:hover {
+        background-color: rgba(220, 90, 90, 0.14) !important;
+        color: #e69892 !important;
       }
 
-      .gv-conversation-remove-btn:hover span {
+      .gv-aistudio .gv-conversation-remove-btn:hover span {
         font-variation-settings: 'FILL' 1, 'wght' 600 !important;
       }
 
@@ -851,6 +1152,10 @@ export class AIStudioFolderManager {
 
     // After rendering, update active highlight
     this.highlightActiveConversation();
+
+    // Keep the onboarding nudge in sync with the post-render folder state — e.g. the
+    // user just archived their first conversation, so now we have a reason to show it.
+    this.updateHideArchivedNudgeVisibility();
   }
 
   private getCurrentPromptIdFromLocation(): string | null {
@@ -874,42 +1179,69 @@ export class AIStudioFolderManager {
     });
   }
 
+  /**
+   * Lazily attach the /library-only setup (table observer, drag bindings, floating
+   * drop zone, hide-archived pass) when entering /library via SPA navigation. On
+   * initial page load this is already run by initializeFolderUI; this method handles
+   * the case where the user landed on /prompts first and later navigates to /library,
+   * as well as Angular rebuilding the table on re-entry.
+   */
+  private ensureLibraryBindings(): void {
+    if (!/\/library(\/|$)/.test(location.pathname)) return;
+    this.observeLibraryTable();
+    this.bindDraggablesInLibraryTable();
+    this.injectLibraryDropZone();
+    this.applyHideArchivedToLibraryTable();
+  }
+
+  /**
+   * Toggle the V2 "Manage in Library" shortcut button based on the current path.
+   * Hidden on /library itself (clicking would re-navigate to self).
+   */
+  private updateLibraryShortcutVisibility(): void {
+    const btn = this.libraryShortcutBtn;
+    if (!btn) return;
+    const onLibrary = /\/library(\/|$)/.test(location.pathname);
+    btn.style.display = onLibrary ? 'none' : '';
+  }
+
+  /**
+   * Re-attach the folder panel if Angular tore it down between checks. Idempotent and
+   * cheap when the panel is already mounted.
+   */
+  private ensureContainerMounted(): void {
+    if (!this.folderEnabled) return;
+    if (this.container && document.body.contains(this.container)) return;
+    this.container = null;
+    try {
+      this.injectUI();
+    } catch (error) {
+      console.error('[AIStudioFolderManager] Failed to ensure folder panel mounted:', error);
+    }
+    // If the nav-content subtree was recreated, the previous MutationObserver lost its
+    // target. Re-arm it against the current nav root so future detaches are detected.
+    this.watchContainerMount();
+  }
+
   private installRouteChangeListener(): void {
-    const update = () => setTimeout(() => this.highlightActiveConversation(), 0);
-    try {
-      window.addEventListener('popstate', update);
-    } catch {}
-    try {
-      const hist = history as History & Record<string, unknown>;
-      const wrap = (method: 'pushState' | 'replaceState') => {
-        const orig = hist[method] as (...args: unknown[]) => unknown;
-        hist[method] = function (...args: unknown[]) {
-          const ret = orig.apply(this, args);
-          try {
-            update();
-          } catch {}
-          return ret;
-        };
-      };
-      wrap('pushState');
-      wrap('replaceState');
-    } catch {}
-    // Fallback poller for routers that bypass events
-    try {
-      let last = location.pathname;
-      const id = window.setInterval(() => {
-        const now = location.pathname;
-        if (now !== last) {
-          last = now;
-          update();
+    this.stopRouteWatcher?.();
+    const update = () =>
+      setTimeout(() => {
+        this.ensureContainerMounted();
+        this.updateLibraryShortcutVisibility();
+        if (!/\/library(\/|$)/.test(location.pathname)) {
+          if (this.isLibraryMultiSelectMode) {
+            this.exitLibraryMultiSelectMode();
+          }
+          // The /library table observer watches document.body; keep it disconnected
+          // while away from /library so unrelated SPA mutations stay cheap. It is
+          // recreated by ensureLibraryBindings() on re-entry.
+          this.disconnectLibraryTableObserver();
         }
-      }, 400);
-      this.cleanupFns.push(() => {
-        try {
-          clearInterval(id);
-        } catch {}
-      });
-    } catch {}
+        this.ensureLibraryBindings();
+        this.highlightActiveConversation();
+      }, 0);
+    this.stopRouteWatcher = watchRouteChanges(update);
   }
 
   private renderFolder(folder: Folder, level: number = 0): HTMLElement {
@@ -1072,107 +1404,219 @@ export class AIStudioFolderManager {
     if (!folder) return;
 
     const menu = document.createElement('div');
-    menu.className = 'gv-context-menu';
+    menu.className = 'gv-folder-menu gv-aistudio-folder-menu';
+    menu.style.position = 'fixed';
+    menu.style.left = `${ev.clientX}px`;
+    menu.style.top = `${ev.clientY}px`;
+
+    const closeMenu = () => {
+      menu.remove();
+      document.removeEventListener('click', onClickAway);
+    };
 
     // Only show "Create subfolder" for root-level folders (to maintain 2-level hierarchy)
     if (!folder.parentId) {
-      const createSub = document.createElement('button');
-      createSub.textContent = this.t('folder_create_subfolder') || 'Create Subfolder';
-      createSub.addEventListener('click', () => {
-        this.createFolder(folderId);
-        try {
-          document.body.removeChild(menu);
-        } catch {}
-      });
-      menu.appendChild(createSub);
+      menu.appendChild(
+        this.createMenuItem(this.t('folder_create_subfolder'), 'create_new_folder', () => {
+          this.createFolder(folderId);
+          closeMenu();
+        }),
+      );
     }
 
-    const rename = document.createElement('button');
-    rename.textContent = this.t('folder_rename');
-    rename.addEventListener('click', () => {
-      this.renameFolder(folderId);
-      try {
-        document.body.removeChild(menu);
-      } catch {}
-    });
-    menu.appendChild(rename);
-
-    const del = document.createElement('button');
-    del.textContent = this.t('folder_delete');
-    del.addEventListener('click', () => {
-      this.deleteFolder(folderId);
-      try {
-        document.body.removeChild(menu);
-      } catch {}
-    });
-    menu.appendChild(del);
-
-    // Apply styles with proper typing
-    const st = menu.style;
-    st.position = 'fixed';
-    st.top = `${ev.clientY}px`;
-    st.left = `${ev.clientX}px`;
-    st.zIndex = String(2147483647);
-    st.display = 'flex';
-    st.flexDirection = 'column';
-    document.body.appendChild(menu);
     const onClickAway = (e: MouseEvent) => {
       if (e.target instanceof Node && !menu.contains(e.target)) {
-        try {
-          document.body.removeChild(menu);
-        } catch {}
-        window.removeEventListener('click', onClickAway, true);
+        closeMenu();
       }
     };
-    window.addEventListener('click', onClickAway, true);
+
+    menu.appendChild(
+      this.createMenuItem(this.t('folder_rename'), 'edit', () => {
+        this.renameFolder(folderId);
+        closeMenu();
+      }),
+    );
+    menu.appendChild(
+      this.createMenuItem(
+        this.t('folder_delete'),
+        'delete',
+        () => {
+          this.deleteFolder(folderId);
+          closeMenu();
+        },
+        { danger: true },
+      ),
+    );
+
+    document.body.appendChild(menu);
+    setTimeout(() => document.addEventListener('click', onClickAway), 0);
   }
 
-  private async createFolder(parentId: string | null = null): Promise<void> {
-    const name = prompt(this.t('folder_name_prompt'));
-    if (!name) return;
-    const f: Folder = {
-      id: uid(),
-      name: name.trim(),
-      parentId: parentId || null,
-      isExpanded: true,
-      createdAt: now(),
-      updatedAt: now(),
+  private createFolder(parentId: string | null = null): void {
+    const existingInput = this.container?.querySelector<HTMLInputElement>(
+      '.gv-folder-inline-input input',
+    );
+    if (existingInput) {
+      existingInput.focus();
+      return;
+    }
+
+    const {
+      wrapper: inputContainer,
+      input,
+      saveBtn,
+      cancelBtn,
+    } = this.createInlineFolderEditor('div', 'gv-folder-inline-input', 'gv-folder-name-input', {
+      placeholder: this.t('folder_name_prompt'),
+    });
+
+    const cancel = () => {
+      inputContainer.remove();
     };
-    this.data.folders.push(f);
-    this.data.folderContents[f.id] = [];
-    await this.save();
-    this.render();
+
+    const save = async () => {
+      const name = input.value.trim();
+      if (!name) {
+        cancel();
+        return;
+      }
+
+      const f: Folder = {
+        id: uid(),
+        name,
+        parentId: parentId || null,
+        isExpanded: true,
+        createdAt: now(),
+        updatedAt: now(),
+      };
+      this.data.folders.push(f);
+      this.data.folderContents[f.id] = [];
+      await this.save();
+      this.render();
+    };
+
+    saveBtn.addEventListener('click', () => {
+      void save();
+    });
+    cancelBtn.addEventListener('click', cancel);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') void save();
+      if (e.key === 'Escape') cancel();
+    });
+
+    const folderList = this.container?.querySelector('.gv-folder-list');
+    if (!folderList) return;
+
+    if (parentId) {
+      const parentFolder = folderList.querySelector(`[data-folder-id="${parentId}"]`);
+      if (parentFolder) {
+        const parentContent = parentFolder.querySelector('.gv-folder-content');
+        if (parentContent) {
+          parentContent.insertBefore(inputContainer, parentContent.firstChild);
+        } else {
+          parentFolder.insertAdjacentElement('afterend', inputContainer);
+        }
+      } else {
+        folderList.appendChild(inputContainer);
+      }
+    } else {
+      folderList.insertBefore(inputContainer, folderList.firstChild);
+    }
+
+    input.focus();
   }
 
-  private async renameFolder(folderId: string): Promise<void> {
+  private renameFolder(folderId: string): void {
+    const activeRenameInput = this.container?.querySelector<HTMLInputElement>(
+      '.gv-folder-rename-inline input',
+    );
+    if (activeRenameInput) {
+      activeRenameInput.focus();
+      activeRenameInput.select();
+      return;
+    }
+
     const folder = this.data.folders.find((f) => f.id === folderId);
     if (!folder) return;
-    const name = prompt(this.t('folder_rename_prompt'), folder.name);
-    if (!name) return;
-    folder.name = name.trim();
-    folder.updatedAt = now();
-    await this.save();
-    this.render();
+
+    const folderEl = this.container?.querySelector(`[data-folder-id="${folderId}"]`);
+    if (!folderEl) return;
+
+    const headerEl = folderEl.querySelector<HTMLElement>('.gv-folder-item-header');
+    if (!headerEl) return;
+
+    const folderNameEl = folderEl.querySelector('.gv-folder-name');
+    if (!folderNameEl) return;
+
+    const {
+      wrapper: inputContainer,
+      input,
+      saveBtn,
+      cancelBtn,
+    } = this.createInlineFolderEditor('span', 'gv-folder-rename-inline', 'gv-folder-rename-input', {
+      value: folder.name,
+    });
+
+    const restore = () => {
+      headerEl.classList.remove('gv-folder-editing');
+      folderNameEl.classList.remove('gv-hidden');
+      inputContainer.remove();
+    };
+
+    const save = async () => {
+      const name = input.value.trim();
+      if (!name) {
+        restore();
+        return;
+      }
+
+      folder.name = name;
+      folder.updatedAt = now();
+      await this.save();
+      this.render();
+    };
+
+    saveBtn.addEventListener('click', () => {
+      void save();
+    });
+    cancelBtn.addEventListener('click', restore);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') void save();
+      if (e.key === 'Escape') restore();
+    });
+
+    folderNameEl.classList.add('gv-hidden');
+    headerEl.classList.add('gv-folder-editing');
+    headerEl.insertBefore(inputContainer, folderNameEl.nextSibling);
+    input.focus();
+    input.select();
   }
 
-  private async deleteFolder(folderId: string): Promise<void> {
-    if (!confirm(this.t('folder_delete_confirm'))) return;
+  private deleteFolder(folderId: string): void {
+    const folderEl = this.container?.querySelector(`[data-folder-id="${folderId}"]`);
+    const headerEl = folderEl?.querySelector<HTMLElement>('.gv-folder-item-header');
 
-    // Collect all folder IDs to delete (including subfolders)
-    const folderIdsToDelete: string[] = [folderId];
-    const subfolders = this.data.folders.filter((f) => f.parentId === folderId);
-    for (const subfolder of subfolders) {
-      folderIdsToDelete.push(subfolder.id);
-    }
+    this.showFolderConfirm(
+      headerEl,
+      this.t('folder_delete_confirm'),
+      this.t('folder_remove_conversation_action'),
+      () => {
+        // Collect all folder IDs to delete (including subfolders)
+        const folderIdsToDelete: string[] = [folderId];
+        const subfolders = this.data.folders.filter((f) => f.parentId === folderId);
+        for (const subfolder of subfolders) {
+          folderIdsToDelete.push(subfolder.id);
+        }
 
-    // Delete all collected folders and their contents
-    this.data.folders = this.data.folders.filter((f) => !folderIdsToDelete.includes(f.id));
-    for (const id of folderIdsToDelete) {
-      delete this.data.folderContents[id];
-    }
+        // Delete all collected folders and their contents
+        this.data.folders = this.data.folders.filter((f) => !folderIdsToDelete.includes(f.id));
+        for (const id of folderIdsToDelete) {
+          delete this.data.folderContents[id];
+        }
 
-    await this.save();
-    this.render();
+        void this.save().then(() => this.render());
+      },
+    );
   }
 
   private removeConversationFromFolder(folderId: string, conversationId: string): void {
@@ -1187,76 +1631,17 @@ export class AIStudioFolderManager {
     title: string,
     event: MouseEvent,
   ): void {
-    const dialog = document.createElement('div');
-    dialog.className = 'gv-folder-confirm-dialog gv-aistudio-confirm';
-
-    // Position near the button
     const target = event.currentTarget as HTMLElement;
-    const rect = target.getBoundingClientRect();
-
-    dialog.style.position = 'fixed';
-    dialog.style.zIndex = '2147483647';
-    // Position logic: prefer left side if space available
-    // AI Studio sidebar is on the left, so we might want to pop out to the right or below
-    // But usually context menus appear near the cursor.
-    // Let's position it below the button, aligned right
-    dialog.style.top = `${rect.bottom + 4}px`;
-    dialog.style.left = `${rect.right - 200}px`; // Align right edge roughly
-
-    // Ensure it's on screen
-    if (parseInt(dialog.style.left) < 10) dialog.style.left = '10px';
-
-    const msg = document.createElement('div');
-    msg.className = 'gv-confirm-message';
-    msg.textContent = this.t('folder_remove_conversation_confirm').replace(
-      '{title}',
-      title || this.t('conversation_untitled'),
+    this.showFolderConfirm(
+      target,
+      this.t('folder_remove_conversation_confirm').replace(
+        '{title}',
+        title || this.t('conversation_untitled'),
+      ),
+      this.t('folder_remove_conversation_action'),
+      () => this.removeConversationFromFolder(folderId, conversationId),
+      true,
     );
-    dialog.appendChild(msg);
-
-    const actions = document.createElement('div');
-    actions.className = 'gv-confirm-actions';
-
-    const confirmBtn = document.createElement('button');
-    confirmBtn.className = 'gv-confirm-btn gv-confirm-delete';
-    confirmBtn.textContent = this.t('pm_delete') || 'Delete';
-    confirmBtn.addEventListener('click', () => {
-      this.removeConversationFromFolder(folderId, conversationId);
-      dialog.remove();
-      document.removeEventListener('click', closeOnOutside);
-    });
-
-    const cancelBtn = document.createElement('button');
-    cancelBtn.className = 'gv-confirm-btn gv-confirm-cancel';
-    cancelBtn.textContent = this.t('pm_cancel') || 'Cancel';
-    cancelBtn.addEventListener('click', () => {
-      dialog.remove();
-      document.removeEventListener('click', closeOnOutside);
-    });
-
-    // Delete on left, Cancel on right
-    actions.appendChild(confirmBtn);
-    actions.appendChild(cancelBtn);
-    dialog.appendChild(actions);
-
-    document.body.appendChild(dialog);
-
-    // Close when clicking outside
-    const closeOnOutside = (e: MouseEvent) => {
-      if (
-        !dialog.contains(e.target as Node) &&
-        e.target !== target &&
-        !target.contains(e.target as Node)
-      ) {
-        dialog.remove();
-        document.removeEventListener('click', closeOnOutside);
-      }
-    };
-
-    // Delay adding the listener to avoid immediate closing
-    setTimeout(() => {
-      document.addEventListener('click', closeOnOutside);
-    }, 10);
   }
 
   private bindDropZone(el: HTMLElement, targetFolderId: string | null): void {
@@ -1396,6 +1781,43 @@ export class AIStudioFolderManager {
     });
   }
 
+  private isBodyPromptPopoverElement(element: Element): boolean {
+    return (
+      element.matches(BODY_PROMPT_POPOVER_SELECTOR) ||
+      !!element.closest(BODY_PROMPT_POPOVER_SELECTOR)
+    );
+  }
+
+  private bindDraggablesInBodyPromptPopovers(): void {
+    const popoverRoots = document.querySelectorAll(BODY_PROMPT_POPOVER_SELECTOR);
+    popoverRoots.forEach((root) => this.bindDraggablesInPromptList(root));
+  }
+
+  private observeBodyPromptPopovers(): void {
+    if (this.bodyPromptPopoverObserver) return;
+
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of Array.from(mutation.addedNodes)) {
+          if (!(node instanceof Element)) continue;
+          // Cheap overlay-container gate first (class match + ancestor walk) before
+          // the expensive subtree scan for prompt links.
+          if (!this.isBodyPromptPopoverElement(node)) continue;
+          if (!nodeContainsPromptLink(node)) continue;
+          this.bindDraggablesInPromptList(node);
+        }
+      }
+    });
+
+    try {
+      observer.observe(document.body, { childList: true, subtree: true });
+    } catch {}
+    this.bodyPromptPopoverObserver = observer;
+    // destroy() disconnects and nulls this.bodyPromptPopoverObserver directly.
+
+    this.bindDraggablesInBodyPromptPopovers();
+  }
+
   private schedulePromptListBinding(): void {
     if (this.promptListBindTimer !== null) return;
     this.promptListBindTimer = window.setTimeout(() => {
@@ -1446,30 +1868,45 @@ export class AIStudioFolderManager {
     return null;
   }
 
-  private getPromptTitleFromNative(conversationId: string): string | null {
-    const selectors = [
-      `a.prompt-link[href*="/prompts/${conversationId}"]`,
-      `a[href*="/prompts/${conversationId}"]`,
-      `a.name-btn[href*="/prompts/${conversationId}"]`,
-    ];
-
-    for (const selector of selectors) {
-      const anchor = document.querySelector(selector) as HTMLAnchorElement | null;
+  /**
+   * Collect every native prompt-link title in a single document scan and return a
+   * promptId -> title map. Anchors carrying the `prompt-link` class win over generic
+   * matches (mirroring the old per-conversation selector priority); within each tier
+   * the first anchor in document order with a usable title wins.
+   */
+  private collectNativePromptTitles(): Map<string, string> {
+    const preferred = new Map<string, string>();
+    const fallback = new Map<string, string>();
+    const anchors = document.querySelectorAll<HTMLAnchorElement>(PROMPT_LINK_SELECTOR);
+    anchors.forEach((anchor) => {
+      const promptId = extractPromptIdFromHref(anchor.getAttribute('href') || anchor.href || '');
+      if (!promptId) return;
       const title = this.extractPromptTitle(anchor);
-      if (title) return title;
-    }
-
-    return null;
+      if (!title) return;
+      if (anchor.classList.contains('prompt-link')) {
+        if (!preferred.has(promptId)) preferred.set(promptId, title);
+      } else if (!fallback.has(promptId)) {
+        fallback.set(promptId, title);
+      }
+    });
+    const titles = fallback;
+    preferred.forEach((title, promptId) => titles.set(promptId, title));
+    return titles;
   }
 
   private async syncConversationTitlesFromPromptList(): Promise<void> {
     if (!this.hasStoredConversations()) return;
 
+    // One full-document scan up front; per-conversation lookups are then O(1) instead
+    // of three full-document selector scans for every stored conversation.
+    const nativeTitles = this.collectNativePromptTitles();
+    if (nativeTitles.size === 0) return;
+
     let hasUpdates = false;
     for (const conversations of Object.values(this.data.folderContents)) {
       for (const conversation of conversations) {
         if (conversation.customTitle) continue;
-        const nativeTitle = this.getPromptTitleFromNative(conversation.conversationId);
+        const nativeTitle = nativeTitles.get(conversation.conversationId);
         if (!nativeTitle || nativeTitle === conversation.title) continue;
         conversation.title = nativeTitle;
         conversation.updatedAt = now();
@@ -1552,9 +1989,14 @@ export class AIStudioFolderManager {
   private bindDraggablesInPromptList(scope: ParentNode | null = this.historyRoot): void {
     const root = scope ?? this.historyRoot;
     if (!root) return;
-    const anchors = root.querySelectorAll(UNBOUND_PROMPT_LINK_SELECTOR);
-    anchors.forEach((a) => {
-      const anchor = a as HTMLAnchorElement;
+    const anchors: HTMLAnchorElement[] = [];
+    if (root instanceof Element && root.matches(UNBOUND_PROMPT_LINK_SELECTOR)) {
+      anchors.push(root as HTMLAnchorElement);
+    }
+    root.querySelectorAll(UNBOUND_PROMPT_LINK_SELECTOR).forEach((anchor) => {
+      anchors.push(anchor as HTMLAnchorElement);
+    });
+    anchors.forEach((anchor) => {
       const hostEl = this.resolvePromptDragHost(anchor);
       anchor.dataset.gvDragBound = '1';
       if (!(hostEl as Element & { _gvDragBound?: boolean })._gvDragBound) {
@@ -1581,44 +2023,60 @@ export class AIStudioFolderManager {
   }
 
   /**
-   * Observe the library table for dynamic row additions
-   * This is needed because the library page loads rows dynamically
+   * Observe the library table for dynamic row additions. Idempotent — repeated calls
+   * are no-ops. Watches document.body so SPA navigations that swap the table subtree
+   * don't leave us with a stale observer target.
    */
   private observeLibraryTable(): void {
-    // The library table is within a mat-table element
-    const tableRoot = document.querySelector(
-      'table.mat-mdc-table, mat-table',
-    ) as HTMLElement | null;
-    if (!tableRoot) {
-      // Fallback: observe entire body for table appearance
-      const bodyObserver = new MutationObserver(() => {
-        const table = document.querySelector('table.mat-mdc-table, mat-table');
-        if (table) {
-          this.bindDraggablesInLibraryTable();
-        }
-      });
-      try {
-        bodyObserver.observe(document.body, { childList: true, subtree: true });
-      } catch {}
-      this.cleanupFns.push(() => {
-        try {
-          bodyObserver.disconnect();
-        } catch {}
-      });
-      return;
-    }
+    if (this.libraryTableObserver) return;
 
-    const observer = new MutationObserver(() => {
+    const bodyObserver = new MutationObserver((mutations) => {
+      // Cheap gate: the library table only exists on /library; skip all selector work
+      // elsewhere (the observer is also disconnected on route-away, this is a backstop).
+      if (!/\/library(\/|$)/.test(location.pathname)) return;
+      if (!this.libraryTableMutated(mutations)) return;
       this.bindDraggablesInLibraryTable();
     });
     try {
-      observer.observe(tableRoot, { childList: true, subtree: true });
+      bodyObserver.observe(document.body, { childList: true, subtree: true });
     } catch {}
-    this.cleanupFns.push(() => {
-      try {
-        observer.disconnect();
-      } catch {}
-    });
+    this.libraryTableObserver = bodyObserver;
+    // Disconnected via disconnectLibraryTableObserver() on route-away and in destroy();
+    // no cleanupFns registration so repeated /library visits cannot grow the list.
+  }
+
+  private disconnectLibraryTableObserver(): void {
+    if (!this.libraryTableObserver) return;
+    try {
+      this.libraryTableObserver.disconnect();
+    } catch {}
+    this.libraryTableObserver = null;
+  }
+
+  private libraryTableMutated(mutations: MutationRecord[]): boolean {
+    for (const mutation of mutations) {
+      if (
+        mutation.target instanceof Element &&
+        mutation.target.closest('table.mat-mdc-table, mat-table')
+      ) {
+        return true;
+      }
+
+      for (const node of Array.from(mutation.addedNodes)) {
+        if (!(node instanceof Element)) continue;
+        if (
+          node.matches(
+            'table.mat-mdc-table, mat-table, tr.mat-mdc-row, tr[mat-row], tr[role="row"]',
+          ) ||
+          !!node.querySelector(
+            'table.mat-mdc-table, mat-table, tr.mat-mdc-row, tr[mat-row], tr[role="row"]',
+          )
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /**
@@ -1628,14 +2086,10 @@ export class AIStudioFolderManager {
   private bindDraggablesInLibraryTable(): void {
     // Find all table rows that contain chat prompt links
     // The structure from user's example: <tr> > <td> > <a href="/prompts/..."> title </a>
-    const rows = document.querySelectorAll('tr.mat-mdc-row, tr[mat-row]');
+    const rows = this.getLibraryPromptRows();
     rows.forEach((row) => {
-      const tr = row as HTMLElement;
-      // Find the anchor with prompt link in this row
-      // Matches: a[href^="/prompts/"] or a.name-btn with /prompts/ in href
-      const anchor = tr.querySelector(
-        'a[href^="/prompts/"], a.name-btn[href*="/prompts/"]',
-      ) as HTMLAnchorElement | null;
+      const tr = row;
+      const anchor = this.getLibraryPromptAnchor(tr);
       if (!anchor) return;
 
       // Skip if already bound
@@ -1645,39 +2099,539 @@ export class AIStudioFolderManager {
       tr.draggable = true;
       tr.style.cursor = 'grab';
 
-      tr.addEventListener('dragstart', (e) => {
+      // Disable the anchor's native drag: an <a href> is implicitly draggable as a URL,
+      // which hijacks the drag from the row and produces a payload with no title.
+      anchor.draggable = false;
+      try {
+        (anchor.style as CSSStyleDeclaration & { webkitUserDrag?: string }).webkitUserDrag = 'none';
+      } catch {}
+
+      const buildDragData = (): LibraryPromptData | null => this.buildLibraryPromptData(tr);
+
+      const onDragStart = (e: DragEvent) => {
         // Prevent interference from Angular Material's own drag handling if any
         e.stopPropagation();
-
-        const id = this.extractPromptId(anchor);
-        const title = this.extractPromptTitle(anchor) || '';
-        // Ensure accurate URL construction
-        const rawHref = anchor.getAttribute('href') || anchor.href || '';
-        const url = rawHref.startsWith('http')
-          ? rawHref
-          : `${location.origin}${rawHref.startsWith('/') ? '' : '/'}${rawHref}`;
-
-        const data: DragData = { type: 'conversation', conversationId: id, title, url };
+        const data = buildDragData();
+        if (!data) return;
         this.setPromptDragData(e, data, tr);
-
-        // Visual feedback
         tr.style.opacity = '0.5';
-      });
+      };
+
+      this.bindLibraryMultiSelectRow(tr);
+
+      // Primary: row-level drag covers every cell (icon, title, description, type, timestamp, overflow).
+      tr.addEventListener('dragstart', onDragStart, true);
+
+      // Fallback: if a browser still honors the anchor's default drag, populate the same JSON payload
+      // so the dropped conversation carries its title instead of degrading to a raw URL.
+      anchor.addEventListener('dragstart', onDragStart, true);
 
       tr.addEventListener('dragend', () => {
         tr.style.opacity = '';
       });
     });
+
+    // Rows are bound opportunistically as the table updates; re-sync the hide-archived
+    // state each pass so newly added rows pick up the current setting.
+    this.applyHideArchivedToLibraryTable();
+    this.updateLibrarySelectionUI();
+  }
+
+  private getLibraryPromptRows(): HTMLElement[] {
+    return Array.from(
+      document.querySelectorAll<HTMLElement>('tr.mat-mdc-row, tr[mat-row], tr[role="row"]'),
+    ).filter((row) => !!this.getLibraryPromptAnchor(row));
+  }
+
+  private getLibraryPromptAnchor(row: HTMLElement): HTMLAnchorElement | null {
+    return row.querySelector(PROMPT_LINK_SELECTOR) as HTMLAnchorElement | null;
+  }
+
+  private buildLibraryPromptData(row: HTMLElement): LibraryPromptData | null {
+    const anchor = this.getLibraryPromptAnchor(row);
+    if (!anchor) return null;
+    const conversationId = this.extractPromptId(anchor);
+    if (!conversationId) return null;
+    const title = this.extractPromptTitle(anchor) || '';
+    const rawHref = anchor.getAttribute('href') || anchor.href || '';
+    const url = rawHref.startsWith('http')
+      ? rawHref
+      : `${location.origin}${rawHref.startsWith('/') ? '' : '/'}${rawHref}`;
+    return { type: 'conversation', conversationId, title, url };
+  }
+
+  private bindLibraryMultiSelectRow(row: HTMLElement): void {
+    if ((row as Element & { _gvLibraryMultiSelectBound?: boolean })._gvLibraryMultiSelectBound)
+      return;
+    (row as Element & { _gvLibraryMultiSelectBound?: boolean })._gvLibraryMultiSelectBound = true;
+
+    let longPressTriggered = false;
+    let longPressTimeoutId: number | null = null;
+
+    const clearLongPress = () => {
+      if (longPressTimeoutId === null) return;
+      clearTimeout(longPressTimeoutId);
+      longPressTimeoutId = null;
+    };
+
+    row.addEventListener('mousedown', (event) => {
+      if (event.button !== 0) return;
+      if (event.target instanceof Element && event.target.closest('button, [role="button"]')) {
+        return;
+      }
+      const data = this.buildLibraryPromptData(row);
+      if (!data) return;
+      longPressTriggered = false;
+      clearLongPress();
+      longPressTimeoutId = window.setTimeout(() => {
+        longPressTriggered = true;
+        this.enterLibraryMultiSelectMode(data.conversationId);
+      }, this.LIBRARY_LONG_PRESS_MS);
+    });
+
+    row.addEventListener('mouseup', clearLongPress);
+    row.addEventListener('mouseleave', clearLongPress);
+
+    row.addEventListener(
+      'click',
+      (event) => {
+        if (event.target instanceof Element && event.target.closest('button, [role="button"]')) {
+          return;
+        }
+        if (this.libraryBatchDeleteInProgress) return;
+
+        if (longPressTriggered) {
+          event.preventDefault();
+          event.stopPropagation();
+          longPressTriggered = false;
+          return;
+        }
+
+        if (!this.isLibraryMultiSelectMode) return;
+
+        const data = this.buildLibraryPromptData(row);
+        if (!data) return;
+        event.preventDefault();
+        event.stopPropagation();
+        this.toggleLibraryPromptSelection(data.conversationId);
+      },
+      true,
+    );
+  }
+
+  private enterLibraryMultiSelectMode(initialConversationId: string): void {
+    this.isLibraryMultiSelectMode = true;
+    this.selectedLibraryPrompts.add(initialConversationId);
+    this.updateLibrarySelectionUI();
+    this.setupLibraryOutsideClickHandler();
+  }
+
+  private exitLibraryMultiSelectMode(): void {
+    this.isLibraryMultiSelectMode = false;
+    this.removeLibraryOutsideClickHandler();
+    this.selectedLibraryPrompts.clear();
+    this.updateLibrarySelectionUI();
+  }
+
+  private toggleLibraryPromptSelection(conversationId: string): void {
+    if (this.selectedLibraryPrompts.has(conversationId)) {
+      this.selectedLibraryPrompts.delete(conversationId);
+      if (this.selectedLibraryPrompts.size === 0) {
+        this.exitLibraryMultiSelectMode();
+        return;
+      }
+    } else {
+      if (this.selectedLibraryPrompts.size >= this.MAX_LIBRARY_BATCH_DELETE_COUNT) {
+        this.showNotification(
+          this.t('batch_delete_limit_reached').replace(
+            '{max}',
+            String(this.MAX_LIBRARY_BATCH_DELETE_COUNT),
+          ),
+          'info',
+        );
+        return;
+      }
+      this.selectedLibraryPrompts.add(conversationId);
+    }
+    this.updateLibrarySelectionUI();
+  }
+
+  private updateLibrarySelectionUI(): void {
+    this.getLibraryPromptRows().forEach((row) => {
+      const data = this.buildLibraryPromptData(row);
+      row.classList.toggle(
+        'gv-library-row-selected',
+        !!data && this.selectedLibraryPrompts.has(data.conversationId),
+      );
+    });
+
+    const host = this.isLibraryMultiSelectMode
+      ? this.getLibraryMultiSelectHost()
+      : this.getExistingLibraryMultiSelectHost();
+    if (!host) return;
+
+    host.classList.toggle('gv-multi-select-mode', this.isLibraryMultiSelectMode);
+
+    const count = host.querySelector('[data-selection-count="true"]');
+    if (count) count.textContent = `${this.selectedLibraryPrompts.size} selected`;
+
+    const actions = host.querySelector('[data-multi-select-actions="true"]');
+    if (!actions) return;
+    if (!this.isLibraryMultiSelectMode) {
+      if (actions.childElementCount > 0) actions.innerHTML = '';
+      return;
+    }
+    if (actions.childElementCount > 0) return;
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'gv-multi-select-action-btn gv-multi-select-delete-btn';
+    deleteBtn.title = this.t('batch_delete_button');
+    deleteBtn.appendChild(this.createIcon('delete'));
+    deleteBtn.addEventListener('click', () => void this.batchDeleteLibraryPrompts());
+    actions.appendChild(deleteBtn);
+
+    const exitBtn = document.createElement('button');
+    exitBtn.className = 'gv-multi-select-action-btn gv-multi-select-exit-btn';
+    exitBtn.title = 'Exit multi-select mode';
+    exitBtn.appendChild(this.createIcon('close'));
+    exitBtn.addEventListener('click', () => this.exitLibraryMultiSelectMode());
+    actions.appendChild(exitBtn);
+  }
+
+  private createLibraryMultiSelectIndicator(): HTMLElement {
+    const indicator = document.createElement('div');
+    indicator.className = 'gv-multi-select-indicator';
+
+    const content = document.createElement('div');
+    content.className = 'gv-multi-select-indicator-content';
+    content.appendChild(this.createIcon('check_circle'));
+
+    const text = document.createElement('span');
+    text.className = 'gv-multi-select-indicator-text';
+    text.dataset.selectionCount = 'true';
+    text.textContent = '0 selected';
+    content.appendChild(text);
+    indicator.appendChild(content);
+
+    const actions = document.createElement('div');
+    actions.className = 'gv-multi-select-actions';
+    actions.dataset.multiSelectActions = 'true';
+    indicator.appendChild(actions);
+
+    return indicator;
+  }
+
+  private getLibraryMultiSelectHost(): HTMLElement {
+    if (!this.libraryMultiSelectHostElement?.isConnected) {
+      const host = document.createElement('div');
+      host.className =
+        'gv-folder-container gv-multi-select-floating-host gv-aistudio-library-select';
+      host.dataset.multiSelectFloatingHost = 'true';
+      host.style.position = 'fixed';
+      host.style.top = '72px';
+      host.style.right = '24px';
+      host.style.width = 'min(360px, calc(100vw - 48px))';
+      host.style.zIndex = String(2147483647);
+      host.appendChild(this.createLibraryMultiSelectIndicator());
+      document.body.appendChild(host);
+      this.libraryMultiSelectHostElement = host;
+    }
+    return this.libraryMultiSelectHostElement;
+  }
+
+  private getExistingLibraryMultiSelectHost(): HTMLElement | null {
+    return this.libraryMultiSelectHostElement?.isConnected
+      ? this.libraryMultiSelectHostElement
+      : null;
+  }
+
+  private setupLibraryOutsideClickHandler(): void {
+    this.removeLibraryOutsideClickHandler();
+    this.libraryOutsideClickHandler = (event) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (this.libraryMultiSelectHostElement?.contains(target)) return;
+      if ((target as Element).closest?.('.cdk-overlay-container, .mat-mdc-dialog-container'))
+        return;
+      if (this.getLibraryPromptRows().some((row) => row.contains(target))) return;
+      this.exitLibraryMultiSelectMode();
+    };
+    setTimeout(() => {
+      document.addEventListener('click', this.libraryOutsideClickHandler!, true);
+    }, 0);
+  }
+
+  private removeLibraryOutsideClickHandler(): void {
+    if (!this.libraryOutsideClickHandler) return;
+    document.removeEventListener('click', this.libraryOutsideClickHandler, true);
+    this.libraryOutsideClickHandler = null;
+  }
+
+  private async batchDeleteLibraryPrompts(): Promise<void> {
+    if (this.libraryBatchDeleteInProgress) return;
+    const conversationIds = Array.from(this.selectedLibraryPrompts);
+    if (conversationIds.length === 0) return;
+
+    const confirmed = confirm(
+      this.t('batch_delete_confirm').replace('{count}', String(conversationIds.length)),
+    );
+    if (!confirmed) return;
+
+    this.libraryBatchDeleteInProgress = true;
+    let successCount = 0;
+    let failedCount = 0;
+
+    try {
+      this.showLibraryBatchDeleteProgress(0, conversationIds.length);
+      for (let i = 0; i < conversationIds.length; i++) {
+        this.updateLibraryBatchDeleteProgress(i + 1, conversationIds.length);
+        const success = await this.triggerLibraryDeleteForPrompt(conversationIds[i]);
+        if (success) successCount++;
+        else failedCount++;
+        if (i < conversationIds.length - 1) {
+          await this.delay(this.LIBRARY_BATCH_DELETE_CONFIG.DELAY_BETWEEN_DELETIONS);
+        }
+      }
+    } finally {
+      this.libraryBatchDeleteInProgress = false;
+      this.hideLibraryBatchDeleteProgress();
+    }
+
+    if (failedCount === 0) {
+      this.showNotification(
+        this.t('batch_delete_success').replace('{count}', String(successCount)),
+        'info',
+      );
+    } else {
+      this.showNotification(
+        this.t('batch_delete_partial')
+          .replace('{success}', String(successCount))
+          .replace('{failed}', String(failedCount)),
+        'warning',
+      );
+    }
+
+    this.exitLibraryMultiSelectMode();
+    if (successCount > 0) {
+      setTimeout(() => location.reload(), this.LIBRARY_BATCH_DELETE_CONFIG.PAGE_REFRESH_DELAY);
+    }
+  }
+
+  private async triggerLibraryDeleteForPrompt(conversationId: string): Promise<boolean> {
+    const row = this.findLibraryPromptRow(conversationId);
+    if (!row) return false;
+    const moreButton = row.querySelector<HTMLElement>(
+      'button[aria-label="More options"], button[aria-label*="More"], button.ms-button-icon',
+    );
+    if (!moreButton) return false;
+
+    moreButton.click();
+    await this.delay(this.LIBRARY_BATCH_DELETE_CONFIG.MENU_APPEAR_DELAY);
+    const deleteClicked = await this.waitForDeleteButtonAndClick();
+    if (!deleteClicked) {
+      this.clickBackdropToCloseMenu();
+      return false;
+    }
+
+    await this.delay(this.LIBRARY_BATCH_DELETE_CONFIG.DIALOG_APPEAR_DELAY);
+    await this.confirmDeleteIfNeeded();
+    await this.delay(this.LIBRARY_BATCH_DELETE_CONFIG.DELETION_COMPLETE_DELAY);
+    return true;
+  }
+
+  private findLibraryPromptRow(conversationId: string): HTMLElement | null {
+    for (const row of this.getLibraryPromptRows()) {
+      const data = this.buildLibraryPromptData(row);
+      if (data?.conversationId === conversationId) return row;
+    }
+    return null;
+  }
+
+  private async waitForDeleteButtonAndClick(): Promise<boolean> {
+    const maxWaitTime = this.LIBRARY_BATCH_DELETE_CONFIG.MAX_BUTTON_WAIT_TIME;
+    const checkInterval = this.LIBRARY_BATCH_DELETE_CONFIG.BUTTON_CHECK_INTERVAL;
+    const keywords = this.getDeleteKeywords();
+    let elapsed = 0;
+
+    while (elapsed < maxWaitTime) {
+      const byTestId = Array.from(
+        document.querySelectorAll<HTMLElement>('[data-test-id="delete-button"]'),
+      ).find((el) => this.isVisibleElement(el));
+      if (byTestId) {
+        byTestId.click();
+        return true;
+      }
+
+      const menuItems = Array.from(
+        document.querySelectorAll<HTMLElement>(
+          '.cdk-overlay-container button[role="menuitem"], .cdk-overlay-container [role="menuitem"], .mat-mdc-menu-content button',
+        ),
+      );
+      for (const item of menuItems) {
+        if (!this.isVisibleElement(item)) continue;
+        const text = normalizeText(item.textContent).toLowerCase();
+        if (
+          keywords.some(
+            (keyword) => text === keyword || (text.includes(keyword) && text.length < 20),
+          )
+        ) {
+          item.click();
+          return true;
+        }
+      }
+
+      const deleteIcon = Array.from(
+        document.querySelectorAll<HTMLElement>(
+          '.cdk-overlay-container mat-icon, .cdk-overlay-container .material-icons, .cdk-overlay-container .google-symbols',
+        ),
+      ).find((icon) => {
+        const text = normalizeText(icon.textContent).toLowerCase();
+        const fontIcon = normalizeText(icon.getAttribute('fonticon')).toLowerCase();
+        return ['delete', 'delete_forever', 'delete_outline'].includes(text || fontIcon);
+      });
+      const iconButton = deleteIcon?.closest('button, [role="menuitem"]') as HTMLElement | null;
+      if (iconButton && this.isVisibleElement(iconButton)) {
+        iconButton.click();
+        return true;
+      }
+
+      await this.delay(checkInterval);
+      elapsed += checkInterval;
+    }
+
+    return false;
+  }
+
+  private async confirmDeleteIfNeeded(): Promise<void> {
+    const maxWaitTime = this.LIBRARY_BATCH_DELETE_CONFIG.MAX_BUTTON_WAIT_TIME;
+    const checkInterval = this.LIBRARY_BATCH_DELETE_CONFIG.BUTTON_CHECK_INTERVAL;
+    const keywords = this.getDeleteKeywords();
+    let elapsed = 0;
+
+    while (elapsed < maxWaitTime) {
+      const confirmByTestId = document.querySelector<HTMLElement>(
+        '[data-test-id*="confirm"], [data-test-id*="delete"]:not([data-test-id="delete-button"])',
+      );
+      if (confirmByTestId && this.isVisibleElement(confirmByTestId)) {
+        confirmByTestId.click();
+        return;
+      }
+
+      const buttons = Array.from(
+        document.querySelectorAll<HTMLElement>(
+          '.cdk-overlay-container button, .mat-mdc-dialog-container button',
+        ),
+      ).filter((button) => this.isVisibleElement(button));
+      for (const button of buttons) {
+        const text = normalizeText(button.textContent).toLowerCase();
+        if (keywords.some((keyword) => text === keyword || text.includes(keyword))) {
+          button.click();
+          return;
+        }
+      }
+
+      const actions = document.querySelector('.mat-mdc-dialog-actions, .mat-dialog-actions');
+      const actionButtons = actions?.querySelectorAll<HTMLElement>('button');
+      if (actionButtons && actionButtons.length >= 2) {
+        const last = actionButtons[actionButtons.length - 1];
+        if (this.isVisibleElement(last)) {
+          last.click();
+          return;
+        }
+      }
+
+      await this.delay(checkInterval);
+      elapsed += checkInterval;
+    }
+  }
+
+  private getDeleteKeywords(): string[] {
+    return (this.t('batch_delete_match_patterns') || '')
+      .split(/[,，、；;]+/)
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean);
+  }
+
+  private isVisibleElement(el: HTMLElement): boolean {
+    const style = window.getComputedStyle(el);
+    return (
+      style.display !== 'none' &&
+      style.visibility !== 'hidden' &&
+      style.opacity !== '0' &&
+      el.offsetParent !== null
+    );
+  }
+
+  private clickBackdropToCloseMenu(): void {
+    document.querySelector<HTMLElement>('.cdk-overlay-backdrop')?.click();
+  }
+
+  private showLibraryBatchDeleteProgress(current: number, total: number): void {
+    this.hideLibraryBatchDeleteProgress();
+
+    const progress = document.createElement('div');
+    progress.className = 'gv-batch-delete-progress';
+    progress.style.cssText = `
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: rgba(32, 33, 36, 0.95);
+      color: #e8eaed;
+      padding: 16px 24px;
+      border-radius: 8px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+      z-index: 2147483647;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-family: 'Google Sans', Roboto, Arial, sans-serif;
+      font-size: 14px;
+    `;
+
+    const text = document.createElement('span');
+    text.className = 'gv-batch-delete-progress-text';
+    text.textContent = this.t('batch_delete_in_progress')
+      .replace('{current}', String(current))
+      .replace('{total}', String(total));
+    progress.appendChild(text);
+    document.body.appendChild(progress);
+    this.libraryBatchDeleteProgressElement = progress;
+  }
+
+  private updateLibraryBatchDeleteProgress(current: number, total: number): void {
+    const text = this.libraryBatchDeleteProgressElement?.querySelector(
+      '.gv-batch-delete-progress-text',
+    );
+    if (!text) return;
+    text.textContent = this.t('batch_delete_in_progress')
+      .replace('{current}', String(current))
+      .replace('{total}', String(total));
+  }
+
+  private hideLibraryBatchDeleteProgress(): void {
+    this.libraryBatchDeleteProgressElement?.remove();
+    this.libraryBatchDeleteProgressElement = null;
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   /**
-   * Inject a floating drop zone for the library page
-   * Shows available folders when user starts dragging
+   * Inject a floating drop zone for the library page. Guarded so SPA navigations
+   * into /library don't create duplicate floating cards.
    */
   private injectLibraryDropZone(): void {
+    if (this.libraryDropZoneInjected) return;
+    if (document.querySelector('.gv-library-drop-zone')) {
+      this.libraryDropZoneInjected = true;
+      return;
+    }
+
     // Create a floating container that appears during drag
     const floatingZone = document.createElement('div');
     floatingZone.className = 'gv-library-drop-zone';
+    this.libraryDropZoneInjected = true;
     floatingZone.style.cssText = `
       position: fixed;
       bottom: 20px;
@@ -1929,17 +2883,41 @@ export class AIStudioFolderManager {
     };
 
     // Show/hide the floating zone on drag events
+    let zoneVisible = false;
+    let dragHeartbeatTimer: number | null = null;
+
+    const clearDragHeartbeat = () => {
+      if (dragHeartbeatTimer === null) return;
+      clearTimeout(dragHeartbeatTimer);
+      dragHeartbeatTimer = null;
+    };
+
     const showZone = () => {
+      zoneVisible = true;
       updateFolderList();
       floatingZone.style.opacity = '1';
       floatingZone.style.pointerEvents = 'auto';
       floatingZone.style.transform = 'translateY(0)';
+      armDragHeartbeat();
     };
 
     const hideZone = () => {
+      zoneVisible = false;
+      clearDragHeartbeat();
       floatingZone.style.opacity = '0';
       floatingZone.style.pointerEvents = 'none';
       floatingZone.style.transform = 'translateY(10px)';
+    };
+
+    // Heartbeat: while the zone is up, every document dragover re-arms this timer. If
+    // the source row is removed mid-drag (Angular table refresh), dragend never fires
+    // and no drop arrives — the silent gap in dragover traffic hides the zone.
+    const armDragHeartbeat = () => {
+      clearDragHeartbeat();
+      dragHeartbeatTimer = window.setTimeout(() => {
+        dragHeartbeatTimer = null;
+        hideZone();
+      }, LIBRARY_DRAG_HEARTBEAT_MS);
     };
 
     // Listen for drag events on the document
@@ -1956,16 +2934,42 @@ export class AIStudioFolderManager {
       }
     };
 
-    document.addEventListener('dragstart', onDragStart);
+    const onDragOver = () => {
+      if (!zoneVisible) return;
+      armDragHeartbeat();
+    };
 
-    document.addEventListener('dragend', () => {
+    const onDragEnd = () => {
       setTimeout(hideZone, 100);
-    });
+    };
+
+    // Belt-and-suspenders alongside dragend: a drop anywhere in the document also
+    // dismisses the zone (covers sources whose dragend is swallowed).
+    const onDrop = () => {
+      setTimeout(hideZone, 100);
+    };
+
+    document.addEventListener('dragstart', onDragStart);
+    document.addEventListener('dragover', onDragOver);
+    document.addEventListener('dragend', onDragEnd);
+    document.addEventListener('drop', onDrop);
 
     this.cleanupFns.push(() => {
+      clearDragHeartbeat();
       try {
         document.removeEventListener('dragstart', onDragStart);
-        document.body.removeChild(floatingZone);
+      } catch {}
+      try {
+        document.removeEventListener('dragover', onDragOver);
+      } catch {}
+      try {
+        document.removeEventListener('dragend', onDragEnd);
+      } catch {}
+      try {
+        document.removeEventListener('drop', onDrop);
+      } catch {}
+      try {
+        floatingZone.remove();
       } catch {}
     });
   }
@@ -2064,7 +3068,7 @@ export class AIStudioFolderManager {
   private timestamp(): string {
     const d = new Date();
     const pad = (n: number) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())} -${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())} `;
+    return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
   }
 
   private async loadFolderEnabledSetting(): Promise<void> {
@@ -2075,6 +3079,138 @@ export class AIStudioFolderManager {
       console.error('[AIStudioFolderManager] Failed to load folder enabled setting:', error);
       this.folderEnabled = true;
     }
+  }
+
+  /**
+   * Load the AI Studio hide-archived settings. Kept fully separate from the Gemini keys
+   * so a user who toggled the feature on Gemini is not surprised when they open AI Studio.
+   */
+  private async loadHideArchivedSettings(): Promise<void> {
+    try {
+      const result = await browser.storage.sync.get({
+        [StorageKeys.FOLDER_HIDE_ARCHIVED_CONVERSATIONS_AISTUDIO]: false,
+        [StorageKeys.FOLDER_HIDE_ARCHIVED_NUDGE_SHOWN_AISTUDIO]: false,
+      });
+      this.hideArchivedEnabled =
+        result[StorageKeys.FOLDER_HIDE_ARCHIVED_CONVERSATIONS_AISTUDIO] === true;
+      this.hideArchivedNudgeShown =
+        result[StorageKeys.FOLDER_HIDE_ARCHIVED_NUDGE_SHOWN_AISTUDIO] === true;
+    } catch (error) {
+      console.error('[AIStudioFolderManager] Failed to load hide-archived settings:', error);
+      this.hideArchivedEnabled = false;
+      this.hideArchivedNudgeShown = false;
+    }
+  }
+
+  private async saveHideArchivedEnabled(next: boolean): Promise<void> {
+    this.hideArchivedEnabled = next;
+    try {
+      await browser.storage.sync.set({
+        [StorageKeys.FOLDER_HIDE_ARCHIVED_CONVERSATIONS_AISTUDIO]: next,
+      });
+    } catch (error) {
+      console.error('[AIStudioFolderManager] Failed to save hide-archived setting:', error);
+    }
+  }
+
+  private async saveHideArchivedNudgeShown(): Promise<void> {
+    this.hideArchivedNudgeShown = true;
+    try {
+      await browser.storage.sync.set({
+        [StorageKeys.FOLDER_HIDE_ARCHIVED_NUDGE_SHOWN_AISTUDIO]: true,
+      });
+    } catch (error) {
+      console.error('[AIStudioFolderManager] Failed to persist nudge-shown flag:', error);
+    }
+  }
+
+  /**
+   * Returns true when the user has at least one conversation filed into a real folder
+   * (uncategorized doesn't count). Used to decide whether to show the onboarding nudge
+   * — showing it with an empty state would be a mystery card.
+   */
+  private hasAnyArchivedConversation(): boolean {
+    for (const [folderId, conversations] of Object.entries(this.data.folderContents)) {
+      if (folderId === this.UNCATEGORIZED_KEY) continue;
+      if (Array.isArray(conversations) && conversations.length > 0) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Decide whether to mount or unmount the AI Studio hide-archived nudge. Safe to call
+   * from any state change path — idempotent and cheap.
+   */
+  private updateHideArchivedNudgeVisibility(): void {
+    const container = this.container;
+    if (!container) return;
+
+    const eligible =
+      shouldShowHideArchivedNudge({
+        nudgeShown: this.hideArchivedNudgeShown,
+        hideArchivedAlreadyOn: this.hideArchivedEnabled,
+      }) && this.hasAnyArchivedConversation();
+
+    if (!eligible) {
+      unmountHideArchivedNudge(container);
+      return;
+    }
+
+    mountHideArchivedNudge({
+      container,
+      variantClass: 'gv-hide-archived-nudge--aistudio',
+      i18nKeys: {
+        title: 'aistudio_hide_archived_nudge_title',
+        body: 'aistudio_hide_archived_nudge_body',
+        enable: 'aistudio_hide_archived_nudge_enable',
+        dismiss: 'aistudio_hide_archived_nudge_dismiss',
+        footnote: 'aistudio_hide_archived_nudge_footnote',
+      },
+      onEnable: () => {
+        void this.saveHideArchivedEnabled(true).then(() => this.saveHideArchivedNudgeShown());
+      },
+      onDismiss: () => {
+        void this.saveHideArchivedNudgeShown();
+      },
+    });
+  }
+
+  /**
+   * A conversation is "archived" if any non-uncategorized folder contains it. Build
+   * the id set once per hide-archived pass so the per-row check is O(1) instead of
+   * scanning every folder's contents for every table row.
+   */
+  private collectArchivedConversationIds(): Set<string> {
+    const archived = new Set<string>();
+    for (const [folderId, conversations] of Object.entries(this.data.folderContents)) {
+      if (folderId === this.UNCATEGORIZED_KEY) continue;
+      if (!Array.isArray(conversations)) continue;
+      for (const conversation of conversations) {
+        archived.add(conversation.conversationId);
+      }
+    }
+    return archived;
+  }
+
+  /**
+   * Toggle the hide class on every table row in /library according to the current
+   * setting and folder membership. No-op outside /library.
+   */
+  private applyHideArchivedToLibraryTable(): void {
+    if (!/\/library(\/|$)/.test(location.pathname)) return;
+    const rows = document.querySelectorAll<HTMLElement>('tr.mat-mdc-row, tr[mat-row]');
+    if (rows.length === 0) return;
+    const archivedIds = this.collectArchivedConversationIds();
+    rows.forEach((row) => {
+      const anchor = row.querySelector(
+        'a[href^="/prompts/"], a.name-btn[href*="/prompts/"]',
+      ) as HTMLAnchorElement | null;
+      if (!anchor) return;
+      const id = extractPromptIdFromHref(anchor.getAttribute('href') || anchor.href || '');
+      if (!id) return;
+      const shouldHide = this.hideArchivedEnabled && archivedIds.has(id);
+      row.classList.toggle('gv-conversation-archived', shouldHide);
+    });
   }
 
   private setupStorageListener(): void {
@@ -2107,12 +3243,27 @@ export class AIStudioFolderManager {
             this.applySidebarWidth();
           }
         }
+        if (changes[StorageKeys.FOLDER_HIDE_ARCHIVED_CONVERSATIONS_AISTUDIO]) {
+          this.hideArchivedEnabled =
+            changes[StorageKeys.FOLDER_HIDE_ARCHIVED_CONVERSATIONS_AISTUDIO].newValue === true;
+          this.applyHideArchivedToLibraryTable();
+          this.updateHideArchivedNudgeVisibility();
+        }
+        if (changes[StorageKeys.FOLDER_HIDE_ARCHIVED_NUDGE_SHOWN_AISTUDIO]) {
+          this.hideArchivedNudgeShown =
+            changes[StorageKeys.FOLDER_HIDE_ARCHIVED_NUDGE_SHOWN_AISTUDIO].newValue === true;
+          this.updateHideArchivedNudgeVisibility();
+        }
       }
     });
   }
 
   private applyFolderEnabledSetting(): void {
     if (this.folderEnabled) {
+      // Re-enabling after destroy(): restart the account-scope poller destroy() stopped.
+      if (this.accountContextPoller === null) {
+        this.setupAccountContextPoller();
+      }
       // If folder UI doesn't exist yet, initialize it
       if (!this.container) {
         this.initializeFolderUI().catch((error) => {
@@ -2123,11 +3274,96 @@ export class AIStudioFolderManager {
         this.container.style.display = '';
       }
     } else {
-      // Hide the folder UI if it exists
-      if (this.container) {
-        this.container.style.display = 'none';
-      }
+      // Fully tear down injected DOM, observers, pollers and document listeners so a
+      // disabled folder feature costs nothing. Re-enabling goes through
+      // initializeFolderUI() again because destroy() resets this.container to null.
+      this.destroy();
     }
+  }
+
+  /**
+   * Tear down everything the folder feature attached to the page: injected DOM,
+   * observers, pollers, timers and document/window listeners. Idempotent — safe to
+   * call multiple times. The storage-change and runtime message listeners stay alive
+   * so a later re-enable (folderEnabled -> true) can rebuild the UI from scratch via
+   * initializeFolderUI().
+   */
+  private destroy(): void {
+    const cleanups = this.cleanupFns.splice(0, this.cleanupFns.length);
+    for (const cleanup of cleanups) {
+      try {
+        cleanup();
+      } catch {}
+    }
+
+    // Field-managed observers (registered outside cleanupFns to stay idempotent).
+    try {
+      this.containerMountObserver?.disconnect();
+    } catch {}
+    this.containerMountObserver = null;
+    try {
+      this.bodyPromptPopoverObserver?.disconnect();
+    } catch {}
+    this.bodyPromptPopoverObserver = null;
+    this.disconnectLibraryTableObserver();
+
+    // Pollers and debounce timers.
+    if (this.accountContextPoller !== null) {
+      clearInterval(this.accountContextPoller);
+      this.accountContextPoller = null;
+    }
+    if (this.promptListBindTimer !== null) {
+      clearTimeout(this.promptListBindTimer);
+      this.promptListBindTimer = null;
+    }
+    if (this.promptTitleSyncTimer !== null) {
+      clearTimeout(this.promptTitleSyncTimer);
+      this.promptTitleSyncTimer = null;
+    }
+
+    this.stopRouteWatcher?.();
+    this.stopRouteWatcher = null;
+
+    // Library multi-select state and any floating UI hosted on document.body.
+    if (this.isLibraryMultiSelectMode) {
+      this.exitLibraryMultiSelectMode();
+    }
+    this.removeLibraryOutsideClickHandler();
+    try {
+      this.libraryMultiSelectHostElement?.remove();
+    } catch {}
+    this.libraryMultiSelectHostElement = null;
+    this.hideLibraryBatchDeleteProgress();
+
+    // Body-appended transient popovers we may have left open.
+    try {
+      document.querySelector('.gv-folder-confirm-dialog.gv-aistudio-confirm')?.remove();
+    } catch {}
+    try {
+      document.querySelector('.gv-folder-menu.gv-aistudio-folder-menu')?.remove();
+    } catch {}
+
+    // Un-hide any /library rows we hid; with the feature off nothing would restore them.
+    try {
+      document
+        .querySelectorAll('.gv-conversation-archived')
+        .forEach((row) => row.classList.remove('gv-conversation-archived'));
+    } catch {}
+
+    // Injected DOM. Resetting container/flags lets initializeFolderUI() re-init cleanly.
+    try {
+      this.container?.remove();
+    } catch {}
+    this.container = null;
+    this.libraryShortcutBtn = null;
+    this.historyRoot = null;
+    this.libraryDropZoneInjected = false;
+    try {
+      document.getElementById('gv-aistudio-folder-styles')?.remove();
+    } catch {}
+    try {
+      document.documentElement.classList.remove('gv-aistudio-root');
+    } catch {}
   }
 
   /**
@@ -2175,8 +3411,8 @@ export class AIStudioFolderManager {
   private showNotification(message: string, level: 'info' | 'warning' | 'error' = 'error'): void {
     try {
       const notification = document.createElement('div');
-      notification.className = `gv - notification gv - notification - ${level} `;
-      notification.textContent = `[Gemini Voyager] ${message} `;
+      notification.className = `gv-notification gv-notification-${level}`;
+      notification.textContent = `[Gemini Voyager] ${message}`;
 
       // Color based on level
       const colors = {
@@ -2574,7 +3810,7 @@ export class AIStudioFolderManager {
 
       // Merge folder data
       const localFolders = this.data;
-      const mergedFolders = this.mergeFolderData(localFolders, cloudFolderData);
+      const mergedFolders = mergeSyncedFolderData(localFolders, cloudFolderData);
 
       // Merge prompts (simple ID-based merge)
       const mergedPrompts = this.mergePromptsData(localPrompts, cloudPromptItems);

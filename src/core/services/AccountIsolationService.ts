@@ -1,8 +1,11 @@
 import { StorageKeys } from '@/core/types/common';
+import { getVoyagerBuildTarget } from '@/core/utils/browser';
 import { hashString } from '@/core/utils/hash';
 
 const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i;
 const PROFILE_MAP_VERSION = 1;
+const PROFILE_MAP_LOCK_NAME = 'gv-account-profile-map';
+const ACCOUNT_SCOPE_RESOLVE_MESSAGE = 'gv.account.resolve';
 const ACCOUNT_ISOLATION_KEY_BY_PLATFORM = {
   gemini: StorageKeys.GV_ACCOUNT_ISOLATION_ENABLED_GEMINI,
   aistudio: StorageKeys.GV_ACCOUNT_ISOLATION_ENABLED_AISTUDIO,
@@ -44,6 +47,11 @@ export interface AccountContext {
 
 export type AccountPlatform = 'gemini' | 'aistudio';
 
+interface AccountScopeResolveResponse {
+  ok: true;
+  scope: AccountScope;
+}
+
 function parseHostname(url: string): string | null {
   try {
     return new URL(url).hostname.toLowerCase();
@@ -72,6 +80,25 @@ export function getAccountIsolationStorageKey(platform: AccountPlatform): string
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function isAccountScope(value: unknown): value is AccountScope {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.accountKey === 'string' &&
+    typeof value.accountId === 'number' &&
+    (typeof value.routeUserId === 'string' || value.routeUserId === null) &&
+    (typeof value.emailHash === 'string' || value.emailHash === null)
+  );
+}
+
+function isAccountScopeResolveResponse(value: unknown): value is AccountScopeResolveResponse {
+  return isRecord(value) && value.ok === true && isAccountScope(value.scope);
+}
+
+function shouldResolveScopeInBackground(): boolean {
+  if (getVoyagerBuildTarget() !== 'firefox' || typeof location === 'undefined') return false;
+  return location.protocol === 'http:' || location.protocol === 'https:';
 }
 
 function toStringRecord(value: unknown): Record<string, string> {
@@ -261,6 +288,13 @@ export class AccountIsolationService {
     return next;
   }
 
+  private async withProfileMapLock<T>(operation: () => Promise<T>): Promise<T> {
+    if (typeof navigator === 'undefined' || !navigator.locks?.request) {
+      return await operation();
+    }
+    return await navigator.locks.request(PROFILE_MAP_LOCK_NAME, operation);
+  }
+
   async isIsolationEnabled(options?: {
     platform?: AccountPlatform;
     pageUrl?: string | null;
@@ -289,59 +323,99 @@ export class AccountIsolationService {
   }
 
   async resolveAccountScope(hints: AccountScopeHints = {}): Promise<AccountScope> {
-    return this.serialize(async () => {
-      const routeUserId =
-        hints.routeUserId ?? (hints.pageUrl ? extractRouteUserIdFromUrl(hints.pageUrl) : null);
-      const normalizedEmail = normalizeEmailAddress(hints.email ?? null);
-      const emailHash = normalizedEmail ? hashString(normalizedEmail) : null;
-      const now = Date.now();
+    // Firefox bug 1873028 prevents Web Locks callbacks from returning a content-script
+    // Promise. Resolve in the extension background page instead, where the existing
+    // lock remains available and shared across tabs without exposing account data.
+    if (shouldResolveScopeInBackground()) {
+      const response: unknown = await chrome.runtime.sendMessage({
+        type: ACCOUNT_SCOPE_RESOLVE_MESSAGE,
+        payload: hints,
+      });
+      if (!isAccountScopeResolveResponse(response)) {
+        throw new Error('Failed to resolve Firefox account scope in the extension background');
+      }
+      return response.scope;
+    }
 
-      const map = await this.readProfileMap();
+    return this.serialize(() =>
+      this.withProfileMapLock(async () => {
+        const routeUserId =
+          hints.routeUserId ?? (hints.pageUrl ? extractRouteUserIdFromUrl(hints.pageUrl) : null);
+        const normalizedEmail = normalizeEmailAddress(hints.email ?? null);
+        const emailHash = normalizedEmail ? hashString(normalizedEmail) : null;
+        const now = Date.now();
 
-      const keyFromEmail = emailHash ? map.emailAliases[emailHash] : null;
-      const keyFromRoute = routeUserId ? map.routeAliases[routeUserId] : null;
+        const map = await this.readProfileMap();
 
-      const accountKey =
-        keyFromEmail ??
-        keyFromRoute ??
-        (emailHash ? `email:${emailHash}` : routeUserId ? `route:${routeUserId}` : 'default');
+        const keyFromEmail = emailHash ? map.emailAliases[emailHash] : null;
+        const keyFromRoute = routeUserId ? map.routeAliases[routeUserId] : null;
 
-      let profile = map.profiles[accountKey];
-      if (!profile) {
-        profile = {
-          id: map.nextId,
-          createdAt: now,
-          updatedAt: now,
-          routeUserId: routeUserId ?? undefined,
-          emailHash: emailHash ?? undefined,
+        const accountKey =
+          keyFromEmail ??
+          keyFromRoute ??
+          (emailHash ? `email:${emailHash}` : routeUserId ? `route:${routeUserId}` : 'default');
+
+        const existing = map.profiles[accountKey];
+        const routeAliasChanged = routeUserId
+          ? map.routeAliases[routeUserId] !== accountKey
+          : false;
+        const emailAliasChanged = emailHash ? map.emailAliases[emailHash] !== accountKey : false;
+
+        let profile: AccountProfileRecord;
+        let mutated = false;
+
+        if (!existing) {
+          profile = {
+            id: map.nextId,
+            createdAt: now,
+            updatedAt: now,
+            routeUserId: routeUserId ?? undefined,
+            emailHash: emailHash ?? undefined,
+          };
+          map.nextId += 1;
+          map.profiles[accountKey] = profile;
+          mutated = true;
+        } else {
+          const nextRouteUserId = routeUserId ?? existing.routeUserId;
+          const nextEmailHash = emailHash ?? existing.emailHash;
+          if (nextRouteUserId !== existing.routeUserId || nextEmailHash !== existing.emailHash) {
+            profile = {
+              ...existing,
+              updatedAt: now,
+              routeUserId: nextRouteUserId,
+              emailHash: nextEmailHash,
+            };
+            map.profiles[accountKey] = profile;
+            mutated = true;
+          } else {
+            // Nothing actually changed. Skip the updatedAt-only full-map rewrite
+            // (and the storage.onChanged fan-out it triggers) on this hot,
+            // per-navigation path.
+            profile = existing;
+          }
+        }
+
+        if (routeUserId && routeAliasChanged) {
+          map.routeAliases[routeUserId] = accountKey;
+          mutated = true;
+        }
+        if (emailHash && emailAliasChanged) {
+          map.emailAliases[emailHash] = accountKey;
+          mutated = true;
+        }
+
+        if (mutated) {
+          await this.writeProfileMap(map);
+        }
+
+        return {
+          accountKey,
+          accountId: profile.id,
+          routeUserId: routeUserId ?? null,
+          emailHash,
         };
-        map.nextId += 1;
-      } else {
-        profile = {
-          ...profile,
-          updatedAt: now,
-          routeUserId: routeUserId ?? profile.routeUserId,
-          emailHash: emailHash ?? profile.emailHash,
-        };
-      }
-
-      if (routeUserId) {
-        map.routeAliases[routeUserId] = accountKey;
-      }
-      if (emailHash) {
-        map.emailAliases[emailHash] = accountKey;
-      }
-
-      map.profiles[accountKey] = profile;
-      await this.writeProfileMap(map);
-
-      return {
-        accountKey,
-        accountId: profile.id,
-        routeUserId: routeUserId ?? null,
-        emailHash,
-      };
-    });
+      }),
+    );
   }
 
   private async readProfileMap(): Promise<AccountProfileMap> {

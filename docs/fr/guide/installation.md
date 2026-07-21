@@ -18,7 +18,9 @@ La façon la plus simple de commencer. Les mises à jour sont automatiques.
 
 **Microsoft Edge :**
 
-[<img src="https://img.shields.io/badge/Microsoft_Edge-Télécharger-0078D7?style=for-the-badge&logo=microsoft-edge&logoColor=white" alt="Installer depuis les modules complémentaires Microsoft Edge" height="40"/>](https://microsoftedge.microsoft.com/addons/detail/gemini-voyager/gibmkggjijalcjinbdhcpklodjkhhlne)
+[<img src="https://img.shields.io/badge/Microsoft_Edge-Télécharger-0078D7?style=for-the-badge&logo=microsoft-edge&logoColor=white" alt="Installer depuis les modules complémentaires Microsoft Edge" height="40"/>](https://microsoftedge.microsoft.com/addons/detail/voyager/gibmkggjijalcjinbdhcpklodjkhhlne)
+
+> **Utilisateurs Edge :** Voyager reste maintenu sur [Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/voyager/gibmkggjijalcjinbdhcpklodjkhhlne) pour les personnes qui ont besoin d'Edge sur mobile ou tablette. Si la validation tarde, Chrome Web Store et les paquets GitHub restent disponibles.
 
 **Firefox :**
 
@@ -30,7 +32,7 @@ Le processus de validation des stores peut être lent. Si vous voulez la version
 
 **Pour Chrome / Edge / Brave / Opera :**
 
-1. Téléchargez la dernière version de `gemini-voyager-chrome-vX.Y.Z.zip` depuis les [Releases GitHub](https://github.com/Nagi-ovo/gemini-voyager/releases).
+1. Téléchargez la dernière version de `voyager-chrome-vX.Y.Z.zip` depuis les [Releases GitHub](https://github.com/Nagi-ovo/voyager/releases).
 2. Décompressez le fichier.
 3. Ouvrez la page des Extensions de votre navigateur (`chrome://extensions`).
 4. Activez le **Mode développeur** (en haut à droite).
@@ -38,7 +40,7 @@ Le processus de validation des stores peut être lent. Si vous voulez la version
 
 **Pour Firefox :**
 
-1. Téléchargez la dernière version de `gemini-voyager-firefox-vX.Y.Z.xpi` depuis les [Releases](https://github.com/Nagi-ovo/gemini-voyager/releases).
+1. Téléchargez la dernière version de `voyager-firefox-vX.Y.Z.xpi` depuis les [Releases](https://github.com/Nagi-ovo/voyager/releases).
 2. Ouvrez le Gestionnaire de modules complémentaires (`about:addons`).
 3. Glissez-déposez le fichier `.xpi` pour l'installer (ou cliquez sur l'icône d'engrenage ⚙️ -> **Installer un module depuis un fichier**).
 
@@ -55,8 +57,8 @@ Safari prend désormais en charge la distribution directe ! Téléchargez l'appl
 
 > 💡 La version Safari est désormais directement signée pour la distribution — pas besoin de conversion Xcode !
 >
-> ⚠️ **Limitations** : En raison de la nature de Safari, (a) la suppression du filigrane (b) l'exportation d'images (PDF recommandé) ne sont pas prises en charge.
+> ✅ **Prise en charge officielle de Safari** : depuis la v1.6.0, la suppression du filigrane, l'exportation d'images, la synchronisation Google Drive/iCloud, les notifications de fin de réponse et les mises à jour Sparkle sont pris en charge.
 
 ---
 
-_Configuration de développement ? Si vous êtes un développeur souhaitant contribuer, consultez notre [Guide de Contribution](https://github.com/Nagi-ovo/gemini-voyager/blob/main/.github/CONTRIBUTING.md)._
+_Configuration de développement ? Si vous êtes un développeur souhaitant contribuer, consultez notre [Guide de Contribution](https://github.com/Nagi-ovo/voyager/blob/main/.github/CONTRIBUTING.md)._

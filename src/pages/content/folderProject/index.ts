@@ -12,6 +12,7 @@ import { findChatInput } from '../chatInput/index';
 import { getFolderColor, isDarkMode } from '../folder/folderColors';
 import type { FolderManager } from '../folder/manager';
 import { setInputText } from '../utils/inputHelper';
+import { watchRouteChanges } from '../utils/routeWatcher';
 import {
   buildInstructionBlock,
   hasInstructionBlock,
@@ -29,18 +30,26 @@ let selectedFolderInstructions: string | null = null;
 let pickerContainer: HTMLElement | null = null;
 let pickerCleanup: (() => void) | null = null;
 let lastHref = '';
-let urlWatcherInterval: ReturnType<typeof setInterval> | null = null;
-let urlWatcherCheckFn: (() => void) | null = null;
+let stopRouteWatcher: (() => void) | null = null;
 let ctrlEnterSendEnabled = false;
 let pendingSend = false;
 let pendingSendResetTimer: ReturnType<typeof setTimeout> | null = null;
 let sendClickListener: ((e: Event) => void) | null = null;
 let sendKeydownListener: ((e: KeyboardEvent) => void) | null = null;
+let sidebarNavClickListener: ((e: Event) => void) | null = null;
 
 const SEND_BUTTON_SELECTOR =
   'button[aria-label*="Send"], button[aria-label*="send"], ' +
   'button[data-tooltip*="Send"], button[data-tooltip*="send"], ' +
   '[data-send-button], .send-button';
+
+// Sidebar conversation links: /app/<convId>, /u/0/app/<convId>, /gem/<gemId>/<convId>.
+// Used by sidebarNavClickListener to cancel pendingSend before URL change.
+const CONVERSATION_HREF_PATTERN = /\/(u\/\d+\/)?(app|gem\/[^/]+)\/[^/?#]+/;
+
+// pendingSend lifetime — must exceed worst-case first-response latency
+// (PDF/paper analysis can take 30+ s before URL updates).
+const PENDING_SEND_TIMEOUT_MS = 60_000;
 
 // ============================================================================
 // i18n helper
@@ -163,13 +172,40 @@ function schedulePendingSendReset(): void {
     if (isNewChatPath(window.location.pathname)) {
       clearPreparedInstructions();
     }
-  }, 4000);
+  }, PENDING_SEND_TIMEOUT_MS);
+}
+
+/** True when the input has no user text (stray instruction block stripped first). */
+function isInputEmpty(input: HTMLElement | null): boolean {
+  if (!input) return true;
+  return stripInstructionBlock(readInputText(input)).trim() === '';
 }
 
 function markPendingSend(input: HTMLElement | null): void {
   prepareInputForSend(input);
   pendingSend = true;
   schedulePendingSendReset();
+}
+
+/**
+ * Handle an empty-input Enter press: strip any leftover instruction block so
+ * Gemini's bubble-phase handler sees a truly empty input and doesn't submit
+ * a message containing only the block. Returns true when the press was
+ * handled (caller should skip markPendingSend).
+ *
+ * Click-send is NOT routed through this — Gemini only enables the send button
+ * when there is text or an attachment, so an empty-input click means
+ * "send the attachment" and the auto-assignment must proceed.
+ */
+function handleEmptyInputEnter(input: HTMLElement | null): boolean {
+  if (!isInputEmpty(input)) return false;
+  if (input) {
+    const currentText = readInputText(input);
+    if (hasInstructionBlock(currentText)) {
+      setInputText(input, stripInstructionBlock(currentText));
+    }
+  }
+  return true;
 }
 
 function isKeyboardSend(event: KeyboardEvent): boolean {
@@ -206,7 +242,7 @@ function extractGemMetadata(path: string): { isGem: boolean; gemId?: string } {
 }
 
 function setupSendDetection(): void {
-  if (sendClickListener || sendKeydownListener) return;
+  if (sendClickListener || sendKeydownListener || sidebarNavClickListener) return;
 
   sendClickListener = (e: Event) => {
     if (!selectedFolderId) return;
@@ -218,11 +254,32 @@ function setupSendDetection(): void {
 
   sendKeydownListener = (e: KeyboardEvent) => {
     if (!selectedFolderId || !isKeyboardSend(e) || !isEditableTarget(e.target)) return;
+    if (handleEmptyInputEnter(e.target)) return;
     markPendingSend(e.target);
+  };
+
+  // Cancel pendingSend when user clicks a sidebar conversation link, so the
+  // resulting URL change isn't misattributed to the current send.
+  sidebarNavClickListener = (e: Event) => {
+    if (!pendingSend) return;
+    // Plain left-click only — middle/right/modifier clicks open new tabs and
+    // leave the current tab's URL on /app.
+    if (!(e instanceof MouseEvent)) return;
+    if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    // Element (not HTMLElement) so closest() works on SVG icons inside <a>.
+    const target = e.target;
+    if (!(target instanceof Element)) return;
+    const link = target.closest('a');
+    if (!link) return;
+    const href = link.getAttribute('href') ?? '';
+    if (CONVERSATION_HREF_PATTERN.test(href)) {
+      clearPendingSendState();
+    }
   };
 
   document.addEventListener('click', sendClickListener, true);
   document.addEventListener('keydown', sendKeydownListener, true);
+  document.addEventListener('click', sidebarNavClickListener, true);
 }
 
 function teardownSendDetection(): void {
@@ -233,6 +290,10 @@ function teardownSendDetection(): void {
   if (sendKeydownListener) {
     document.removeEventListener('keydown', sendKeydownListener, true);
     sendKeydownListener = null;
+  }
+  if (sidebarNavClickListener) {
+    document.removeEventListener('click', sidebarNavClickListener, true);
+    sidebarNavClickListener = null;
   }
   clearPendingSendState();
 }
@@ -334,8 +395,10 @@ async function populateDropdown(
         const arrow = document.createElement('button');
         arrow.className = 'gv-fp-expand-btn';
         arrow.type = 'button';
-        arrow.textContent = '›';
         arrow.setAttribute('aria-label', t('folderAsProject_expand'));
+        arrow.setAttribute('aria-expanded', 'false');
+        arrow.innerHTML =
+          '<svg class="gv-fp-expand-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 -960 960 960" fill="currentColor" aria-hidden="true"><path d="M504-480 320-664l56-56 240 240-240 240-56-56 184-184Z"/></svg>';
 
         const sublist = document.createElement('div');
         sublist.className = 'gv-fp-sublist';
@@ -345,7 +408,8 @@ async function populateDropdown(
           e.stopPropagation();
           const expanding = sublist.hidden;
           sublist.hidden = !expanding;
-          arrow.textContent = expanding ? '‹' : '›';
+          arrow.classList.toggle('gv-fp-expand-btn--open', expanding);
+          arrow.setAttribute('aria-expanded', String(expanding));
           arrow.setAttribute(
             'aria-label',
             expanding ? t('folderAsProject_collapse') : t('folderAsProject_expand'),
@@ -370,6 +434,7 @@ async function populateDropdown(
 
 function buildFolderPicker(manager: FolderManager): {
   element: HTMLElement;
+  chip: HTMLButtonElement;
   cleanup: () => void;
 } {
   const container = document.createElement('div');
@@ -415,8 +480,43 @@ function buildFolderPicker(manager: FolderManager): {
   container.appendChild(dropdown);
   return {
     element: container,
+    chip,
     cleanup: () => document.removeEventListener('click', closeOnOutsideClick),
   };
+}
+
+// ============================================================================
+// Pending folder selection (from "New chat in folder" menu)
+// ============================================================================
+
+/**
+ * Reads a pending folder ID written by the folder manager's
+ * "New chat in this folder" menu item. When found, auto-selects the folder
+ * in the picker and clears the pending value.
+ */
+export async function applyPendingFolderSelection(
+  manager: FolderManager,
+  chip: HTMLButtonElement,
+): Promise<void> {
+  if (!chrome.storage?.local) return;
+
+  const result = await chrome.storage.local.get([StorageKeys.FOLDER_PROJECT_PENDING_FOLDER_ID]);
+  const pendingId = result?.[StorageKeys.FOLDER_PROJECT_PENDING_FOLDER_ID];
+  if (!pendingId) return;
+
+  // Clear immediately to avoid re-application
+  await chrome.storage.local.remove([StorageKeys.FOLDER_PROJECT_PENDING_FOLDER_ID]);
+
+  await manager.ensureDataLoaded();
+  const folder = manager.getFolders().find((f) => f.id === pendingId);
+  if (!folder) return;
+
+  selectedFolderId = folder.id;
+  selectedFolderName = folder.name;
+  selectedFolderInstructions = folder.instructions ?? null;
+
+  chip.textContent = `📁 ${folder.name}`;
+  chip.dataset.selected = folder.id;
 }
 
 // ============================================================================
@@ -436,33 +536,50 @@ async function injectPicker(manager: FolderManager): Promise<void> {
   // Target the model-picker-container inside trailing-actions-wrapper (right side)
   const modelPicker = await waitForElement('.model-picker-container', 5000);
 
+  // Guard: feature toggled off while we were waiting (slow page load) — the
+  // disable path already ran removePicker(), so injecting now would leave a
+  // picker and its document listener behind with nothing to clean them up.
+  if (!featureInitialized) return;
   // Guard: if we navigated away while waiting, abort
   if (!isNewChatPath(window.location.pathname)) return;
   // Guard: don't inject twice
   if (document.querySelector('.gv-fp-picker-container')) return;
 
-  const { element, cleanup } = buildFolderPicker(manager);
+  const { element, cleanup, chip } = buildFolderPicker(manager);
 
   if (modelPicker?.parentElement) {
     // Insert before the model picker in trailing-actions-wrapper
     modelPicker.parentElement.insertBefore(element, modelPicker);
     pickerContainer = element;
     pickerCleanup = cleanup;
+    void applyPendingFolderSelection(manager, chip);
     return;
   }
 
-  // Fallback: insert before rich-textarea (original behavior)
+  // Fallback: insert before rich-textarea (original behavior). The picker (and
+  // its document-level outside-click listener) is already built — every abort
+  // below must run its cleanup or the listener leaks.
   const richTextarea = await waitForElement('rich-textarea', 3000);
-  if (!richTextarea) return;
-  if (!isNewChatPath(window.location.pathname)) return;
-  if (document.querySelector('.gv-fp-picker-container')) return;
+  if (
+    !richTextarea ||
+    !featureInitialized ||
+    !isNewChatPath(window.location.pathname) ||
+    document.querySelector('.gv-fp-picker-container')
+  ) {
+    cleanup();
+    return;
+  }
 
   const parent = richTextarea.parentElement;
-  if (parent) {
-    parent.insertBefore(element, richTextarea);
-    pickerContainer = element;
-    pickerCleanup = cleanup;
+  if (!parent) {
+    cleanup();
+    return;
   }
+
+  parent.insertBefore(element, richTextarea);
+  pickerContainer = element;
+  pickerCleanup = cleanup;
+  void applyPendingFolderSelection(manager, chip);
 }
 
 // ============================================================================
@@ -514,7 +631,14 @@ function handleNavigation(manager: FolderManager, prevPath: string, newPath: str
     removePicker();
     void injectPicker(manager);
   } else {
-    // Left the new-chat page — hide picker
+    // Left new-chat: clear folder selection so follow-up messages don't
+    // re-inject instructions. Trade-off: when Branch 1 was skipped because
+    // the >60s timer fired, the conversation is NOT auto-assigned (user
+    // must drag it manually) — the alternative would re-introduce follow-up
+    // injection on the new conversation page.
+    selectedFolderId = null;
+    selectedFolderName = null;
+    selectedFolderInstructions = null;
     clearPendingSendState();
     removePicker();
   }
@@ -525,15 +649,8 @@ function handleNavigation(manager: FolderManager, prevPath: string, newPath: str
 // ============================================================================
 
 function stopURLWatcher(): void {
-  if (urlWatcherInterval !== null) {
-    clearInterval(urlWatcherInterval);
-    urlWatcherInterval = null;
-  }
-  if (urlWatcherCheckFn) {
-    window.removeEventListener('popstate', urlWatcherCheckFn);
-    window.removeEventListener('hashchange', urlWatcherCheckFn);
-    urlWatcherCheckFn = null;
-  }
+  stopRouteWatcher?.();
+  stopRouteWatcher = null;
   teardownSendDetection();
 }
 
@@ -552,10 +669,10 @@ function startURLWatcher(manager: FolderManager): void {
     handleNavigation(manager, prevPath, newPath);
   };
 
-  urlWatcherCheckFn = checkUrl;
-  urlWatcherInterval = setInterval(checkUrl, 500);
-  window.addEventListener('popstate', checkUrl);
-  window.addEventListener('hashchange', checkUrl);
+  stopRouteWatcher = watchRouteChanges(({ trigger }) => {
+    if (trigger !== 'poll') clearPendingSendState();
+    checkUrl();
+  });
 
   // Also check on initial load
   if (isNewChatPath(window.location.pathname)) {
@@ -610,6 +727,8 @@ export function startFolderProject(manager: FolderManager): void {
       selectedFolderId = null;
       selectedFolderName = null;
       selectedFolderInstructions = null;
+      // Drop any pending folder selection so re-enabling later doesn't auto-select a stale folder
+      void chrome.storage?.local?.remove([StorageKeys.FOLDER_PROJECT_PENDING_FOLDER_ID]);
     }
   });
 }

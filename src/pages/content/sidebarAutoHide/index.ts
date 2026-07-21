@@ -5,8 +5,7 @@
  * and expands when the mouse enters.
  *
  * Full-hide: when collapsed (by auto-hide or manually), the sidebar
- * is fully hidden (zero width). A left-edge hover trigger allows
- * revealing it.
+ * is fully hidden (zero width).
  *
  * Uses the `side-nav-menu-button` to toggle sidebar state.
  */
@@ -17,14 +16,39 @@ const STORAGE_KEY = 'gvSidebarAutoHide';
 const FULL_HIDE_STORAGE_KEY = 'gvSidebarFullHide';
 const EDGE_TRIGGER_ID = 'gv-sidebar-edge-trigger';
 const FULL_HIDE_COLLAPSED_CLASS = 'gv-sidebar-full-hide-collapsed';
-const SIDEBAR_TOGGLE_BUTTON_SELECTOR =
-  'button[data-test-id="side-nav-menu-button"], side-nav-menu-button button';
-const SIDEBAR_TOGGLE_BUTTON_MATCH_SELECTOR = `${SIDEBAR_TOGGLE_BUTTON_SELECTOR}, side-nav-menu-button`;
-const SIDEBAR_STATE_SYNC_DELAYS_MS = [0, 120, 360] as const;
+const FULL_HIDE_COLLAPSING_CLASS = 'gv-sidebar-full-hide-collapsing';
+// Union of every shape we've seen the sidebar toggle take. Order matters only
+// for `querySelectorAll` ordering tie-breaks; visibility filtering happens in
+// `findToggleButton` because the 2026 layout keeps an invisible 0×0 sibling
+// around at all times.
+//
+//   - 2026 redesign: a real <button> with `aria-label="Open sidebar"` /
+//     `aria-label="Close sidebar"`, wrapping `<mat-icon fonticon="side_nav">`
+//     or `side_nav_expand`. The aria-label is localized, so we anchor on the
+//     icon's fonticon attribute (i18n-stable) plus the English aria-label as
+//     a redundant safety net.
+//   - Legacy: `side-nav-menu-button` custom element (and inner <button>) — kept
+//     so older Gemini layouts and AI-Studio-shaped tabs still work.
+const SIDEBAR_TOGGLE_BUTTON_SELECTOR = [
+  'button[aria-label="Open sidebar"]',
+  'button[aria-label="Close sidebar"]',
+  'side-nav-sparkle-button button',
+  'button[data-test-id="side-nav-menu-button"]',
+  'side-nav-menu-button button',
+].join(', ');
+const SIDEBAR_TOGGLE_BUTTON_MATCH_SELECTOR = `${SIDEBAR_TOGGLE_BUTTON_SELECTOR}, side-nav-menu-button, side-nav-sparkle-button`;
+// Stable icon ligature names Gemini uses for the toggle (independent of locale).
+const TOGGLE_ICON_FONTICONS = ['side_nav', 'side_nav_expand'] as const;
+const FULL_HIDE_COLLAPSE_SYNC_DELAY_MS = 260;
+const SIDEBAR_STATE_SYNC_DELAYS_MS = [FULL_HIDE_COLLAPSE_SYNC_DELAY_MS, 500] as const;
 
+// Debounce delay for the global body MutationObserver. During sidebar expansion
+// Gemini renders hundreds of conversation rows in rapid succession; without
+// debouncing, every mutation triggers a synchronous checkAndReattach() sweep.
+const OBSERVER_DEBOUNCE_MS = 100;
 // Debounce delay to avoid rapid toggling
-const LEAVE_DELAY_MS = 500;
-const ENTER_DELAY_MS = 300;
+const LEAVE_DELAY_MS = 400;
+const ENTER_DELAY_MS = 150;
 // Interval to check for sidenav element reappearing
 const SIDENAV_CHECK_INTERVAL_MS = 1000;
 // Debounce delay for resize events
@@ -33,6 +57,16 @@ const RESIZE_DEBOUNCE_MS = 200;
 const MENU_CLICK_PAUSE_MS = 1500;
 // Width of the invisible edge trigger zone (px)
 const EDGE_TRIGGER_WIDTH = 6;
+// ── Predictive aiming ──
+// When the mouse is within this distance (px) from the left edge AND moving
+// leftward faster than the velocity threshold, we pre-trigger expansion before
+// mouseenter fires, eliminating the perceived "wait" completely.
+const PREDICTIVE_ZONE_WIDTH = 100;
+const PREDICTIVE_VELOCITY_THRESHOLD = -0.5; // px/ms (negative = leftward)
+const PREDICTIVE_THROTTLE_MS = 50;
+// If mouse triggers predictive expand but never enters the sidebar, auto-collapse
+// after this safety window.
+const PREDICTIVE_SAFETY_COLLAPSE_MS = 1200;
 const CUSTOM_POPUP_SELECTORS = [
   '.gv-folder-dialog',
   '.gv-folder-dialog-overlay',
@@ -54,14 +88,26 @@ let pausedUntil = 0;
 let fullHideEnabled = false;
 let edgeTriggerElement: HTMLElement | null = null;
 
+// Predictive aiming state
+let predictiveTriggered = false;
+let lastMouseX: number | null = null;
+let lastMouseTime: number | null = null;
+let lastMoveProcessedTime = 0;
+let predictiveMouseMoveHandler: ((e: MouseEvent) => void) | null = null;
+
 // Shared infrastructure
 let observer: MutationObserver | null = null;
 let resizeHandler: (() => void) | null = null;
 let resizeDebounceTimer: number | null = null;
+let observerDebounceTimer: number | null = null;
 let sidenavCheckTimer: number | null = null;
 let menuClickHandler: ((e: Event) => void) | null = null;
 let sidebarStateSyncTimeoutIds: number[] = [];
 let internalToggleClickDepth = 0;
+let fullHideCollapsedSyncBlockedUntil = 0;
+let fullHideCollapseAnimationTimeoutId: number | null = null;
+let fullHideCollapseAnimationElements: HTMLElement[] = [];
+let keepExpandedLocks = 0;
 
 function isElementVisible(element: HTMLElement): boolean {
   const style = window.getComputedStyle(element);
@@ -80,7 +126,8 @@ function getTransitionStyle(): string {
     bard-sidenav,
     bard-sidenav side-navigation-content,
     bard-sidenav side-navigation-content > div {
-      transition: width 0.25s ease, transform 0.25s ease !important;
+      transition: width 0.26s cubic-bezier(0.4, 0, 0.2, 1), min-width 0.26s cubic-bezier(0.4, 0, 0.2, 1), transform 0.26s cubic-bezier(0.4, 0, 0.2, 1) !important;
+      will-change: width, min-width, transform;
     }
   `;
 }
@@ -102,13 +149,29 @@ function removeTransitionStyle(): void {
 
 function getFullHideStyle(): string {
   return `
-    /* Fully hide collapsed sidebar */
-    html.${FULL_HIDE_COLLAPSED_CLASS} bard-sidenav,
-    html.${FULL_HIDE_COLLAPSED_CLASS} bard-sidenav side-navigation-content,
-    html.${FULL_HIDE_COLLAPSED_CLASS} bard-sidenav side-navigation-content > div {
+    /* Animate to zero width before fully hiding collapsed sidebar */
+    html.${FULL_HIDE_COLLAPSING_CLASS} bard-sidenav,
+    html.${FULL_HIDE_COLLAPSING_CLASS} bard-sidenav side-navigation-content,
+    html.${FULL_HIDE_COLLAPSING_CLASS} bard-sidenav side-navigation-content > div {
       width: 0 !important;
       min-width: 0 !important;
       overflow: hidden !important;
+    }
+
+    html.${FULL_HIDE_COLLAPSED_CLASS}:not(.${FULL_HIDE_COLLAPSING_CLASS}) bard-sidenav,
+    html.${FULL_HIDE_COLLAPSED_CLASS}:not(.${FULL_HIDE_COLLAPSING_CLASS}) bard-sidenav side-navigation-content,
+    html.${FULL_HIDE_COLLAPSED_CLASS}:not(.${FULL_HIDE_COLLAPSING_CLASS}) bard-sidenav side-navigation-content > div {
+      width: 0 !important;
+      min-width: 0 !important;
+      max-width: 0 !important;
+      flex-basis: 0 !important;
+      overflow: hidden !important;
+    }
+
+    /* Fully hide collapsed sidebar */
+    html.${FULL_HIDE_COLLAPSED_CLASS}:not(.${FULL_HIDE_COLLAPSING_CLASS}) bard-sidenav,
+    html.${FULL_HIDE_COLLAPSED_CLASS}:not(.${FULL_HIDE_COLLAPSING_CLASS}) bard-sidenav side-navigation-content,
+    html.${FULL_HIDE_COLLAPSED_CLASS}:not(.${FULL_HIDE_COLLAPSING_CLASS}) bard-sidenav side-navigation-content > div {
       padding: 0 !important;
     }
   `;
@@ -130,7 +193,7 @@ function removeFullHideStyle(): void {
 // ─── Edge Trigger (full-hide) ──────────────────────────────────────────
 
 function handleEdgeTriggerLeave(e: MouseEvent): void {
-  if (!fullHideEnabled) return;
+  if (!enabled || !fullHideEnabled) return;
 
   const related = e.relatedTarget as HTMLElement | null;
   if (related) {
@@ -190,8 +253,37 @@ function hideEdgeTrigger(): void {
 // ─── Sidebar State Detection ───────────────────────────────────────────
 
 function findToggleButton(): HTMLButtonElement | null {
-  const btn = document.querySelector<HTMLButtonElement>(SIDEBAR_TOGGLE_BUTTON_SELECTOR);
-  if (btn) return btn;
+  // The 2026 layout renders TWO buttons matching our selectors at any given
+  // moment: one is the actually-visible toggle and the other is a 0×0
+  // placeholder waiting for the opposite state. We need the visible one,
+  // so `querySelector` (always picks the first DOM match) won't do — we
+  // walk `querySelectorAll` and skip anything with zero geometry.
+  const candidates = Array.from(
+    document.querySelectorAll<HTMLButtonElement>(SIDEBAR_TOGGLE_BUTTON_SELECTOR),
+  );
+
+  // Also pick up the new layout via icon-ligature so localized aria-labels
+  // can't shut us out. Walk up to the nearest <button> ancestor.
+  for (const icon of document.querySelectorAll('mat-icon[fonticon]')) {
+    const f = icon.getAttribute('fonticon');
+    if (!f || !TOGGLE_ICON_FONTICONS.includes(f as (typeof TOGGLE_ICON_FONTICONS)[number])) {
+      continue;
+    }
+    const btn = icon.closest('button');
+    if (btn instanceof HTMLButtonElement && !candidates.includes(btn)) {
+      candidates.push(btn);
+    }
+  }
+
+  const visible = candidates.find((b) => {
+    const rect = b.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  });
+  if (visible) return visible;
+
+  // Legacy fallback — return any match even if 0×0, since older Gemini
+  // layouts render the button in odd lifecycles where geometry isn't ready.
+  if (candidates[0]) return candidates[0];
 
   const sideNavMenuButton = document.querySelector('side-nav-menu-button');
   if (sideNavMenuButton) {
@@ -201,19 +293,39 @@ function findToggleButton(): HTMLButtonElement | null {
   return null;
 }
 
+function getToggleCollapsedState(): boolean | null {
+  const btn = findToggleButton();
+  if (!btn) return null;
+
+  const icon = btn.querySelector('mat-icon[fonticon]');
+  const fonticon = icon?.getAttribute('fonticon');
+  if (fonticon === 'side_nav_expand') return true;
+  if (fonticon === 'side_nav') return false;
+
+  const label = (btn.getAttribute('aria-label') ?? '').toLowerCase();
+  if (label.includes('open sidebar')) return true;
+  if (label.includes('close sidebar')) return false;
+
+  return null;
+}
+
 function getSidebarContentContainer(): HTMLElement | null {
   return document.querySelector<HTMLElement>('bard-sidenav side-navigation-content > div');
 }
 
 function getStructuredSidebarCollapsedState(): boolean | null {
-  if (document.body.classList.contains('mat-sidenav-opened')) {
-    return false;
-  }
+  const sidenav = getSidenavElement();
+  if (sidenav?.classList.contains('collapsed')) return true;
 
   const sideContent = getSidebarContentContainer();
   if (sideContent) {
-    return sideContent.classList.contains('collapsed');
+    if (sideContent.classList.contains('collapsed')) return true;
   }
+
+  const toggleState = getToggleCollapsedState();
+  if (toggleState !== null) return toggleState;
+
+  if (document.body.classList.contains('mat-sidenav-opened')) return false;
 
   return null;
 }
@@ -244,18 +356,93 @@ function isPaused(): boolean {
   return Date.now() < pausedUntil;
 }
 
+function isKeepExpandedLocked(): boolean {
+  return keepExpandedLocks > 0;
+}
+
+function clearAutoHideTimers(): void {
+  if (enterTimeoutId !== null) {
+    window.clearTimeout(enterTimeoutId);
+    enterTimeoutId = null;
+  }
+  if (leaveTimeoutId !== null) {
+    window.clearTimeout(leaveTimeoutId);
+    leaveTimeoutId = null;
+  }
+  resetPredictiveState();
+}
+
 function clearScheduledSidebarStateSync(): void {
   for (const timeoutId of sidebarStateSyncTimeoutIds) {
     window.clearTimeout(timeoutId);
   }
   sidebarStateSyncTimeoutIds = [];
+  fullHideCollapsedSyncBlockedUntil = 0;
 }
 
-function scheduleSidebarStateSync(): void {
+function clearFullHideCollapseAnimation(): void {
+  if (fullHideCollapseAnimationTimeoutId !== null) {
+    window.clearTimeout(fullHideCollapseAnimationTimeoutId);
+    fullHideCollapseAnimationTimeoutId = null;
+  }
+  document.documentElement.classList.remove(FULL_HIDE_COLLAPSING_CLASS);
+  for (const element of fullHideCollapseAnimationElements) {
+    element.style.removeProperty('width');
+    element.style.removeProperty('min-width');
+    element.style.removeProperty('overflow');
+  }
+  fullHideCollapseAnimationElements = [];
+}
+
+function startFullHideCollapseAnimation(): void {
+  clearFullHideCollapseAnimation();
+  const elements = [
+    getSidenavElement(),
+    document.querySelector<HTMLElement>('bard-sidenav side-navigation-content'),
+    getSidebarContentContainer(),
+  ].filter((element): element is HTMLElement => element !== null);
+
+  fullHideCollapseAnimationElements = elements;
+  for (const element of elements) {
+    const width = element.getBoundingClientRect().width;
+    element.style.setProperty('width', `${width}px`, 'important');
+    element.style.setProperty('min-width', `${width}px`, 'important');
+    element.style.setProperty('overflow', 'hidden', 'important');
+  }
+
+  getSidenavElement()?.getBoundingClientRect();
+  document.documentElement.classList.add(FULL_HIDE_COLLAPSING_CLASS);
+  for (const element of elements) {
+    element.style.setProperty('width', '0px', 'important');
+    element.style.setProperty('min-width', '0px', 'important');
+  }
+
+  fullHideCollapseAnimationTimeoutId = window.setTimeout(
+    () => {
+      fullHideCollapseAnimationTimeoutId = null;
+      clearFullHideCollapseAnimation();
+    },
+    SIDEBAR_STATE_SYNC_DELAYS_MS[SIDEBAR_STATE_SYNC_DELAYS_MS.length - 1],
+  );
+}
+
+function scheduleSidebarStateSync(syncImmediately: boolean): void {
   if (!fullHideEnabled) return;
 
   clearScheduledSidebarStateSync();
-  for (const delay of SIDEBAR_STATE_SYNC_DELAYS_MS) {
+  if (syncImmediately) {
+    clearFullHideCollapseAnimation();
+  }
+
+  if (!syncImmediately) {
+    fullHideCollapsedSyncBlockedUntil = Date.now() + FULL_HIDE_COLLAPSE_SYNC_DELAY_MS;
+  }
+
+  const delays = syncImmediately
+    ? ([0, ...SIDEBAR_STATE_SYNC_DELAYS_MS] as const)
+    : SIDEBAR_STATE_SYNC_DELAYS_MS;
+
+  for (const delay of delays) {
     const timeoutId = window.setTimeout(() => {
       checkAndReattach();
       sidebarStateSyncTimeoutIds = sidebarStateSyncTimeoutIds.filter((id) => id !== timeoutId);
@@ -325,7 +512,9 @@ function handleMenuClick(e: Event): void {
     }
 
     if (fullHideEnabled) {
-      scheduleSidebarStateSync();
+      const wasCollapsed = isSidebarCollapsed();
+      if (!wasCollapsed) startFullHideCollapseAnimation();
+      scheduleSidebarStateSync(wasCollapsed);
     }
 
     if (enabled) {
@@ -365,19 +554,22 @@ function clickToggleButton(): boolean {
 
   internalToggleClickDepth += 1;
   try {
+    const wasCollapsed = isSidebarCollapsed();
+    if (fullHideEnabled && !wasCollapsed) startFullHideCollapseAnimation();
     btn.click();
+
+    if (fullHideEnabled) {
+      scheduleSidebarStateSync(wasCollapsed);
+    }
   } finally {
     internalToggleClickDepth -= 1;
-  }
-
-  if (fullHideEnabled) {
-    scheduleSidebarStateSync();
   }
 
   return true;
 }
 
 function collapseSidebar(): void {
+  if (isKeepExpandedLocked()) return;
   if (isPaused()) return;
   if (isPopupOrDialogOpen()) return;
   if (isMouseOverSidebarArea()) return;
@@ -385,6 +577,7 @@ function collapseSidebar(): void {
   if (!isSidebarCollapsed()) {
     if (clickToggleButton()) {
       autoCollapsed = true;
+      resetPredictiveState();
     }
   }
 }
@@ -393,15 +586,100 @@ function expandSidebar(): void {
   if (isSidebarCollapsed()) {
     clickToggleButton();
     autoCollapsed = false;
-    // Schedule a reattach so auto-hide listeners are re-added after expansion
-    setTimeout(() => checkAndReattach(), 350);
+    // Schedule a reattach so auto-hide listeners are re-added after expansion.
+    // Must fire after the 220ms CSS transition completes to avoid mid-animation DOM updates.
+    setTimeout(() => checkAndReattach(), 450);
   }
+}
+
+// ─── Predictive Aiming ────────────────────────────────────────────────
+// Inspired by the "Amazon mega-menu" trick: track mouse velocity on
+// document-level mousemove. When the cursor is near the left edge AND
+// heading leftward fast, pre-trigger expand *before* mouseenter fires,
+// removing the perceptual gap entirely.
+
+function resetPredictiveState(): void {
+  predictiveTriggered = false;
+  lastMouseX = null;
+  lastMouseTime = null;
+}
+
+function handlePredictiveMouseMove(e: MouseEvent): void {
+  if (!enabled) return;
+  if (!isSidebarCollapsed()) return;
+  // If the sidebar is collapsed while the flag is still set, it was collapsed
+  // by an external path (manual toggle, full-hide sync, etc.) that did not
+  // call resetPredictiveState(). Clear the stale latch so the next swipe works.
+  if (predictiveTriggered) {
+    resetPredictiveState();
+    return;
+  }
+  if (isPaused()) return;
+
+  const now = performance.now();
+  if (now - lastMoveProcessedTime < PREDICTIVE_THROTTLE_MS) return;
+  lastMoveProcessedTime = now;
+
+  const x = e.clientX;
+
+  if (lastMouseX !== null && lastMouseTime !== null) {
+    const dt = now - lastMouseTime;
+    // Only use recent samples; ignore stale data (e.g. after tab switch)
+    if (dt > 0 && dt < 200) {
+      const vx = (x - lastMouseX) / dt; // px/ms, negative = leftward
+
+      if (x <= PREDICTIVE_ZONE_WIDTH && vx <= PREDICTIVE_VELOCITY_THRESHOLD) {
+        predictiveTriggered = true;
+
+        // Cancel any pending enter/leave timers to avoid double-action
+        if (enterTimeoutId !== null) {
+          window.clearTimeout(enterTimeoutId);
+          enterTimeoutId = null;
+        }
+        if (leaveTimeoutId !== null) {
+          window.clearTimeout(leaveTimeoutId);
+          leaveTimeoutId = null;
+        }
+
+        expandSidebar();
+
+        // Safety net: if the mouse never actually enters the sidebar
+        // (user changed direction mid-flight), auto-collapse after a
+        // generous window. handleMouseEnter will clear this if triggered.
+        leaveTimeoutId = window.setTimeout(() => {
+          leaveTimeoutId = null;
+          if (!enabled) return;
+          collapseSidebar();
+        }, PREDICTIVE_SAFETY_COLLAPSE_MS);
+
+        lastMouseX = x;
+        lastMouseTime = now;
+        return;
+      }
+    }
+  }
+
+  lastMouseX = x;
+  lastMouseTime = now;
+}
+
+function attachPredictiveListener(): void {
+  if (predictiveMouseMoveHandler) return;
+  predictiveMouseMoveHandler = handlePredictiveMouseMove;
+  document.addEventListener('mousemove', predictiveMouseMoveHandler, { passive: true });
+}
+
+function detachPredictiveListener(): void {
+  if (!predictiveMouseMoveHandler) return;
+  document.removeEventListener('mousemove', predictiveMouseMoveHandler);
+  predictiveMouseMoveHandler = null;
+  resetPredictiveState();
 }
 
 // ─── Mouse Event Handlers ──────────────────────────────────────────────
 
 function handleMouseEnter(): void {
-  if (!enabled && !fullHideEnabled) return;
+  if (!enabled) return;
 
   if (leaveTimeoutId !== null) {
     window.clearTimeout(leaveTimeoutId);
@@ -414,7 +692,7 @@ function handleMouseEnter(): void {
 
   enterTimeoutId = window.setTimeout(() => {
     enterTimeoutId = null;
-    if (!enabled && !fullHideEnabled) return;
+    if (!enabled) return;
     expandSidebar();
   }, ENTER_DELAY_MS);
 }
@@ -532,7 +810,15 @@ function stopSidenavCheck(): void {
 function setupInfrastructure(): void {
   if (!observer) {
     observer = new MutationObserver(() => {
-      if (enabled || fullHideEnabled) checkAndReattach();
+      if (!enabled && !fullHideEnabled) return;
+      // Debounce: during sidebar expansion Gemini renders hundreds of
+      // conversation rows in rapid succession. Without debouncing every
+      // mutation triggers a synchronous DOM-query sweep (#753).
+      if (observerDebounceTimer !== null) window.clearTimeout(observerDebounceTimer);
+      observerDebounceTimer = window.setTimeout(() => {
+        observerDebounceTimer = null;
+        checkAndReattach();
+      }, OBSERVER_DEBOUNCE_MS);
     });
     observer.observe(document.body, { childList: true, subtree: true });
   }
@@ -554,6 +840,11 @@ function teardownInfrastructure(): void {
   if (resizeDebounceTimer !== null) {
     window.clearTimeout(resizeDebounceTimer);
     resizeDebounceTimer = null;
+  }
+
+  if (observerDebounceTimer !== null) {
+    window.clearTimeout(observerDebounceTimer);
+    observerDebounceTimer = null;
   }
 
   if (observer) {
@@ -590,6 +881,8 @@ function enable(): void {
   insertTransitionStyle();
   attachEventListeners();
   ensureMenuClickHandler();
+  attachPredictiveListener();
+  if (fullHideEnabled) syncFullHideState();
 
   setupInfrastructure();
 
@@ -624,9 +917,12 @@ function disable(): void {
 
   detachEventListeners();
 
-  if (!fullHideEnabled) {
+  if (fullHideEnabled) {
+    syncFullHideState();
+  } else {
     removeTransitionStyle();
   }
+  detachPredictiveListener();
 
   maybeRemoveMenuClickHandler();
 
@@ -640,14 +936,31 @@ function setFullHideCollapsedState(collapsed: boolean): void {
 }
 
 function syncFullHideState(): void {
+  if (isKeepExpandedLocked()) {
+    clearFullHideCollapseAnimation();
+    setFullHideCollapsedState(false);
+    hideEdgeTrigger();
+    return;
+  }
+
   const sidenav = getSidenavElement();
   const sidenavExists = Boolean(sidenav && sidenav.getBoundingClientRect().height > 0);
   const collapsed = sidenavExists && isSidebarCollapsed();
 
+  if (collapsed && Date.now() < fullHideCollapsedSyncBlockedUntil) return;
+  if (!collapsed) {
+    fullHideCollapsedSyncBlockedUntil = 0;
+    clearFullHideCollapseAnimation();
+  }
+
   setFullHideCollapsedState(collapsed);
 
   if (collapsed) {
-    showEdgeTrigger();
+    if (enabled) {
+      showEdgeTrigger();
+    } else {
+      hideEdgeTrigger();
+    }
   } else {
     hideEdgeTrigger();
   }
@@ -677,17 +990,34 @@ function disableFullHide(): void {
   fullHideEnabled = false;
 
   clearScheduledSidebarStateSync();
+  clearFullHideCollapseAnimation();
   setFullHideCollapsedState(false);
   removeEdgeTrigger();
   removeFullHideStyle();
 
   if (!enabled) {
     removeTransitionStyle();
+    detachPredictiveListener();
   }
 
   maybeRemoveMenuClickHandler();
 
   teardownInfrastructure();
+}
+
+export function keepSidebarExpanded(): () => void {
+  keepExpandedLocks += 1;
+  clearAutoHideTimers();
+  if (isSidebarCollapsed()) expandSidebar();
+  if (fullHideEnabled) syncFullHideState();
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    keepExpandedLocks = Math.max(0, keepExpandedLocks - 1);
+    if (!isKeepExpandedLocked()) checkAndReattach();
+  };
 }
 
 // ─── Entry Point ───────────────────────────────────────────────────────

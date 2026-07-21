@@ -1,6 +1,7 @@
 import { isSafari } from '@/core/utils/browser';
 
 import type { PrintableDocumentContent } from './PDFPrintService';
+import { buildKatexExportStyles } from './katexExportStyles';
 
 /**
  * Dedicated PDF print path for Deep Research reports.
@@ -174,7 +175,7 @@ export class DeepResearchPDFPrintService {
           <div class="gv-dr-print-report">${bodyHtml}</div>
         </div>
         <div class="gv-dr-print-footer">
-          <p>Exported from <a href="https://github.com/Nagi-ovo/gemini-voyager">Voyager</a></p>
+          <p>Exported from <a href="https://github.com/Nagi-ovo/voyager">Voyager</a></p>
           <p>Generated on ${this.escapeHTML(date)}</p>
         </div>
       </div>
@@ -298,6 +299,8 @@ export class DeepResearchPDFPrintService {
         body.${this.PRINT_BODY_CLASS} #${this.PRINT_CONTAINER_ID} * {
           display: revert !important;
         }
+
+        ${buildKatexExportStyles(`body.${this.PRINT_BODY_CLASS} #${this.PRINT_CONTAINER_ID}`, true)}
 
         /* Preserve KaTeX layout primitives after the global display override above.
            Without these, sub/sup scripts (e.g. x_1) may become misaligned in PDF print. */
